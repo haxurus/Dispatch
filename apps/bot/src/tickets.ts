@@ -237,7 +237,7 @@ export async function publishMainMenu(client: Client, guildId: string) {
 
   const embed = new EmbedBuilder()
     .setTitle(settings.mainMenuTitle)
-    .setDescription(settings.mainMenuDescription)
+    .setDescription(settings.mainMenuDescription || 'Seleziona il tipo di richiesta da aprire.')
     .setFooter({ text: 'Dispatch' });
 
   const button = new ButtonBuilder()
@@ -615,11 +615,18 @@ async function openMainMenu(interaction: ButtonInteraction) {
     where: { guildId },
     select: {
       mainMenuEnabled: true,
+      mainMenuChannelId: true,
+      mainMenuMessageId: true,
       mainMenuCategoryIds: true
     }
   });
 
-  if (!settings?.mainMenuEnabled || !settings.mainMenuCategoryIds.length) {
+  if (
+    !settings?.mainMenuEnabled ||
+    !settings.mainMenuCategoryIds.length ||
+    settings.mainMenuChannelId !== interaction.channelId ||
+    settings.mainMenuMessageId !== interaction.message.id
+  ) {
     await interaction.reply({ content: 'Il menu ticket non è disponibile.', ephemeral: true });
     return;
   }
