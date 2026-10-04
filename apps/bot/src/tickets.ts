@@ -16,17 +16,66 @@ import {
   type StringSelectMenuInteraction
 } from 'discord.js';
 import { prisma } from '@dispatch/db';
-import { closeTicket, unclaimTicket } from './ticket-operations.js';
+import { encryptText } from './security.js';
+import { closeTicket, setTicketStatus, unclaimTicket } from './ticket-operations.js';
 
-const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS'];
+const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 const PANEL_SELECT_PREFIX = 'dispatch:open:';
+const OPEN_MODAL_PREFIX = 'dispatch:open-modal:';
 const CLAIM_PREFIX = 'dispatch:claim:';
 const UNCLAIM_PREFIX = 'dispatch:unclaim:';
+const WAITING_PREFIX = 'dispatch:waiting:';
+const RESOLVED_PREFIX = 'dispatch:resolved:';
 const CLOSE_PREFIX = 'dispatch:close:';
 const CLOSE_MODAL_PREFIX = 'dispatch:close-modal:';
 
+type FormField = {
+  id: string;
+  label: string;
+  style: 'SHORT' | 'PARAGRAPH';
+  required: boolean;
+  placeholder?: string | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+};
+
+function parseFormFields(value: unknown): FormField[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.slice(0, 5).flatMap((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    const label = typeof row.label === 'string' ? row.label.trim().slice(0, 45) : '';
+    if (!label) return [];
+
+    const minLength = typeof row.minLength === 'number' && Number.isInteger(row.minLength)
+      ? Math.max(0, Math.min(4000, row.minLength))
+      : null;
+    const maxLength = typeof row.maxLength === 'number' && Number.isInteger(row.maxLength)
+      ? Math.max(1, Math.min(4000, row.maxLength))
+      : null;
+
+    return [{
+      id: typeof row.id === 'string' && /^[a-z0-9_-]{1,40}$/i.test(row.id)
+        ? row.id
+        : `field_${index + 1}`,
+      label,
+      style: row.style === 'PARAGRAPH' ? 'PARAGRAPH' : 'SHORT',
+      required: row.required !== false,
+      placeholder: typeof row.placeholder === 'string' ? row.placeholder.slice(0, 100) : null,
+      minLength,
+      maxLength
+    } satisfies FormField];
+  });
+}
+
 function safeChannelPart(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'user';
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 24) || 'user';
 }
 
 function ticketControls(ticketId: string) {
@@ -39,6 +88,14 @@ function ticketControls(ticketId: string) {
       .setCustomId(`${UNCLAIM_PREFIX}${ticketId}`)
       .setLabel('Unclaim')
       .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`${WAITING_PREFIX}${ticketId}`)
+      .setLabel('In attesa')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`${RESOLVED_PREFIX}${ticketId}`)
+      .setLabel('Risolto')
+      .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId(`${CLOSE_PREFIX}${ticketId}`)
       .setLabel('Chiudi')
@@ -121,32 +178,30 @@ export async function publishTicketPanel(client: Client, guildId: string, panelI
   return { ok: true, messageId };
 }
 
-async function openTicket(interaction: StringSelectMenuInteraction) {
+async function createTicket(
+  interaction: StringSelectMenuInteraction | ModalSubmitInteraction,
+  panelId: string,
+  categoryId: string,
+  formAnswers: Array<{ id: string; label: string; value: string }>
+) {
   if (!interaction.guild || !interaction.guildId) {
-    await interaction.reply({ content: 'Questa funzione è disponibile solo nei server.', ephemeral: true });
+    await interaction.editReply('Questa funzione è disponibile solo nei server.');
     return;
   }
 
-  const panelId = interaction.customId.slice(PANEL_SELECT_PREFIX.length);
-  const categoryId = interaction.values[0];
-  if (!categoryId) {
-    await interaction.reply({ content: 'Categoria non valida.', ephemeral: true });
-    return;
-  }
+  const [panel, category] = await Promise.all([
+    prisma.ticketPanel.findFirst({
+      where: { id: panelId, guildId: interaction.guildId, enabled: true }
+    }),
+    prisma.ticketCategory.findFirst({
+      where: { id: categoryId, guildId: interaction.guildId, enabled: true }
+    })
+  ]);
 
-  await interaction.deferReply({ ephemeral: true });
-
-  const panel = await prisma.ticketPanel.findFirst({
-    where: { id: panelId, guildId: interaction.guildId, enabled: true }
-  });
   if (!panel || !panel.categoryIds.includes(categoryId)) {
     await interaction.editReply('Questo pannello non è più valido.');
     return;
   }
-
-  const category = await prisma.ticketCategory.findFirst({
-    where: { id: categoryId, guildId: interaction.guildId, enabled: true }
-  });
   if (!category) {
     await interaction.editReply('Questa categoria non è più disponibile.');
     return;
@@ -161,7 +216,9 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
     }
   });
   if (openCount >= category.maxOpenPerUser) {
-    await interaction.editReply(`Hai già raggiunto il limite di ${category.maxOpenPerUser} ticket aperti per questa categoria.`);
+    await interaction.editReply(
+      `Hai già raggiunto il limite di ${category.maxOpenPerUser} ticket aperti per questa categoria.`
+    );
     return;
   }
 
@@ -212,11 +269,14 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
       permissionOverwrites
     });
   } catch {
-    await interaction.editReply('Non riesco a creare il canale ticket. Controlla i permessi del bot e la categoria Discord configurata.');
+    await interaction.editReply(
+      'Non riesco a creare il canale ticket. Controlla i permessi del bot e la categoria Discord configurata.'
+    );
     return;
   }
 
   try {
+    const firstAnswer = formAnswers.find((answer) => answer.value.trim())?.value.trim() ?? null;
     const ticket = await prisma.ticket.create({
       data: {
         ticketNumber: number,
@@ -225,6 +285,11 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
         openerId: interaction.user.id,
         channelId: channel.id,
         status: 'OPEN',
+        subject: firstAnswer?.slice(0, 200) ?? null,
+        formDataEncrypted: formAnswers.length
+          ? encryptText(JSON.stringify(formAnswers))
+          : null,
+        lastActivityAt: new Date(),
         members: {
           create: { userId: interaction.user.id, access: 'OPENER' }
         },
@@ -236,7 +301,8 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
             details: {
               categoryId: category.id,
               categoryName: category.name,
-              panelId: panel.id
+              panelId: panel.id,
+              formFieldCount: formAnswers.length
             }
           }
         }
@@ -248,7 +314,13 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
       .setDescription(`Ciao <@${interaction.user.id}>. Lo staff ti risponderà qui.`)
       .addFields(
         { name: 'Categoria', value: category.name, inline: true },
-        { name: 'Stato', value: 'Aperto', inline: true }
+        { name: 'Stato', value: 'Aperto', inline: true },
+        { name: 'Priorità', value: 'Normal', inline: true },
+        ...formAnswers.map((answer) => ({
+          name: answer.label.slice(0, 256),
+          value: answer.value.trim().slice(0, 1024) || '_Nessuna risposta_',
+          inline: false
+        }))
       )
       .setFooter({ text: `Dispatch • ${ticket.id}` })
       .setTimestamp();
@@ -267,6 +339,96 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
   }
 }
 
+async function openTicket(interaction: StringSelectMenuInteraction) {
+  if (!interaction.guild || !interaction.guildId) {
+    await interaction.reply({
+      content: 'Questa funzione è disponibile solo nei server.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const panelId = interaction.customId.slice(PANEL_SELECT_PREFIX.length);
+  const categoryId = interaction.values[0];
+  if (!categoryId) {
+    await interaction.reply({ content: 'Categoria non valida.', ephemeral: true });
+    return;
+  }
+
+  const [panel, category] = await Promise.all([
+    prisma.ticketPanel.findFirst({
+      where: { id: panelId, guildId: interaction.guildId, enabled: true }
+    }),
+    prisma.ticketCategory.findFirst({
+      where: { id: categoryId, guildId: interaction.guildId, enabled: true }
+    })
+  ]);
+
+  if (!panel || !panel.categoryIds.includes(categoryId) || !category) {
+    await interaction.reply({ content: 'Questo pannello non è più valido.', ephemeral: true });
+    return;
+  }
+
+  const fields = parseFormFields(category.formFields);
+  if (!fields.length) {
+    await interaction.deferReply({ ephemeral: true });
+    await createTicket(interaction, panelId, categoryId, []);
+    return;
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId(`${OPEN_MODAL_PREFIX}${panelId}:${categoryId}`)
+    .setTitle(`Apri ticket - ${category.name}`.slice(0, 45));
+
+  for (const [index, field] of fields.entries()) {
+    const input = new TextInputBuilder()
+      .setCustomId(`field_${index + 1}`)
+      .setLabel(field.label)
+      .setStyle(field.style === 'PARAGRAPH' ? TextInputStyle.Paragraph : TextInputStyle.Short)
+      .setRequired(field.required);
+
+    if (field.placeholder) input.setPlaceholder(field.placeholder);
+    if (field.minLength !== null && field.minLength !== undefined) input.setMinLength(field.minLength);
+    if (field.maxLength !== null && field.maxLength !== undefined) input.setMaxLength(field.maxLength);
+
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+  }
+
+  await interaction.showModal(modal);
+}
+
+async function submitOpenTicket(interaction: ModalSubmitInteraction) {
+  const raw = interaction.customId.slice(OPEN_MODAL_PREFIX.length);
+  const separator = raw.indexOf(':');
+  if (separator < 1) {
+    await interaction.reply({ content: 'Form ticket non valido.', ephemeral: true });
+    return;
+  }
+
+  const panelId = raw.slice(0, separator);
+  const categoryId = raw.slice(separator + 1);
+
+  if (!interaction.guildId) return;
+
+  const category = await prisma.ticketCategory.findFirst({
+    where: { id: categoryId, guildId: interaction.guildId, enabled: true }
+  });
+  if (!category) {
+    await interaction.reply({ content: 'Categoria non più disponibile.', ephemeral: true });
+    return;
+  }
+
+  const fields = parseFormFields(category.formFields);
+  const answers = fields.map((field, index) => ({
+    id: field.id,
+    label: field.label,
+    value: interaction.fields.getTextInputValue(`field_${index + 1}`)
+  }));
+
+  await interaction.deferReply({ ephemeral: true });
+  await createTicket(interaction, panelId, categoryId, answers);
+}
+
 async function claimTicket(interaction: ButtonInteraction) {
   if (!interaction.guild || !interaction.guildId || !interaction.channelId) return;
 
@@ -283,12 +445,18 @@ async function claimTicket(interaction: ButtonInteraction) {
 
   const member = await interaction.guild.members.fetch(interaction.user.id);
   if (!hasStaffAccess(member, ticket.category.staffRoleIds)) {
-    await interaction.reply({ content: 'Non hai i permessi per prendere in carico questo ticket.', ephemeral: true });
+    await interaction.reply({
+      content: 'Non hai i permessi per prendere in carico questo ticket.',
+      ephemeral: true
+    });
     return;
   }
 
   if (ticket.claimedById && ticket.claimedById !== interaction.user.id) {
-    await interaction.reply({ content: `Ticket già preso in carico da <@${ticket.claimedById}>.`, ephemeral: true });
+    await interaction.reply({
+      content: `Ticket già preso in carico da <@${ticket.claimedById}>.`,
+      ephemeral: true
+    });
     return;
   }
 
@@ -308,35 +476,69 @@ async function claimTicket(interaction: ButtonInteraction) {
     })
   ]);
 
-  await interaction.reply({ content: `Ticket preso in carico da <@${interaction.user.id}>.` });
+  await interaction.reply({
+    content: `Ticket preso in carico da <@${interaction.user.id}>.`
+  });
 }
 
 async function unclaimTicketInteraction(interaction: ButtonInteraction) {
   if (!interaction.guildId) return;
 
-  try {
-    const ticketId = interaction.customId.slice(UNCLAIM_PREFIX.length);
-    const ticket = await prisma.ticket.findFirst({
-      where: { id: ticketId, guildId: interaction.guildId },
-      include: { category: true }
-    });
-    if (!ticket) {
-      await interaction.reply({ content: 'Ticket non disponibile.', ephemeral: true });
-      return;
-    }
+  const ticketId = interaction.customId.slice(UNCLAIM_PREFIX.length);
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId: interaction.guildId },
+    include: { category: true }
+  });
 
-    const member = await interaction.guild!.members.fetch(interaction.user.id);
-    if (!hasStaffAccess(member, ticket.category.staffRoleIds)) {
-      await interaction.reply({ content: 'Non hai i permessi per rilasciare questo ticket.', ephemeral: true });
-      return;
-    }
-
-    await unclaimTicket(interaction.client, interaction.guildId, ticketId, interaction.user.id);
-    await interaction.reply({ content: 'Ticket rilasciato.', ephemeral: true });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'INTERNAL_ERROR';
-    await interaction.reply({ content: `Operazione non riuscita: ${message}`, ephemeral: true }).catch(() => null);
+  if (!ticket) {
+    await interaction.reply({ content: 'Ticket non disponibile.', ephemeral: true });
+    return;
   }
+
+  const member = await interaction.guild!.members.fetch(interaction.user.id);
+  if (!hasStaffAccess(member, ticket.category.staffRoleIds)) {
+    await interaction.reply({
+      content: 'Non hai i permessi per rilasciare questo ticket.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  await unclaimTicket(interaction.client, interaction.guildId, ticketId, interaction.user.id);
+  await interaction.reply({ content: 'Ticket rilasciato.', ephemeral: true });
+}
+
+async function statusTicketInteraction(
+  interaction: ButtonInteraction,
+  status: 'WAITING' | 'RESOLVED'
+) {
+  if (!interaction.guildId) return;
+
+  const prefix = status === 'WAITING' ? WAITING_PREFIX : RESOLVED_PREFIX;
+  const ticketId = interaction.customId.slice(prefix.length);
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId: interaction.guildId },
+    include: { category: true }
+  });
+  if (!ticket || ticket.status === 'CLOSED') {
+    await interaction.reply({ content: 'Ticket non disponibile.', ephemeral: true });
+    return;
+  }
+
+  const member = await interaction.guild!.members.fetch(interaction.user.id);
+  if (!hasStaffAccess(member, ticket.category.staffRoleIds)) {
+    await interaction.reply({
+      content: 'Non hai i permessi per modificare lo stato.',
+      ephemeral: true
+    });
+    return;
+  }
+
+  await setTicketStatus(interaction.client, interaction.guildId, ticket.id, interaction.user.id, status);
+  await interaction.reply({
+    content: status === 'WAITING' ? 'Ticket impostato in attesa.' : 'Ticket segnato come risolto.',
+    ephemeral: true
+  });
 }
 
 async function promptCloseTicket(interaction: ButtonInteraction) {
@@ -349,7 +551,10 @@ async function promptCloseTicket(interaction: ButtonInteraction) {
   });
 
   if (!ticket || ticket.status === 'CLOSED') {
-    await interaction.reply({ content: 'Il ticket è già chiuso o non esiste.', ephemeral: true });
+    await interaction.reply({
+      content: 'Il ticket è già chiuso o non esiste.',
+      ephemeral: true
+    });
     return;
   }
 
@@ -357,7 +562,10 @@ async function promptCloseTicket(interaction: ButtonInteraction) {
   const allowed = interaction.user.id === ticket.openerId ||
     hasStaffAccess(member, ticket.category.staffRoleIds);
   if (!allowed) {
-    await interaction.reply({ content: 'Non hai i permessi per chiudere questo ticket.', ephemeral: true });
+    await interaction.reply({
+      content: 'Non hai i permessi per chiudere questo ticket.',
+      ephemeral: true
+    });
     return;
   }
 
@@ -387,7 +595,10 @@ async function submitCloseTicket(interaction: ModalSubmitInteraction) {
   });
 
   if (!ticket || ticket.status === 'CLOSED') {
-    await interaction.reply({ content: 'Il ticket è già chiuso o non esiste.', ephemeral: true });
+    await interaction.reply({
+      content: 'Il ticket è già chiuso o non esiste.',
+      ephemeral: true
+    });
     return;
   }
 
@@ -395,19 +606,41 @@ async function submitCloseTicket(interaction: ModalSubmitInteraction) {
   const allowed = interaction.user.id === ticket.openerId ||
     hasStaffAccess(member, ticket.category.staffRoleIds);
   if (!allowed) {
-    await interaction.reply({ content: 'Non hai i permessi per chiudere questo ticket.', ephemeral: true });
+    await interaction.reply({
+      content: 'Non hai i permessi per chiudere questo ticket.',
+      ephemeral: true
+    });
     return;
   }
 
   await interaction.deferReply({ ephemeral: true });
   const reason = interaction.fields.getTextInputValue('reason').trim() || null;
-  await closeTicket(interaction.client, interaction.guildId, ticket.id, interaction.user.id, reason);
+  await closeTicket(
+    interaction.client,
+    interaction.guildId,
+    ticket.id,
+    interaction.user.id,
+    reason
+  );
   await interaction.editReply('Ticket chiuso e transcript aggiornato.');
 }
 
-export async function handleTicketInteraction(interaction: StringSelectMenuInteraction | ButtonInteraction | ModalSubmitInteraction) {
-  if (interaction.isStringSelectMenu() && interaction.customId.startsWith(PANEL_SELECT_PREFIX)) {
+export async function handleTicketInteraction(
+  interaction: StringSelectMenuInteraction | ButtonInteraction | ModalSubmitInteraction
+) {
+  if (
+    interaction.isStringSelectMenu() &&
+    interaction.customId.startsWith(PANEL_SELECT_PREFIX)
+  ) {
     await openTicket(interaction);
+    return true;
+  }
+
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId.startsWith(OPEN_MODAL_PREFIX)
+  ) {
+    await submitOpenTicket(interaction);
     return true;
   }
 
@@ -416,8 +649,27 @@ export async function handleTicketInteraction(interaction: StringSelectMenuInter
     return true;
   }
 
-  if (interaction.isButton() && interaction.customId.startsWith(UNCLAIM_PREFIX)) {
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith(UNCLAIM_PREFIX)
+  ) {
     await unclaimTicketInteraction(interaction);
+    return true;
+  }
+
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith(WAITING_PREFIX)
+  ) {
+    await statusTicketInteraction(interaction, 'WAITING');
+    return true;
+  }
+
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith(RESOLVED_PREFIX)
+  ) {
+    await statusTicketInteraction(interaction, 'RESOLVED');
     return true;
   }
 
@@ -426,7 +678,10 @@ export async function handleTicketInteraction(interaction: StringSelectMenuInter
     return true;
   }
 
-  if (interaction.isModalSubmit() && interaction.customId.startsWith(CLOSE_MODAL_PREFIX)) {
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId.startsWith(CLOSE_MODAL_PREFIX)
+  ) {
     await submitCloseTicket(interaction);
     return true;
   }
