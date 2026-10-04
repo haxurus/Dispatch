@@ -125,12 +125,12 @@ export default function TicketAnalyticsPage() {
                   <div className="bars">
                     <div
                       className="bar created"
-                      style={{ width: `${Math.max(2, (row.created / maxDaily) * 100)}%` }}
+                      style={{ width: row.created ? `${Math.max(2, (row.created / maxDaily) * 100)}%` : '0%' }}
                       title={`Creati: ${row.created}`}
                     />
                     <div
                       className="bar closed"
-                      style={{ width: `${Math.max(2, (row.closed / maxDaily) * 100)}%` }}
+                      style={{ width: row.closed ? `${Math.max(2, (row.closed / maxDaily) * 100)}%` : '0%' }}
                       title={`Chiusi: ${row.closed}`}
                     />
                   </div>
