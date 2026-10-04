@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import type { Client } from 'discord.js';
-import { publishTicketPanel } from './tickets.js';
+import { publishMainMenu, publishTicketPanel } from './tickets.js';
 import {
   addTicketMember,
   assignTicket,
@@ -120,6 +120,16 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
           permissions: member.permissions.bitfield.toString(),
           roles: [...member.roles.cache.keys()]
         }));
+        return;
+      }
+
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/main-menu\/publish$/i);
+      if (req.method === 'POST' && match) {
+        const guildId = match[1]!;
+        if (!SNOWFLAKE.test(guildId)) throw new Error('INVALID_ID');
+
+        const result = await publishMainMenu(client, guildId);
+        res.end(JSON.stringify(result));
         return;
       }
 
