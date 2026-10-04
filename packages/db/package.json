@@ -1,0 +1,1 @@
+{"name":"@dispatch/db","version":"0.1.0","private":true,"type":"module","main":"dist/index.js","types":"dist/index.d.ts","scripts":{"generate":"prisma generate","db:push":"prisma db push","build":"prisma generate && tsc -p tsconfig.json","migrate:deploy":"prisma migrate deploy"},"dependencies":{"@prisma/client":"6.16.2"},"devDependencies":{"prisma":"6.16.2","typescript":"5.9.2"}}
