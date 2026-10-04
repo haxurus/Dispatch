@@ -601,11 +601,15 @@ async function sendAutomationNotice(
   roleIds: string[] = [],
   userIds: string[] = []
 ) {
-  const { channel } = await getGuildChannel(client, guildId, channelId);
-  await channel.send({
-    content,
-    allowedMentions: { roles: roleIds, users: userIds, parse: [] }
-  }).catch(() => null);
+  try {
+    const { channel } = await getGuildChannel(client, guildId, channelId);
+    await channel.send({
+      content,
+      allowedMentions: { roles: roleIds, users: userIds, parse: [] }
+    }).catch(() => null);
+  } catch {
+    return;
+  }
 }
 
 export async function runTicketAutomations(client: Client) {
