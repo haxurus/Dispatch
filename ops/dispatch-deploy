@@ -1,0 +1,173 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+STATE_DIR=/srv/docker/dispatch
+COMPOSE_FILE="$STATE_DIR/docker-compose.yml"
+ENV_FILE="$STATE_DIR/.env"
+CURRENT_FILE="$STATE_DIR/.release"
+PREVIOUS_FILE="$STATE_DIR/.previous-release"
+BACKUP_DIR="$STATE_DIR/backups"
+PROJECT=dispatch
+
+log() { printf '[dispatch-deploy] %s\n' "$*"; }
+die() { printf '[dispatch-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die 'must run as root'
+[ -f "$COMPOSE_FILE" ] || die "missing $COMPOSE_FILE"
+[ -f "$ENV_FILE" ] || die "missing $ENV_FILE"
+
+valid_ref() {
+  printf '%s' "$1" | grep -Eq '^ghcr\.io/haxurus/dispatch@sha256:[0-9a-f]{64}$'
+}
+
+read_release() {
+  file="$1"
+  APP_IMAGE=''
+  MIGRATE_IMAGE=''
+  [ -f "$file" ] || return 1
+  while IFS='=' read -r key value; do
+    case "$key" in
+      APP_IMAGE) APP_IMAGE="$value" ;;
+      MIGRATE_IMAGE) MIGRATE_IMAGE="$value" ;;
+    esac
+  done < "$file"
+  valid_ref "$APP_IMAGE" && valid_ref "$MIGRATE_IMAGE"
+}
+
+write_release() {
+  file="$1"; app="$2"; migrate="$3"; tmp="${file}.tmp.$$"
+  umask 077
+  {
+    printf 'APP_IMAGE=%s\n' "$app"
+    printf 'MIGRATE_IMAGE=%s\n' "$migrate"
+  } > "$tmp"
+  chown root:root "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$file"
+}
+
+compose() {
+  app="$1"; migrate="$2"; shift 2
+  DISPATCH_APP_IMAGE="$app" DISPATCH_MIGRATE_IMAGE="$migrate"     docker compose --project-name "$PROJECT" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+}
+
+backup_database() {
+  app="$1"; migrate="$2"
+  mkdir -p "$BACKUP_DIR"
+  chmod 700 "$BACKUP_DIR"
+  cid="$(compose "$app" "$migrate" ps -q postgres 2>/dev/null || true)"
+  [ -n "$cid" ] || return 0
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  out="$BACKUP_DIR/predeploy-$stamp.dump"
+  log "creating pre-deploy database backup"
+  if compose "$app" "$migrate" exec -T postgres sh -c     'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; exec pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$out"; then
+    chmod 600 "$out"
+    find "$BACKUP_DIR" -type f -name 'predeploy-*.dump' -mtime +14 -delete 2>/dev/null || true
+  else
+    rm -f "$out"
+    die 'database backup failed; deployment aborted'
+  fi
+}
+
+wait_healthy() {
+  app="$1"; migrate="$2"
+  deadline=$(( $(date +%s) + 150 ))
+  services='api bot web edge'
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    all_ok=1
+    for svc in $services; do
+      cid="$(compose "$app" "$migrate" ps -q "$svc" 2>/dev/null || true)"
+      [ -n "$cid" ] || { all_ok=0; break; }
+      state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+      [ "$state" = healthy ] || { all_ok=0; break; }
+    done
+    [ "$all_ok" -eq 1 ] && return 0
+    sleep 5
+  done
+  return 1
+}
+
+deploy_release() {
+  new_app="$1"; new_migrate="$2"
+  valid_ref "$new_app" || die 'invalid app image reference'
+  valid_ref "$new_migrate" || die 'invalid migrate image reference'
+
+  old_app=''; old_migrate=''
+  if read_release "$CURRENT_FILE"; then
+    old_app="$APP_IMAGE"; old_migrate="$MIGRATE_IMAGE"
+    backup_database "$old_app" "$old_migrate"
+  fi
+
+  log "pulling immutable images"
+  docker pull "$new_app" >/dev/null
+  docker pull "$new_migrate" >/dev/null
+
+  log "starting release"
+  if compose "$new_app" "$new_migrate" up -d --remove-orphans && wait_healthy "$new_app" "$new_migrate"; then
+    if [ -n "$old_app" ] && [ -n "$old_migrate" ]; then
+      write_release "$PREVIOUS_FILE" "$old_app" "$old_migrate"
+    fi
+    write_release "$CURRENT_FILE" "$new_app" "$new_migrate"
+    compose "$new_app" "$new_migrate" rm -f migrate secure-db >/dev/null 2>&1 || true
+    log "deployment healthy"
+    compose "$new_app" "$new_migrate" ps
+    return 0
+  fi
+
+  log "new release failed health checks"
+  compose "$new_app" "$new_migrate" logs --no-color --tail=120 api bot web edge migrate secure-db >&2 || true
+
+  if [ -n "$old_app" ] && [ -n "$old_migrate" ]; then
+    log "rolling application back"
+    compose "$old_app" "$old_migrate" up -d --remove-orphans || true
+    wait_healthy "$old_app" "$old_migrate" || log "rollback requires manual intervention"
+  fi
+  die 'deployment failed'
+}
+
+rollback_release() {
+  read_release "$PREVIOUS_FILE" || die 'no previous release recorded'
+  prev_app="$APP_IMAGE"; prev_migrate="$MIGRATE_IMAGE"
+  current_app=''; current_migrate=''
+  if read_release "$CURRENT_FILE"; then
+    current_app="$APP_IMAGE"; current_migrate="$MIGRATE_IMAGE"
+  fi
+  docker pull "$prev_app" >/dev/null
+  docker pull "$prev_migrate" >/dev/null
+  if compose "$prev_app" "$prev_migrate" up -d --remove-orphans && wait_healthy "$prev_app" "$prev_migrate"; then
+    write_release "$CURRENT_FILE" "$prev_app" "$prev_migrate"
+    if [ -n "$current_app" ] && [ -n "$current_migrate" ]; then
+      write_release "$PREVIOUS_FILE" "$current_app" "$current_migrate"
+    fi
+    log "rollback healthy"
+    compose "$prev_app" "$prev_migrate" ps
+    return 0
+  fi
+  die 'rollback failed; manual intervention required'
+}
+
+status_release() {
+  if read_release "$CURRENT_FILE"; then
+    printf 'Current app: %s\nCurrent migrate: %s\n' "$APP_IMAGE" "$MIGRATE_IMAGE"
+    compose "$APP_IMAGE" "$MIGRATE_IMAGE" ps
+  else
+    printf 'No release recorded yet.\n'
+  fi
+}
+
+case "${1:-}" in
+  deploy)
+    [ "$#" -eq 3 ] || die 'usage: dispatch-deploy deploy APP_IMAGE MIGRATE_IMAGE'
+    deploy_release "$2" "$3"
+    ;;
+  rollback)
+    [ "$#" -eq 1 ] || die 'usage: dispatch-deploy rollback'
+    rollback_release
+    ;;
+  status)
+    [ "$#" -eq 1 ] || die 'usage: dispatch-deploy status'
+    status_release
+    ;;
+  *) die 'allowed commands: deploy, rollback, status' ;;
+esac
