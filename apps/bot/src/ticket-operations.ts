@@ -1034,7 +1034,7 @@ export async function reserveTicketOpen(
       await tx.ticketUserGuard.update({
         where: { id: guard.id },
         data: {
-          pendingUntil: new Date(now.getTime() + 120_000),
+          pendingUntil: new Date(now.getTime() + 10 * 60_000),
           blockedUntil: null
         }
       });
@@ -1151,23 +1151,27 @@ export async function runTicketRetention(client: Client) {
         Date.now() - settings.transcriptRetentionDays * 86_400_000
       );
 
-      const transcriptRows = await prisma.transcript.findMany({
-        where: {
-          ticket: {
-            guildId: settings.guildId,
-            status: 'CLOSED',
-            closedAt: { lt: cutoff }
-          }
-        },
-        select: { id: true },
-        take: 500
-      });
+      for (;;) {
+        const transcriptRows = await prisma.transcript.findMany({
+          where: {
+            ticket: {
+              guildId: settings.guildId,
+              status: 'CLOSED',
+              closedAt: { lt: cutoff }
+            }
+          },
+          select: { id: true },
+          take: 500
+        });
 
-      if (transcriptRows.length) {
+        if (!transcriptRows.length) break;
+
         const deleted = await prisma.transcript.deleteMany({
           where: { id: { in: transcriptRows.map((row) => row.id) } }
         });
         transcriptsDeleted += deleted.count;
+
+        if (transcriptRows.length < 500) break;
       }
     }
 
