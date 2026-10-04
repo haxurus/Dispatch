@@ -497,8 +497,13 @@ app.post('/api/guilds/:guildId/categories', async (request, reply) => {
   const resourceError = await validateCategoryResources(guildId, parsed.data);
   if (resourceError) return reply.code(400).send({ error: resourceError });
 
+  const { formFields, ...categoryData } = parsed.data;
   const category = await prisma.ticketCategory.create({
-    data: { guildId, ...parsed.data }
+    data: {
+      guildId,
+      ...categoryData,
+      formFields: JSON.parse(JSON.stringify(formFields))
+    }
   });
   await panelAudit(request, session, guildId, 'ticket_category.create', {
     categoryId: category.id,
@@ -527,9 +532,13 @@ app.put('/api/guilds/:guildId/categories/:categoryId', async (request, reply) =>
   const resourceError = await validateCategoryResources(guildId, parsed.data);
   if (resourceError) return reply.code(400).send({ error: resourceError });
 
+  const { formFields, ...categoryData } = parsed.data;
   const category = await prisma.ticketCategory.update({
     where: { id: categoryId },
-    data: parsed.data
+    data: {
+      ...categoryData,
+      formFields: JSON.parse(JSON.stringify(formFields))
+    }
   });
   await panelAudit(request, session, guildId, 'ticket_category.update', {
     categoryId,
