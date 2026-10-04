@@ -117,3 +117,30 @@ export const generateTranscript = (guildId: string, ticketId: string, actorId: s
     'transcript',
     { actorId }
   );
+
+
+export const setTicketStatus = (
+  guildId: string,
+  ticketId: string,
+  actorId: string,
+  status: 'OPEN' | 'WAITING' | 'IN_PROGRESS' | 'RESOLVED'
+) => ticketAction(guildId, ticketId, 'status', { actorId, status });
+
+export const setTicketPriority = (
+  guildId: string,
+  ticketId: string,
+  actorId: string,
+  priority: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'
+) => ticketAction(guildId, ticketId, 'priority', { actorId, priority });
+
+export const sendTicketReply = (
+  guildId: string,
+  ticketId: string,
+  actorId: string,
+  content: string,
+  templateId?: string | null
+) => ticketAction(guildId, ticketId, 'reply', {
+  actorId,
+  content,
+  templateId: templateId ?? null
+});
