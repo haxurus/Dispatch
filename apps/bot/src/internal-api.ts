@@ -1,8 +1,10 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import type { Client } from 'discord.js';
+import { publishTicketPanel } from './tickets.js';
 
 const SNOWFLAKE = /^\d{17,20}$/;
+const CUID = /^[a-z0-9]{20,32}$/i;
 
 function authorized(header: string | undefined, secret: string) {
   const expected = `Bearer ${secret}`;
@@ -84,13 +86,29 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
         return;
       }
 
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/panels\/([a-z0-9]{20,32})\/publish$/i);
+      if (req.method === 'POST' && match) {
+        const guildId = match[1]!;
+        const panelId = match[2]!;
+        if (!SNOWFLAKE.test(guildId) || !CUID.test(panelId)) throw new Error('INVALID_ID');
+
+        const result = await publishTicketPanel(client, guildId, panelId);
+        res.end(JSON.stringify(result));
+        return;
+      }
+
+      if (!['GET', 'POST'].includes(req.method ?? '')) {
+        res.statusCode = 405;
+        res.end('{"error":"METHOD_NOT_ALLOWED"}');
+        return;
+      }
+
       res.statusCode = 404;
       res.end('{"error":"NOT_FOUND"}');
     } catch (error) {
-      res.statusCode = 404;
-      res.end(JSON.stringify({
-        error: error instanceof Error ? error.message : 'INTERNAL_ERROR'
-      }));
+      const message = error instanceof Error ? error.message : 'INTERNAL_ERROR';
+      res.statusCode = message.endsWith('_NOT_FOUND') ? 404 : 400;
+      res.end(JSON.stringify({ error: message }));
     }
   });
 
