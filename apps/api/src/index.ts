@@ -15,8 +15,20 @@ import {
   resolveGuildAccess,
   type OAuthGuild
 } from './auth.js';
-import { getGuildResources, publishPanel } from './discord.js';
+import {
+  addTicketMember,
+  assignTicket,
+  closeTicket,
+  generateTranscript,
+  getGuildResources,
+  publishPanel,
+  removeTicketMember,
+  reopenTicket,
+  transferTicket,
+  unclaimTicket
+} from './discord.js';
 import { panelAudit } from './audit.js';
+import { decryptText } from './security.js';
 
 const app = Fastify({
   trustProxy: 1,
@@ -618,6 +630,233 @@ app.post('/api/guilds/:guildId/panels/:panelId/publish', async (request, reply) 
     request.log.error({ err: error, guildId, panelId }, 'Panel publish failed');
     return reply.code(502).send({ error: 'PANEL_PUBLISH_FAILED' });
   }
+});
+
+
+const ticketStatus = z.enum(['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']);
+
+function ensureInternalId(value: string, error: string) {
+  if (!internalId.safeParse(value).success) throw Object.assign(new Error(error), { statusCode: 400 });
+}
+
+async function runTicketBotAction<T>(
+  request: Parameters<typeof app.log.info>[0] extends never ? never : any,
+  reply: any,
+  fn: () => Promise<T>
+) {
+  try {
+    return await fn();
+  } catch (error) {
+    request.log.error({ err: error }, 'Ticket bot action failed');
+    const typed = error as Error & { status?: number; code?: string };
+    if (typed.status === 404) return reply.code(404).send({ error: typed.code ?? 'DISCORD_RESOURCE_NOT_FOUND' });
+    if (typed.status === 409) return reply.code(409).send({ error: typed.code ?? 'TICKET_STATE_CONFLICT' });
+    if (typed.status === 400) return reply.code(400).send({ error: typed.code ?? 'TICKET_ACTION_REJECTED' });
+    return reply.code(502).send({ error: 'BOT_OPERATION_FAILED' });
+  }
+}
+
+app.get('/api/guilds/:guildId/tickets', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+
+  const parsed = z.object({
+    status: ticketStatus.optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    take: z.coerce.number().int().min(1).max(100).default(50)
+  }).safeParse(request.query);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_QUERY' });
+
+  const { status, page, take } = parsed.data;
+  const where = {
+    guildId,
+    ...(status ? { status } : {})
+  };
+
+  const [items, total] = await Promise.all([
+    prisma.ticket.findMany({
+      where,
+      include: {
+        category: { select: { id: true, name: true } },
+        _count: { select: { members: true } },
+        transcript: { select: { messageCount: true, createdAt: true } }
+      },
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * take,
+      take
+    }),
+    prisma.ticket.count({ where })
+  ]);
+
+  return {
+    items: items.map((ticket) => ({
+      id: ticket.id,
+      ticketNumber: ticket.ticketNumber,
+      openerId: ticket.openerId,
+      channelId: ticket.channelId,
+      status: ticket.status,
+      priority: ticket.priority,
+      claimedById: ticket.claimedById,
+      category: ticket.category,
+      memberCount: ticket._count.members,
+      transcript: ticket.transcript,
+      createdAt: ticket.createdAt,
+      updatedAt: ticket.updatedAt,
+      closedAt: ticket.closedAt
+    })),
+    total,
+    page,
+    take,
+    pages: Math.max(1, Math.ceil(total / take))
+  };
+});
+
+app.get('/api/guilds/:guildId/tickets/:ticketId', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId },
+    include: {
+      category: true,
+      members: { orderBy: { createdAt: 'asc' } },
+      audit: { orderBy: { createdAt: 'desc' }, take: 200 },
+      transcript: { select: { messageCount: true, createdAt: true } }
+    }
+  });
+  if (!ticket) return reply.code(404).send({ error: 'TICKET_NOT_FOUND' });
+
+  return {
+    ...ticket,
+    closeReason: decryptText(ticket.closeReason)
+  };
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/unclaim', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  return runTicketBotAction(request, reply, () => unclaimTicket(guildId, ticketId, session.userId));
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/assign', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const parsed = z.object({ assigneeId: snowflake }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  return runTicketBotAction(request, reply, () =>
+    assignTicket(guildId, ticketId, session.userId, parsed.data.assigneeId)
+  );
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/transfer', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const parsed = z.object({ categoryId: internalId }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  return runTicketBotAction(request, reply, () =>
+    transferTicket(guildId, ticketId, session.userId, parsed.data.categoryId)
+  );
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/members', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const parsed = z.object({ userId: snowflake }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  return runTicketBotAction(request, reply, () =>
+    addTicketMember(guildId, ticketId, session.userId, parsed.data.userId)
+  );
+});
+
+app.delete('/api/guilds/:guildId/tickets/:ticketId/members/:userId', async (request, reply) => {
+  const { guildId, ticketId, userId } = request.params as { guildId: string; ticketId: string; userId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+  if (!snowflake.safeParse(userId).success) return reply.code(400).send({ error: 'INVALID_DISCORD_ID', field: 'userId' });
+
+  return runTicketBotAction(request, reply, () =>
+    removeTicketMember(guildId, ticketId, session.userId, userId)
+  );
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/close', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const parsed = z.object({
+    reason: z.string().trim().max(1000).nullable().optional()
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  return runTicketBotAction(request, reply, () =>
+    closeTicket(guildId, ticketId, session.userId, parsed.data.reason || null)
+  );
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/reopen', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  return runTicketBotAction(request, reply, () =>
+    reopenTicket(guildId, ticketId, session.userId)
+  );
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/transcript', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  return runTicketBotAction(request, reply, () =>
+    generateTranscript(guildId, ticketId, session.userId)
+  );
+});
+
+app.get('/api/guilds/:guildId/tickets/:ticketId/transcript', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId },
+    select: {
+      ticketNumber: true,
+      transcript: { select: { contentEncrypted: true } }
+    }
+  });
+  if (!ticket) return reply.code(404).send({ error: 'TICKET_NOT_FOUND' });
+  if (!ticket.transcript) return reply.code(404).send({ error: 'TRANSCRIPT_NOT_FOUND' });
+
+  const html = decryptText(ticket.transcript.contentEncrypted);
+  if (!html) return reply.code(500).send({ error: 'TRANSCRIPT_DECRYPT_FAILED' });
+
+  reply.header('Content-Disposition', `attachment; filename="dispatch-ticket-${ticket.ticketNumber}.html"`);
+  return reply.type('text/html; charset=utf-8').send(html);
 });
 
 app.get('/api/guilds/:guildId/panel-audit', async (request, reply) => {
