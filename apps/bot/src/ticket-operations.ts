@@ -61,7 +61,7 @@ async function getGuildChannel(client: Client, guildId: string, channelId: strin
 
 async function audit(ticketId: string, guildId: string, actorId: string, action: string, details: Record<string, unknown> = {}) {
   await prisma.ticketAudit.create({
-    data: { ticketId, guildId, actorId, action, details }
+    data: { ticketId, guildId, actorId, action, details: JSON.parse(JSON.stringify(details)) }
   });
 }
 
