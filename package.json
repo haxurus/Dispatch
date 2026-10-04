@@ -1,0 +1,16 @@
+{
+  "name": "dispatch",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "build": "npm run build --workspace @dispatch/shared && npm run build --workspace @dispatch/db && npm run build --workspace @dispatch/api && npm run build --workspace @dispatch/bot && npm run build --workspace @dispatch/web",
+    "dev:bot": "npm run dev --workspace @dispatch/bot",
+    "dev:api": "npm run dev --workspace @dispatch/api",
+    "dev:web": "npm run dev --workspace @dispatch/web",
+    "db:generate": "npm run generate --workspace @dispatch/db",
+    "db:push": "npm run db:push --workspace @dispatch/db",
+    "db:migrate": "npm run migrate:deploy --workspace @dispatch/db"
+  },
+  "engines": {"node": ">=22"}
+}
