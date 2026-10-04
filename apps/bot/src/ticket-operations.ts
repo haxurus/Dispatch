@@ -1,4 +1,7 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   PermissionFlagsBits,
   type Client,
@@ -58,6 +61,40 @@ async function getGuildChannel(client: Client, guildId: string, channelId: strin
   const channel = await guild.channels.fetch(channelId);
   if (!channel || channel.type !== ChannelType.GuildText) throw new Error('TICKET_CHANNEL_NOT_FOUND');
   return { guild, channel: channel as TextChannel };
+}
+
+function closureComponents(
+  ticketId: string,
+  feedbackEnabled: boolean,
+  reopenWindowHours: number | null
+) {
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+
+  if (feedbackEnabled) {
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        ...[1, 2, 3, 4, 5].map((rating) =>
+          new ButtonBuilder()
+            .setCustomId('dispatch:feedback:' + ticketId + ':' + rating)
+            .setLabel('★'.repeat(rating))
+            .setStyle(rating >= 4 ? ButtonStyle.Success : rating === 3 ? ButtonStyle.Secondary : ButtonStyle.Danger)
+        )
+      )
+    );
+  }
+
+  if (reopenWindowHours) {
+    rows.push(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId('dispatch:reopen:' + ticketId)
+          .setLabel('Riapri ticket')
+          .setStyle(ButtonStyle.Primary)
+      )
+    );
+  }
+
+  return rows;
 }
 
 async function audit(ticketId: string, guildId: string, actorId: string, action: string, details: Record<string, unknown> = {}) {
@@ -377,14 +414,51 @@ export async function closeTicket(
     allowedMentions: { users: [actorId] }
   }).catch(() => null);
 
+  const components = closureComponents(
+    ticket.id,
+    ticket.category.feedbackEnabled,
+    ticket.category.reopenWindowHours
+  );
+
+  if (components.length) {
+    await channel.send({
+      content: [
+        ticket.category.feedbackEnabled ? 'Puoi valutare l’assistenza ricevuta.' : null,
+        ticket.category.reopenWindowHours
+          ? `Puoi riaprire il ticket entro ${ticket.category.reopenWindowHours} ore dalla chiusura.`
+          : null
+      ].filter(Boolean).join(' '),
+      components
+    }).catch(() => null);
+
+    await prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { feedbackRequestedAt: new Date() }
+    });
+  }
+
   await generateTranscript(client, guildId, ticket.id).catch(() => null);
 
   return { ok: true, status: 'CLOSED' };
 }
 
-export async function reopenTicket(client: Client, guildId: string, ticketId: string, actorId: string) {
+export async function reopenTicket(
+  client: Client,
+  guildId: string,
+  ticketId: string,
+  actorId: string,
+  enforceUserWindow = false
+) {
   const ticket = await getTicket(guildId, ticketId);
   if (ticket.status !== 'CLOSED') throw new Error('TICKET_NOT_CLOSED');
+
+  if (enforceUserWindow) {
+    if (actorId !== ticket.openerId) throw new Error('REOPEN_NOT_OPENER');
+    if (!ticket.category.reopenWindowHours || !ticket.closedAt) throw new Error('REOPEN_DISABLED');
+
+    const deadline = ticket.closedAt.getTime() + ticket.category.reopenWindowHours * 3_600_000;
+    if (Date.now() > deadline) throw new Error('REOPEN_WINDOW_EXPIRED');
+  }
 
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
 
@@ -401,7 +475,10 @@ export async function reopenTicket(client: Client, guildId: string, ticketId: st
         status: 'OPEN',
         closeReason: null,
         closedAt: null,
-        claimedById: null
+        claimedById: null,
+        escalatedAt: null,
+        feedbackRequestedAt: null,
+        inactivityWarnedAt: null
       }
     }),
     prisma.ticketAudit.create({
@@ -410,8 +487,11 @@ export async function reopenTicket(client: Client, guildId: string, ticketId: st
         guildId,
         actorId,
         action: 'ticket.reopen',
-        details: {}
+        details: { userWindowEnforced: enforceUserWindow }
       }
+    }),
+    prisma.ticketFeedback.deleteMany({
+      where: { ticketId: ticket.id }
     })
   ]);
 
@@ -689,6 +769,39 @@ export async function runTicketAutomations(client: Client) {
           client.user?.id ?? ticket.openerId,
           'ticket.sla.resolution_breached',
           { minutes: category.slaResolutionMinutes }
+        );
+      }
+
+      if (
+        category.escalationMinutes &&
+        !ticket.escalatedAt &&
+        ticket.status !== 'RESOLVED' &&
+        ticket.createdAt.getTime() + category.escalationMinutes * 60_000 <= now
+      ) {
+        await prisma.ticket.update({
+          where: { id: ticket.id },
+          data: { escalatedAt: new Date() }
+        });
+
+        const escalationRoles = category.escalationRoleIds.length
+          ? category.escalationRoleIds
+          : category.staffRoleIds;
+        const mentions = escalationRoles.map((roleId) => '<@&' + roleId + '>').join(' ');
+
+        await sendAutomationNotice(
+          client,
+          ticket.guildId,
+          ticket.channelId,
+          (mentions ? mentions + ' ' : '') +
+            'Escalation automatica per il ticket #' + ticket.ticketNumber + '.',
+          escalationRoles
+        );
+        await audit(
+          ticket.id,
+          ticket.guildId,
+          client.user?.id ?? ticket.openerId,
+          'ticket.escalation',
+          { minutes: category.escalationMinutes, roleIds: escalationRoles }
         );
       }
 
