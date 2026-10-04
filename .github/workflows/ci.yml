@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Validate shell scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          find ops security deploy/runtime -type f -name '*.sh' -print0 | xargs -0 -r -n1 sh -n
+
+      - name: Validate production Compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p deploy/secrets
+          for name in discord_token discord_client_secret session_secret data_encryption_key bot_internal_api_key postgres_admin_password api_db_password bot_db_password redis_password; do
+            : > "deploy/secrets/$name"
+          done
+          DISPATCH_APP_IMAGE=ghcr.io/haxurus/dispatch@sha256:$(printf 'a%.0s' {1..64})           DISPATCH_MIGRATE_IMAGE=ghcr.io/haxurus/dispatch@sha256:$(printf 'b%.0s' {1..64})           docker compose --env-file deploy/.env.production.example -f deploy/docker-compose.prod.yml config -q
+
+      - name: Build runtime image
+        run: docker build --pull --target runtime -t dispatch-ci-runtime:${GITHUB_SHA} .
+
+      - name: Build migration image
+        run: docker build --target migrate -t dispatch-ci-migrate:${GITHUB_SHA} .
