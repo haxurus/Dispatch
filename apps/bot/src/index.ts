@@ -4,7 +4,11 @@ import { prisma } from '@dispatch/db';
 import { config } from './config.js';
 import { startInternalApi } from './internal-api.js';
 import { handleTicketInteraction } from './tickets.js';
-import { recordTicketMessage, runTicketAutomations } from './ticket-operations.js';
+import {
+  recordTicketMessage,
+  runTicketAutomations,
+  runTicketRetention
+} from './ticket-operations.js';
 
 const log = pino({ level: config.logLevel });
 
@@ -26,6 +30,22 @@ async function ensureGuild(guild: { id: string; name: string }) {
 }
 
 let internalApi: ReturnType<typeof startInternalApi> | null = null;
+let retentionRunning = false;
+
+async function runRetentionCycle() {
+  if (retentionRunning) return;
+  retentionRunning = true;
+  try {
+    const result = await runTicketRetention(client);
+    if (result.transcriptsDeleted || result.ticketsDeleted || result.channelsDeleted) {
+      log.info(result, 'Ticket retention cycle completed');
+    }
+  } catch (error) {
+    log.error({ err: error }, 'Ticket retention cycle failed');
+  } finally {
+    retentionRunning = false;
+  }
+}
 
 client.once(Events.ClientReady, async (ready) => {
   log.info({ user: ready.user.tag, guilds: ready.guilds.cache.size }, 'Dispatch bot ready');
@@ -35,6 +55,7 @@ client.once(Events.ClientReady, async (ready) => {
   }
 
   internalApi = startInternalApi(client, config.internalApiKey, config.internalApiPort);
+  void runRetentionCycle();
 });
 
 client.on(Events.GuildCreate, async (guild) => {
@@ -83,6 +104,10 @@ setInterval(() => {
       automationRunning = false;
     });
 }, 60_000).unref();
+
+setInterval(() => {
+  void runRetentionCycle();
+}, 6 * 60 * 60 * 1000).unref();
 
 client.on(Events.Warn, (warning) => log.warn({ warning }, 'Discord client warning'));
 client.on(Events.Error, (error) => log.error({ err: error }, 'Discord client error'));
