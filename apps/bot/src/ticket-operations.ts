@@ -548,7 +548,7 @@ export async function sendTicketReply(
         ticketId: ticket.id,
         guildId,
         actorId,
-        action: 'ticket.reply.template',
+        action: 'ticket.reply',
         details: {
           templateId: templateId ?? null,
           contentLength: trimmed.length
