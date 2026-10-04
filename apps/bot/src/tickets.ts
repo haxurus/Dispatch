@@ -112,6 +112,20 @@ function hasStaffAccess(member: GuildMember, staffRoleIds: string[]) {
     staffRoleIds.some((roleId) => member.roles.cache.has(roleId));
 }
 
+async function userIsBlacklisted(guildId: string, userId: string) {
+  const entry = await prisma.guildBlacklist.findUnique({
+    where: { guildId_userId: { guildId, userId } }
+  });
+  if (!entry) return false;
+
+  if (entry.expiresAt && entry.expiresAt.getTime() <= Date.now()) {
+    await prisma.guildBlacklist.delete({ where: { id: entry.id } }).catch(() => null);
+    return false;
+  }
+
+  return true;
+}
+
 export async function publishTicketPanel(client: Client, guildId: string, panelId: string) {
   const panel = await prisma.ticketPanel.findFirst({
     where: { id: panelId, guildId, enabled: true }
@@ -386,6 +400,14 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
 
   if (!panel || !panel.categoryIds.includes(categoryId) || !category) {
     await interaction.reply({ content: 'Questo pannello non è più valido.', ephemeral: true });
+    return;
+  }
+
+  if (await userIsBlacklisted(interaction.guildId, interaction.user.id)) {
+    await interaction.reply({
+      content: 'Non puoi aprire ticket in questo server.',
+      ephemeral: true
+    });
     return;
   }
 
