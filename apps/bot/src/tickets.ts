@@ -276,7 +276,6 @@ async function createTicket(
   }
 
   try {
-    const firstAnswer = formAnswers.find((answer) => answer.value.trim())?.value.trim() ?? null;
     const ticket = await prisma.ticket.create({
       data: {
         ticketNumber: number,
@@ -285,7 +284,7 @@ async function createTicket(
         openerId: interaction.user.id,
         channelId: channel.id,
         status: 'OPEN',
-        subject: firstAnswer?.slice(0, 200) ?? null,
+        subject: null,
         formDataEncrypted: formAnswers.length
           ? encryptText(JSON.stringify(formAnswers))
           : null,
