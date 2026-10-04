@@ -69,6 +69,13 @@ export async function getGuildAccessSnapshot(guildId: string, userId: string) {
   return { owner: result.owner, permissions: BigInt(result.permissions), roles: result.roles };
 }
 
+export async function publishMainMenu(guildId: string) {
+  return api<{ ok: true; messageId: string }>(
+    `/guilds/${id(guildId)}/main-menu/publish`,
+    'POST'
+  );
+}
+
 export async function publishPanel(guildId: string, panelId: string) {
   return api<{ ok: true; messageId: string }>(
     `/guilds/${id(guildId)}/panels/${cuid(panelId)}/publish`,
