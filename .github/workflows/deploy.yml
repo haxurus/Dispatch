@@ -17,7 +17,13 @@ env:
   IMAGE: ghcr.io/haxurus/dispatch
 
 jobs:
+  ticket-checks:
+    uses: ./.github/workflows/ticket-tests.yml
+    permissions:
+      contents: read
+
   build:
+    needs: ticket-checks
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     outputs:
@@ -42,13 +48,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker buildx build --pull --target runtime --platform linux/amd64             --cache-from type=gha,scope=dispatch-runtime             --cache-to type=gha,scope=dispatch-runtime,mode=max             --provenance=mode=max --sbom=true             --label org.opencontainers.image.source=https://github.com/haxurus/Dispatch             --label org.opencontainers.image.revision=${GITHUB_SHA}             --tag "${IMAGE}:app-${GITHUB_SHA}" --tag "${IMAGE}:app-latest"             --metadata-file /tmp/app-metadata.json --push .
+          docker buildx build --pull --target runtime --platform linux/amd64 \
+            --cache-from type=gha,scope=dispatch-runtime \
+            --cache-to type=gha,scope=dispatch-runtime,mode=max \
+            --provenance=mode=max --sbom=true \
+            --label org.opencontainers.image.source=https://github.com/haxurus/Dispatch \
+            --label org.opencontainers.image.revision=${GITHUB_SHA} \
+            --tag "${IMAGE}:app-${GITHUB_SHA}" --tag "${IMAGE}:app-latest" \
+            --metadata-file /tmp/app-metadata.json --push .
 
       - name: Build and push migration image
         shell: bash
         run: |
           set -euo pipefail
-          docker buildx build --target migrate --platform linux/amd64             --cache-from type=gha,scope=dispatch-migrate             --cache-to type=gha,scope=dispatch-migrate,mode=max             --provenance=mode=max --sbom=true             --label org.opencontainers.image.source=https://github.com/haxurus/Dispatch             --label org.opencontainers.image.revision=${GITHUB_SHA}             --tag "${IMAGE}:migrate-${GITHUB_SHA}" --tag "${IMAGE}:migrate-latest"             --metadata-file /tmp/migrate-metadata.json --push .
+          docker buildx build --target migrate --platform linux/amd64 \
+            --cache-from type=gha,scope=dispatch-migrate \
+            --cache-to type=gha,scope=dispatch-migrate,mode=max \
+            --provenance=mode=max --sbom=true \
+            --label org.opencontainers.image.source=https://github.com/haxurus/Dispatch \
+            --label org.opencontainers.image.revision=${GITHUB_SHA} \
+            --tag "${IMAGE}:migrate-${GITHUB_SHA}" --tag "${IMAGE}:migrate-latest" \
+            --metadata-file /tmp/migrate-metadata.json --push .
 
       - name: Export immutable image references
         id: refs
@@ -94,4 +114,5 @@ jobs:
         run: |
           set -euo pipefail
           port=${VPS_PORT:-22}
-          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -p "$port"             "dispatch-deploy@${VPS_HOST}" "deploy ${APP_REF} ${MIGRATE_REF}"
+          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -p "$port" \
+            "dispatch-deploy@${VPS_HOST}" "deploy ${APP_REF} ${MIGRATE_REF}"
