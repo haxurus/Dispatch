@@ -40,6 +40,10 @@ type Category = {
   slaResolutionMinutes: number | null;
   inactivityCloseHours: number | null;
   inactivityWarningMinutes: number | null;
+  escalationMinutes: number | null;
+  escalationRoleIds: string[];
+  reopenWindowHours: number | null;
+  feedbackEnabled: boolean;
   enabled: boolean;
 };
 
@@ -71,6 +75,10 @@ const newCategory = () => ({
   slaResolutionMinutes: null as number | null,
   inactivityCloseHours: null as number | null,
   inactivityWarningMinutes: null as number | null,
+  escalationMinutes: null as number | null,
+  escalationRoleIds: [] as string[],
+  reopenWindowHours: 24 as number | null,
+  feedbackEnabled: true,
   enabled: true
 });
 
@@ -160,6 +168,10 @@ export default function TicketConfigurationPage() {
       slaResolutionMinutes: category.slaResolutionMinutes,
       inactivityCloseHours: category.inactivityCloseHours,
       inactivityWarningMinutes: category.inactivityWarningMinutes,
+      escalationMinutes: category.escalationMinutes,
+      escalationRoleIds: category.escalationRoleIds ?? [],
+      reopenWindowHours: category.reopenWindowHours,
+      feedbackEnabled: category.feedbackEnabled,
       enabled: category.enabled
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -416,6 +428,8 @@ export default function TicketConfigurationPage() {
         </div>
         <div className="actions">
           <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets/analytics`}>Analytics</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets/security`}>Blacklist</a>
           <a className="button secondary" href={`/dashboard/${guildId}`}>Permessi dashboard</a>
         </div>
       </div>
@@ -628,7 +642,61 @@ export default function TicketConfigurationPage() {
                   })}
                 />
               </label>
+              <label>
+                Escalation automatica, minuti
+                <input
+                  type="number"
+                  min={1}
+                  max={43200}
+                  value={categoryForm.escalationMinutes ?? ''}
+                  onChange={(event) => setCategoryForm({
+                    ...categoryForm,
+                    escalationMinutes: nullableNumber(event.target.value)
+                  })}
+                />
+              </label>
+              <label>
+                Finestra riapertura utente, ore
+                <input
+                  type="number"
+                  min={1}
+                  max={720}
+                  value={categoryForm.reopenWindowHours ?? ''}
+                  onChange={(event) => setCategoryForm({
+                    ...categoryForm,
+                    reopenWindowHours: nullableNumber(event.target.value)
+                  })}
+                />
+              </label>
             </div>
+
+            <label>
+              Ruoli escalation
+              <select
+                multiple
+                value={categoryForm.escalationRoleIds}
+                onChange={(event) => setCategoryForm({
+                  ...categoryForm,
+                  escalationRoleIds: [...event.target.selectedOptions].map((option) => option.value)
+                })}
+              >
+                {roles
+                  .filter((role) => role.id !== guildId)
+                  .map((role) => <option value={role.id} key={role.id}>{role.name}</option>)}
+              </select>
+            </label>
+
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={categoryForm.feedbackEnabled}
+                onChange={(event) => setCategoryForm({
+                  ...categoryForm,
+                  feedbackEnabled: event.target.checked
+                })}
+              />
+              Richiedi feedback 1-5 stelle alla chiusura
+            </label>
           </fieldset>
 
           <button disabled={busy === 'category'} type="submit">
@@ -717,6 +785,9 @@ export default function TicketConfigurationPage() {
               </p>
               <p className="muted">
                 SLA risposta: {category.slaFirstResponseMinutes ?? 'off'} · SLA risoluzione: {category.slaResolutionMinutes ?? 'off'} · Auto-close: {category.inactivityCloseHours ? `${category.inactivityCloseHours}h` : 'off'}
+              </p>
+              <p className="muted">
+                Escalation: {category.escalationMinutes ? `${category.escalationMinutes} min` : 'off'} · Riapertura: {category.reopenWindowHours ? `${category.reopenWindowHours}h` : 'off'} · Feedback: {category.feedbackEnabled ? 'on' : 'off'}
               </p>
               <div className="actions">
                 <button className="secondary" onClick={() => editCategory(category)}>Modifica</button>
