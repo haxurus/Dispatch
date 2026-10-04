@@ -11,6 +11,9 @@ import {
 } from 'discord.js';
 import { prisma } from '@dispatch/db';
 import { encryptText } from './security.js';
+import { assertTranscriptRetention, lockTicket } from './retention.js';
+import { reserveTicketOpen, consumeTicketOpenReservation, commitTicketOpen,
+  releaseTicketOpenReservation, formVersion } from './open-guard.js';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 
@@ -51,6 +54,7 @@ async function getTicket(guildId: string, ticketId: string) {
     }
   });
   if (!ticket) throw new Error('TICKET_NOT_FOUND');
+  if (ticket.retentionPendingAt) throw new Error('TICKET_RETENTION_PENDING');
   return ticket;
 }
 
@@ -293,6 +297,7 @@ export async function removeTicketMember(client: Client, guildId: string, ticket
 
 export async function generateTranscript(client: Client, guildId: string, ticketId: string, actorId?: string) {
   const ticket = await getTicket(guildId, ticketId);
+  await assertTranscriptRetention(ticket);
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
 
   const messages = [];
@@ -445,63 +450,62 @@ export async function closeTicket(
 }
 
 export async function reopenTicket(
-  client: Client,
-  guildId: string,
-  ticketId: string,
-  actorId: string,
-  enforceUserWindow = false
+  client: Client, guildId: string, ticketId: string, actorId: string, enforceUserWindow = false
 ) {
   const ticket = await getTicket(guildId, ticketId);
-  if (ticket.status !== 'CLOSED') throw new Error('TICKET_NOT_CLOSED');
-
-  if (enforceUserWindow) {
-    if (actorId !== ticket.openerId) throw new Error('REOPEN_NOT_OPENER');
-    if (!ticket.category.reopenWindowHours || !ticket.closedAt) throw new Error('REOPEN_DISABLED');
-
-    const deadline = ticket.closedAt.getTime() + ticket.category.reopenWindowHours * 3_600_000;
-    if (Date.now() > deadline) throw new Error('REOPEN_WINDOW_EXPIRED');
-  }
-
+  if (enforceUserWindow && actorId !== ticket.openerId) throw new Error('REOPEN_NOT_OPENER');
+  if (ticket.status !== 'CLOSED' && ticket.status !== 'REOPENING') throw new Error('TICKET_NOT_CLOSED');
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
-
-  for (const member of ticket.members) {
-    await channel.permissionOverwrites.edit(member.userId, PARTICIPANT_PERMISSIONS);
+  if (ticket.status === 'CLOSED') {
+    if (enforceUserWindow && (!ticket.category.reopenWindowHours || !ticket.closedAt)) throw new Error('REOPEN_DISABLED');
+    if (enforceUserWindow && Date.now() >= ticket.closedAt!.getTime() + ticket.category.reopenWindowHours! * 3600000) {
+      throw new Error('REOPEN_WINDOW_EXPIRED');
+    }
+    const reservation = await reserveTicketOpen(guildId, ticket.openerId, ticket.categoryId,
+      'r_' + ticket.id, formVersion(ticket.category.formFields));
+    if (!reservation.ok) throw new Error(reservation.code);
+    if (!(await consumeTicketOpenReservation(guildId, ticket.openerId, reservation.token))) {
+      throw new Error('REOPEN_RESERVATION_EXPIRED');
+    }
+    try {
+      await commitTicketOpen(guildId, ticket.openerId, reservation.token, async (tx) => {
+        await lockTicket(tx, ticket.id);
+        const current = await tx.ticket.findUniqueOrThrow({ where: { id: ticket.id } });
+        if (current.retentionPendingAt) throw new Error('TICKET_RETENTION_PENDING');
+        if (current.status !== 'CLOSED') throw new Error('TICKET_NOT_CLOSED');
+        await tx.ticket.update({ where: { id: ticket.id }, data: { status: 'REOPENING' } });
+      });
+    } catch (error) {
+      await releaseTicketOpenReservation(guildId, ticket.openerId, reservation.token);
+      throw error;
+    }
   }
-
-  await channel.setName(`ticket-${String(ticket.ticketNumber).padStart(4, '0')}`).catch(() => null);
-
-  await prisma.$transaction([
-    prisma.ticket.update({
-      where: { id: ticket.id },
-      data: {
-        status: 'OPEN',
-        closeReason: null,
-        closedAt: null,
-        claimedById: null,
-        escalatedAt: null,
-        feedbackRequestedAt: null,
-        inactivityWarnedAt: null
-      }
-    }),
-    prisma.ticketAudit.create({
-      data: {
-        ticketId: ticket.id,
-        guildId,
-        actorId,
-        action: 'ticket.reopen',
-        details: { userWindowEnforced: enforceUserWindow }
-      }
-    }),
-    prisma.ticketFeedback.deleteMany({
-      where: { ticketId: ticket.id }
-    })
-  ]);
-
-  await channel.send({
-    content: `Ticket riaperto da <@${actorId}>.`,
-    allowedMentions: { users: [actorId] }
-  }).catch(() => null);
-
+  // REOPENING is durable: retention cannot remove the channel while Discord
+  // permissions are restored. A failed restoration is safely retryable.
+  try {
+    for (const member of ticket.members) {
+      await channel.permissionOverwrites.edit(member.userId, PARTICIPANT_PERMISSIONS);
+    }
+  } catch {
+    throw new Error('REOPEN_PERMISSION_SYNC_PENDING');
+  }
+  await prisma.$transaction(async (tx) => {
+    await lockTicket(tx, ticket.id);
+    const changed = await tx.ticket.updateMany({ where: {
+      id: ticket.id, status: 'REOPENING', retentionPendingAt: null
+    }, data: {
+      status: 'OPEN', closeReason: null, closedAt: null, claimedById: null,
+      lastActivityAt: new Date(), escalatedAt: null, feedbackRequestedAt: null, inactivityWarnedAt: null
+    } });
+    if (changed.count !== 1) throw new Error('REOPEN_STATE_CONFLICT');
+    await tx.ticketFeedback.deleteMany({ where: { ticketId: ticket.id } });
+    await tx.ticketAudit.create({ data: {
+      ticketId: ticket.id, guildId, actorId, action: 'ticket.reopen',
+      details: { userWindowEnforced: enforceUserWindow }
+    } });
+  });
+  await channel.setName('ticket-' + String(ticket.ticketNumber).padStart(4, '0')).catch(() => null);
+  await channel.send({ content: 'Ticket riaperto.', allowedMentions: { parse: [] } }).catch(() => null);
   return { ok: true, status: 'OPEN', claimedById: null };
 }
 
@@ -870,383 +874,3 @@ export async function runTicketAutomations(client: Client) {
 }
 
 
-export type TicketOpenReservationResult =
-  | { ok: true }
-  | {
-      ok: false;
-      code:
-        | 'TICKET_OPEN_BLOCKED'
-        | 'TICKET_OPEN_IN_PROGRESS'
-        | 'GLOBAL_COOLDOWN'
-        | 'CATEGORY_COOLDOWN'
-        | 'GLOBAL_ATTEMPT_LIMIT'
-        | 'CATEGORY_ATTEMPT_LIMIT';
-      retryAfterSeconds: number;
-    };
-
-function secondsUntil(date: Date, now: Date) {
-  return Math.max(1, Math.ceil((date.getTime() - now.getTime()) / 1000));
-}
-
-export async function reserveTicketOpen(
-  guildId: string,
-  userId: string,
-  categoryId: string
-): Promise<TicketOpenReservationResult> {
-  const [settings, category] = await Promise.all([
-    prisma.guildSettings.findUnique({ where: { guildId } }),
-    prisma.ticketCategory.findFirst({
-      where: { id: categoryId, guildId, enabled: true }
-    })
-  ]);
-
-  if (!settings) throw new Error('GUILD_NOT_FOUND');
-  if (!category) throw new Error('CATEGORY_NOT_FOUND');
-  if (!settings.antiSpamEnabled) return { ok: true };
-
-  try {
-    return await prisma.$transaction(async (tx) => {
-      const now = new Date();
-
-      const guard = await tx.ticketUserGuard.upsert({
-        where: { guildId_userId: { guildId, userId } },
-        update: {},
-        create: { guildId, userId }
-      });
-
-      if (guard.blockedUntil && guard.blockedUntil > now) {
-        return {
-          ok: false,
-          code: 'TICKET_OPEN_BLOCKED',
-          retryAfterSeconds: secondsUntil(guard.blockedUntil, now)
-        };
-      }
-
-      if (guard.pendingUntil && guard.pendingUntil > now) {
-        return {
-          ok: false,
-          code: 'TICKET_OPEN_IN_PROGRESS',
-          retryAfterSeconds: secondsUntil(guard.pendingUntil, now)
-        };
-      }
-
-      await tx.ticketOpenAttempt.create({
-        data: { guildId, userId, categoryId }
-      });
-
-      const globalSince = new Date(
-        now.getTime() - settings.antiSpamWindowMinutes * 60_000
-      );
-      const categorySince = new Date(
-        now.getTime() - category.antiSpamWindowMinutes * 60_000
-      );
-
-      const [globalAttempts, categoryAttempts, latestCategoryTicket] = await Promise.all([
-        tx.ticketOpenAttempt.count({
-          where: {
-            guildId,
-            userId,
-            createdAt: { gte: globalSince }
-          }
-        }),
-        tx.ticketOpenAttempt.count({
-          where: {
-            guildId,
-            userId,
-            categoryId,
-            createdAt: { gte: categorySince }
-          }
-        }),
-        tx.ticket.findFirst({
-          where: {
-            guildId,
-            categoryId,
-            openerId: userId
-          },
-          orderBy: { createdAt: 'desc' },
-          select: { createdAt: true }
-        })
-      ]);
-
-      const limitViolation =
-        globalAttempts > settings.antiSpamMaxAttempts
-          ? 'GLOBAL_ATTEMPT_LIMIT'
-          : categoryAttempts > category.antiSpamMaxAttempts
-            ? 'CATEGORY_ATTEMPT_LIMIT'
-            : null;
-
-      if (limitViolation) {
-        const nextStrikes = Math.min(8, guard.strikes + 1);
-        const multiplier = Math.min(8, 2 ** Math.max(0, nextStrikes - 1));
-        const blockMinutes = Math.min(
-          10_080,
-          settings.antiSpamBlockMinutes * multiplier
-        );
-        const blockedUntil = new Date(now.getTime() + blockMinutes * 60_000);
-
-        await tx.ticketUserGuard.update({
-          where: { id: guard.id },
-          data: {
-            blockedUntil,
-            pendingUntil: null,
-            strikes: nextStrikes
-          }
-        });
-
-        return {
-          ok: false,
-          code: limitViolation,
-          retryAfterSeconds: blockMinutes * 60
-        };
-      }
-
-      if (
-        guard.lastOpenedAt &&
-        settings.antiSpamGlobalCooldownSeconds > 0
-      ) {
-        const globalCooldownUntil = new Date(
-          guard.lastOpenedAt.getTime() +
-            settings.antiSpamGlobalCooldownSeconds * 1000
-        );
-        if (globalCooldownUntil > now) {
-          return {
-            ok: false,
-            code: 'GLOBAL_COOLDOWN',
-            retryAfterSeconds: secondsUntil(globalCooldownUntil, now)
-          };
-        }
-      }
-
-      if (latestCategoryTicket && category.openCooldownSeconds > 0) {
-        const categoryCooldownUntil = new Date(
-          latestCategoryTicket.createdAt.getTime() +
-            category.openCooldownSeconds * 1000
-        );
-        if (categoryCooldownUntil > now) {
-          return {
-            ok: false,
-            code: 'CATEGORY_COOLDOWN',
-            retryAfterSeconds: secondsUntil(categoryCooldownUntil, now)
-          };
-        }
-      }
-
-      await tx.ticketUserGuard.update({
-        where: { id: guard.id },
-        data: {
-          pendingUntil: new Date(now.getTime() + 10 * 60_000),
-          blockedUntil: null
-        }
-      });
-
-      return { ok: true };
-    }, { isolationLevel: 'Serializable' });
-  } catch (error) {
-    if (error instanceof Error && /transaction|serializ|deadlock|P2034/i.test(error.message)) {
-      return {
-        ok: false,
-        code: 'TICKET_OPEN_IN_PROGRESS',
-        retryAfterSeconds: 5
-      };
-    }
-    throw error;
-  }
-}
-
-export async function hasTicketOpenReservation(guildId: string, userId: string) {
-  const settings = await prisma.guildSettings.findUnique({
-    where: { guildId },
-    select: { antiSpamEnabled: true }
-  });
-  if (!settings) throw new Error('GUILD_NOT_FOUND');
-  if (!settings.antiSpamEnabled) return true;
-
-  const guard = await prisma.ticketUserGuard.findUnique({
-    where: { guildId_userId: { guildId, userId } },
-    select: { pendingUntil: true }
-  });
-
-  return Boolean(guard?.pendingUntil && guard.pendingUntil.getTime() > Date.now());
-}
-
-export async function releaseTicketOpenReservation(guildId: string, userId: string) {
-  await prisma.ticketUserGuard.updateMany({
-    where: { guildId, userId },
-    data: { pendingUntil: null }
-  });
-}
-
-export async function markTicketOpened(guildId: string, userId: string) {
-  const settings = await prisma.guildSettings.findUnique({
-    where: { guildId },
-    select: { antiSpamEnabled: true }
-  });
-  if (!settings?.antiSpamEnabled) return;
-
-  await prisma.ticketUserGuard.upsert({
-    where: { guildId_userId: { guildId, userId } },
-    update: {
-      lastOpenedAt: new Date(),
-      pendingUntil: null,
-      blockedUntil: null,
-      strikes: 0
-    },
-    create: {
-      guildId,
-      userId,
-      lastOpenedAt: new Date()
-    }
-  });
-}
-
-export function ticketOpenReservationMessage(
-  result: Exclude<TicketOpenReservationResult, { ok: true }>
-) {
-  const seconds = result.retryAfterSeconds;
-  const human = seconds >= 3600
-    ? Math.ceil(seconds / 3600) + ' ore'
-    : seconds >= 60
-      ? Math.ceil(seconds / 60) + ' minuti'
-      : seconds + ' secondi';
-
-  switch (result.code) {
-    case 'TICKET_OPEN_BLOCKED':
-    case 'GLOBAL_ATTEMPT_LIMIT':
-    case 'CATEGORY_ATTEMPT_LIMIT':
-      return 'Hai effettuato troppi tentativi di apertura. Riprova tra circa ' + human + '.';
-    case 'TICKET_OPEN_IN_PROGRESS':
-      return 'Hai già un’apertura ticket in corso. Completa quella richiesta oppure riprova tra circa ' + human + '.';
-    case 'GLOBAL_COOLDOWN':
-      return 'Devi attendere circa ' + human + ' prima di aprire un altro ticket.';
-    case 'CATEGORY_COOLDOWN':
-      return 'Devi attendere circa ' + human + ' prima di aprire un altro ticket di questa categoria.';
-  }
-
-  return 'Apertura ticket temporaneamente limitata. Riprova più tardi.';
-}
-
-export async function runTicketRetention(client: Client) {
-  const settingsRows = await prisma.guildSettings.findMany({
-    where: {
-      OR: [
-        { transcriptRetentionDays: { not: null } },
-        { closedTicketRetentionDays: { not: null } }
-      ]
-    },
-    select: {
-      guildId: true,
-      transcriptRetentionDays: true,
-      closedTicketRetentionDays: true,
-      retentionDeleteDiscordChannel: true
-    }
-  });
-
-  let transcriptsDeleted = 0;
-  let ticketsDeleted = 0;
-  let channelsDeleted = 0;
-
-  for (const settings of settingsRows) {
-    if (settings.transcriptRetentionDays !== null) {
-      const cutoff = new Date(
-        Date.now() - settings.transcriptRetentionDays * 86_400_000
-      );
-
-      for (;;) {
-        const transcriptRows = await prisma.transcript.findMany({
-          where: {
-            ticket: {
-              guildId: settings.guildId,
-              status: 'CLOSED',
-              closedAt: { lt: cutoff }
-            }
-          },
-          select: { id: true },
-          take: 500
-        });
-
-        if (!transcriptRows.length) break;
-
-        const deleted = await prisma.transcript.deleteMany({
-          where: { id: { in: transcriptRows.map((row) => row.id) } }
-        });
-        transcriptsDeleted += deleted.count;
-
-        if (transcriptRows.length < 500) break;
-      }
-    }
-
-    if (settings.closedTicketRetentionDays !== null) {
-      const cutoff = new Date(
-        Date.now() - settings.closedTicketRetentionDays * 86_400_000
-      );
-
-      for (;;) {
-        const expired = await prisma.ticket.findMany({
-          where: {
-            guildId: settings.guildId,
-            status: 'CLOSED',
-            closedAt: { lt: cutoff }
-          },
-          orderBy: { id: 'asc' },
-          select: { id: true, channelId: true, ticketNumber: true },
-          take: 100
-        });
-
-        if (!expired.length) break;
-
-        for (const ticket of expired) {
-          if (settings.retentionDeleteDiscordChannel) {
-            const guild = client.guilds.cache.get(settings.guildId);
-            if (guild) {
-              const channel = await guild.channels.fetch(ticket.channelId).catch(() => null);
-              if (channel) {
-                const deleted = await channel.delete(
-                  'Dispatch retention ticket #' + ticket.ticketNumber
-                ).then(() => true).catch(() => false);
-                if (deleted) channelsDeleted += 1;
-              }
-            }
-          }
-
-          await prisma.ticket.delete({ where: { id: ticket.id } });
-          ticketsDeleted += 1;
-        }
-
-        if (expired.length < 100) break;
-      }
-    }
-  }
-
-  const attemptCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  await prisma.ticketOpenAttempt.deleteMany({
-    where: { createdAt: { lt: attemptCutoff } }
-  });
-
-  const now = new Date();
-  const expiredGuards = await prisma.ticketUserGuard.findMany({
-    where: {
-      OR: [
-        { pendingUntil: { lt: now } },
-        { blockedUntil: { lt: now } }
-      ]
-    },
-    select: {
-      id: true,
-      pendingUntil: true,
-      blockedUntil: true
-    },
-    take: 1000
-  });
-
-  for (const guard of expiredGuards) {
-    await prisma.ticketUserGuard.update({
-      where: { id: guard.id },
-      data: {
-        ...(guard.pendingUntil && guard.pendingUntil < now ? { pendingUntil: null } : {}),
-        ...(guard.blockedUntil && guard.blockedUntil < now ? { blockedUntil: null } : {})
-      }
-    });
-  }
-
-  return { transcriptsDeleted, ticketsDeleted, channelsDeleted };
-}

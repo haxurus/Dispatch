@@ -246,7 +246,7 @@ export default function TicketDetailPage() {
     );
   }
 
-  const closed = ticket.status === 'CLOSED';
+  const closed = ticket.status === 'CLOSED' || ticket.status === 'REOPENING';
 
   return (
     <main className="shell">
@@ -296,7 +296,7 @@ export default function TicketDetailPage() {
               <option value="WAITING">In attesa</option>
               <option value="IN_PROGRESS">In lavorazione</option>
               <option value="RESOLVED">Risolto</option>
-              {closed && <option value="CLOSED">Chiuso</option>}
+              {closed && <option value={ticket.status}>{ticket.status === 'REOPENING' ? 'Ripristino permessi da completare' : 'Chiuso'}</option>}
             </select>
           </label>
 

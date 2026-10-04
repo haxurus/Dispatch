@@ -17,17 +17,10 @@ import {
 } from 'discord.js';
 import { prisma } from '@dispatch/db';
 import { encryptText } from './security.js';
-import {
-  closeTicket,
-  hasTicketOpenReservation,
-  markTicketOpened,
-  releaseTicketOpenReservation,
-  reopenTicket,
-  reserveTicketOpen,
-  setTicketStatus,
-  ticketOpenReservationMessage,
-  unclaimTicket
-} from './ticket-operations.js';
+import { closeTicket, reopenTicket, setTicketStatus, unclaimTicket } from './ticket-operations.js';
+import { reserveTicketOpen, getTicketOpenReservation, consumeTicketOpenReservation,
+  commitTicketOpen, releaseTicketOpenReservation, ticketOpenReservationMessage,
+  formVersion, allowOpeningInteraction } from './open-guard.js';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 const PANEL_SELECT_PREFIX = 'dispatch:open:';
@@ -131,7 +124,6 @@ async function userIsBlacklisted(guildId: string, userId: string) {
   if (!entry) return false;
 
   if (entry.expiresAt && entry.expiresAt.getTime() <= Date.now()) {
-    await prisma.guildBlacklist.delete({ where: { id: entry.id } }).catch(() => null);
     return false;
   }
 
@@ -207,70 +199,77 @@ export async function publishTicketPanel(client: Client, guildId: string, panelI
   return { ok: true, messageId };
 }
 
+const publishingMenus = new Set<string>();
 export async function publishMainMenu(client: Client, guildId: string) {
-  const settings = await prisma.guildSettings.findUnique({ where: { guildId } });
-  if (!settings) throw new Error('GUILD_NOT_FOUND');
-  if (!settings.mainMenuEnabled) throw new Error('MAIN_MENU_DISABLED');
-  if (!settings.mainMenuChannelId) throw new Error('MAIN_MENU_CHANNEL_REQUIRED');
-  if (!settings.mainMenuCategoryIds.length) throw new Error('MAIN_MENU_HAS_NO_CATEGORIES');
-  if (settings.mainMenuCategoryIds.length > 25) throw new Error('MAIN_MENU_TOO_MANY_CATEGORIES');
-
-  const categories = await prisma.ticketCategory.findMany({
-    where: {
-      guildId,
-      id: { in: settings.mainMenuCategoryIds },
-      enabled: true
-    },
-    orderBy: { createdAt: 'asc' }
-  });
-  if (categories.length !== settings.mainMenuCategoryIds.length) {
-    throw new Error('MAIN_MENU_CATEGORY_NOT_FOUND');
-  }
-
-  const guild = client.guilds.cache.get(guildId);
-  if (!guild) throw new Error('GUILD_NOT_FOUND');
-
-  const channel = await guild.channels.fetch(settings.mainMenuChannelId);
-  if (!channel || !channel.isTextBased() || !('send' in channel)) {
-    throw new Error('MAIN_MENU_CHANNEL_INVALID');
-  }
-
-  const embed = new EmbedBuilder()
-    .setTitle(settings.mainMenuTitle)
-    .setDescription(settings.mainMenuDescription || 'Seleziona il tipo di richiesta da aprire.')
-    .setFooter({ text: 'Dispatch' });
-
-  const button = new ButtonBuilder()
-    .setCustomId(MAIN_MENU_BUTTON_PREFIX + guildId)
-    .setLabel(settings.mainMenuButtonLabel)
-    .setStyle(ButtonStyle.Primary);
-
-  const payload = {
-    embeds: [embed],
-    components: [new ActionRowBuilder<ButtonBuilder>().addComponents(button)]
-  };
-
-  let messageId: string;
-  if (settings.mainMenuMessageId) {
-    try {
-      const existing = await channel.messages.fetch(settings.mainMenuMessageId);
-      const edited = await existing.edit(payload);
-      messageId = edited.id;
-    } catch {
+  if (publishingMenus.has(guildId)) throw new Error('MAIN_MENU_PUBLISH_IN_PROGRESS');
+  publishingMenus.add(guildId);
+  try {
+    const settings = await prisma.guildSettings.findUnique({ where: { guildId } });
+    if (!settings) throw new Error('GUILD_NOT_FOUND');
+    if (!settings.mainMenuEnabled) throw new Error('MAIN_MENU_DISABLED');
+    if (!settings.mainMenuChannelId) throw new Error('MAIN_MENU_CHANNEL_REQUIRED');
+    if (!settings.mainMenuCategoryIds.length) throw new Error('MAIN_MENU_HAS_NO_CATEGORIES');
+    if (settings.mainMenuCategoryIds.length > 25) throw new Error('MAIN_MENU_TOO_MANY_CATEGORIES');
+  
+    const categories = await prisma.ticketCategory.findMany({
+      where: {
+        guildId,
+        id: { in: settings.mainMenuCategoryIds },
+        enabled: true
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+    if (categories.length !== settings.mainMenuCategoryIds.length) {
+      throw new Error('MAIN_MENU_CATEGORY_NOT_FOUND');
+    }
+  
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) throw new Error('GUILD_NOT_FOUND');
+  
+    const channel = await guild.channels.fetch(settings.mainMenuChannelId);
+    if (!channel || !channel.isTextBased() || !('send' in channel)) {
+      throw new Error('MAIN_MENU_CHANNEL_INVALID');
+    }
+  
+    const embed = new EmbedBuilder()
+      .setTitle(settings.mainMenuTitle)
+      .setDescription(settings.mainMenuDescription || 'Seleziona il tipo di richiesta da aprire.')
+      .setFooter({ text: 'Dispatch' });
+  
+    const button = new ButtonBuilder()
+      .setCustomId(MAIN_MENU_BUTTON_PREFIX + guildId)
+      .setLabel(settings.mainMenuButtonLabel)
+      .setStyle(ButtonStyle.Primary);
+  
+    const payload = {
+      allowedMentions: { parse: [] as never[] },
+      embeds: [embed],
+      components: [new ActionRowBuilder<ButtonBuilder>().addComponents(button)]
+    };
+  
+    let messageId: string;
+    if (settings.mainMenuMessageId) {
+      try {
+        const existing = await channel.messages.fetch(settings.mainMenuMessageId);
+        const edited = await existing.edit(payload);
+        messageId = edited.id;
+      } catch (error) {
+        if ((error as { code?: number }).code !== 10008) throw error;
+        const sent = await channel.send(payload);
+        messageId = sent.id;
+      }
+    } else {
       const sent = await channel.send(payload);
       messageId = sent.id;
     }
-  } else {
-    const sent = await channel.send(payload);
-    messageId = sent.id;
-  }
-
-  await prisma.guildSettings.update({
-    where: { guildId },
-    data: { mainMenuMessageId: messageId }
-  });
-
-  return { ok: true, messageId };
+  
+    await prisma.guildSettings.update({
+      where: { guildId },
+      data: { mainMenuMessageId: messageId }
+    });
+  
+    return { ok: true, messageId };
+  } finally { publishingMenus.delete(guildId); }
 }
 
 type OpenSource = {
@@ -317,266 +316,137 @@ async function resolveOpenSource(
 
 async function createTicket(
   interaction: StringSelectMenuInteraction | ModalSubmitInteraction,
-  sourceKey: string,
-  categoryId: string,
-  formAnswers: Array<{ id: string; label: string; value: string }>
+  sourceKey: string, categoryId: string,
+  formAnswers: Array<{ id: string; label: string; value: string }>, token: string
 ) {
-  if (!interaction.guild || !interaction.guildId) {
-    await interaction.editReply('Questa funzione è disponibile solo nei server.');
+  if (!interaction.guild || !interaction.guildId) return;
+  const guildId = interaction.guildId;
+  const userId = interaction.user.id;
+  const reservation = await getTicketOpenReservation(guildId, userId, token);
+  const source = await resolveOpenSource(guildId, sourceKey, categoryId);
+  const category = await prisma.ticketCategory.findFirst({ where: { id: categoryId, guildId, enabled: true } });
+  if (!reservation || !source || !category || reservation.reservationCategoryId !== categoryId ||
+      reservation.reservationSourceKey !== sourceKey || reservation.reservationFormVersion !== formVersion(category.formFields)) {
+    await releaseTicketOpenReservation(guildId, userId, token);
+    await interaction.editReply('La richiesta e scaduta o e stata modificata. Apri nuovamente il menu.');
     return;
   }
-
-  const [source, category] = await Promise.all([
-    resolveOpenSource(interaction.guildId, sourceKey, categoryId),
-    prisma.ticketCategory.findFirst({
-      where: { id: categoryId, guildId: interaction.guildId, enabled: true }
-    })
-  ]);
-
-  if (!source || !category) {
-    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id);
-    await interaction.editReply('Questa richiesta non è più disponibile.');
-    return;
-  }
-
-  if (!(await hasTicketOpenReservation(interaction.guildId, interaction.user.id))) {
-    await interaction.editReply('La sessione di apertura è scaduta. Avvia nuovamente la richiesta dal menu.');
-    return;
-  }
-
-  if (await userIsBlacklisted(interaction.guildId, interaction.user.id)) {
-    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id);
-    await interaction.editReply('Non puoi aprire ticket in questo server.');
-    return;
-  }
-
-  const openCount = await prisma.ticket.count({
-    where: {
-      guildId: interaction.guildId,
-      categoryId,
-      openerId: interaction.user.id,
-      status: { in: OPEN_STATUSES }
-    }
+  const fields = parseFormFields(category.formFields);
+  const invalid = fields.length !== formAnswers.length || fields.some((field, index) => {
+    const value = formAnswers[index]?.value;
+    return typeof value !== 'string' || formAnswers[index]?.id !== field.id ||
+      (field.required && !value.trim()) || value.length > (field.maxLength ?? 4000) ||
+      (value.length > 0 && value.length < (field.minLength ?? 0));
   });
-  if (openCount >= category.maxOpenPerUser) {
-    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id);
-    await interaction.editReply(
-      `Hai già raggiunto il limite di ${category.maxOpenPerUser} ticket aperti per questa categoria.`
-    );
+  if (invalid) {
+    await releaseTicketOpenReservation(guildId, userId, token);
+    await interaction.editReply('Controlla i campi obbligatori e le lunghezze delle risposte.');
     return;
   }
-
-  const counter = await prisma.guildSettings.update({
-    where: { guildId: interaction.guildId },
-    data: { ticketCounter: { increment: 1 } },
-    select: { ticketCounter: true }
-  });
-
-  const number = counter.ticketCounter;
-  const channelName = `ticket-${String(number).padStart(4, '0')}-${safeChannelPart(interaction.user.username)}`;
-
-  const permissionOverwrites = [
-    {
-      id: interaction.guild.roles.everyone.id,
-      deny: [PermissionFlagsBits.ViewChannel]
-    },
-    {
-      id: interaction.user.id,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles,
-        PermissionFlagsBits.EmbedLinks
-      ]
-    },
-    ...category.staffRoleIds.map((roleId) => ({
-      id: roleId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-        PermissionFlagsBits.AttachFiles,
-        PermissionFlagsBits.EmbedLinks,
-        PermissionFlagsBits.ManageMessages
-      ]
-    }))
-  ];
-
-  let channel;
+  if (!(await consumeTicketOpenReservation(guildId, userId, token))) {
+    await interaction.editReply('Richiesta gia utilizzata, scaduta o non piu consentita.');
+    return;
+  }
+  let channel: import("discord.js").TextChannel | undefined;
+  let persisted = false;
+  let discordRequestStarted = false;
   try {
+    const counter = await prisma.guildSettings.update({ where: { guildId },
+      data: { ticketCounter: { increment: 1 } }, select: { ticketCounter: true } });
+    const number = counter.ticketCounter;
+    const participant = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks];
+    discordRequestStarted = true;
     channel = await interaction.guild.channels.create({
-      name: channelName,
-      type: ChannelType.GuildText,
-      parent: category.discordCategoryId ?? undefined,
-      topic: `Dispatch ticket #${number} - ${interaction.user.id} - ${category.name}`.slice(0, 1024),
-      permissionOverwrites
+      name: 'ticket-' + String(number).padStart(4, '0') + '-' + safeChannelPart(interaction.user.username),
+      type: ChannelType.GuildText, parent: category.discordCategoryId ?? undefined,
+      topic: ('Dispatch ticket #' + number + ' - ' + userId + ' - ' + category.name).slice(0, 1024),
+      permissionOverwrites: [
+        { id: guildId, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: interaction.client.user!.id, type: 1, allow: [...participant, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
+        { id: userId, type: 1, allow: participant },
+        ...category.staffRoleIds.map((id) => ({ id, type: 0 as const, allow: [...participant, PermissionFlagsBits.ManageMessages] }))
+      ]
     });
-  } catch {
-    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id);
-    await interaction.editReply(
-      'Non riesco a creare il canale ticket. Controlla i permessi del bot e la categoria Discord configurata.'
-    );
-    return;
-  }
-
-  let createdTicketId: string | null = null;
-
-  try {
-    const ticket = await prisma.ticket.create({
-      data: {
-        ticketNumber: number,
-        guildId: interaction.guildId,
-        categoryId: category.id,
-        openerId: interaction.user.id,
-        channelId: channel.id,
-        status: 'OPEN',
-        subject: null,
-        formDataEncrypted: formAnswers.length
-          ? encryptText(JSON.stringify(formAnswers))
-          : null,
-        lastActivityAt: new Date(),
-        members: {
-          create: { userId: interaction.user.id, access: 'OPENER' }
-        },
-        audit: {
-          create: {
-            guildId: interaction.guildId,
-            actorId: interaction.user.id,
-            action: 'ticket.open',
-            details: {
-              categoryId: category.id,
-              categoryName: category.name,
-              sourceKind: source.kind,
-              sourceId: source.id,
-              formFieldCount: formAnswers.length
-            }
-          }
-        }
-      }
-    });
-    createdTicketId = ticket.id;
-
-    const intro = new EmbedBuilder()
-      .setTitle(`Ticket #${number} - ${category.name}`)
-      .setDescription(`Ciao <@${interaction.user.id}>. Lo staff ti risponderà qui.`)
-      .addFields(
-        { name: 'Categoria', value: category.name, inline: true },
-        { name: 'Stato', value: 'Aperto', inline: true },
-        { name: 'Priorità', value: 'Normal', inline: true },
-        ...formAnswers.map((answer) => ({
-          name: answer.label.slice(0, 256),
-          value: answer.value.trim().slice(0, 1024) || '_Nessuna risposta_',
-          inline: false
-        }))
-      )
-      .setFooter({ text: `Dispatch • ${ticket.id}` })
-      .setTimestamp();
-
-    await channel.send({
-      content: category.staffRoleIds.map((roleId) => `<@&${roleId}>`).join(' ') || undefined,
-      embeds: [intro],
-      components: [ticketControls(ticket.id)],
-      allowedMentions: { roles: category.staffRoleIds }
-    });
-
-    await markTicketOpened(interaction.guildId, interaction.user.id).catch(() => null);
-    await interaction.editReply(`Ticket creato: <#${channel.id}>`);
-  } catch (error) {
-    if (createdTicketId) {
-      await prisma.ticket.delete({ where: { id: createdTicketId } }).catch(() => null);
+    const createdChannel = channel;
+    const ticket = await commitTicketOpen(guildId, userId, token, (tx) => tx.ticket.create({ data: {
+      guildId, categoryId, ticketNumber: number, openerId: userId, channelId: createdChannel.id,
+      status: 'OPEN', formDataEncrypted: formAnswers.length ? encryptText(JSON.stringify(formAnswers)) : null,
+      lastActivityAt: new Date(), members: { create: { userId, access: 'OPENER' } },
+      audit: { create: { guildId, actorId: userId, action: 'ticket.open', details: {
+        sourceKind: source.kind, sourceId: source.id, categoryId, formFieldCount: formAnswers.length
+      } } }
+    } }));
+    persisted = true;
+    const intro = new EmbedBuilder().setTitle('Ticket #' + number + ' - ' + category.name)
+      .setDescription('Descrivi qui la tua richiesta. Lo staff ti rispondera in questo canale.')
+      .addFields(...formAnswers.map((answer) => ({
+        name: answer.label.slice(0, 45), value: answer.value.trim().slice(0, 1024) || 'Nessuna risposta'
+      }))).setFooter({ text: 'Dispatch - ' + ticket.id }).setTimestamp();
+    try {
+      await createdChannel.send({
+        embeds: [intro], components: [ticketControls(ticket.id)],
+        content: category.staffRoleIds.map((id) => '<@&' + id + '>').join(' ') || undefined,
+        allowedMentions: { parse: [], roles: category.staffRoleIds, users: [] }
+      });
+    } catch {
+      await prisma.ticketAudit.create({ data: {
+        ticketId: ticket.id, guildId, actorId: null, action: 'ticket.introduction.failed', details: {}
+      } }).catch(() => null);
     }
-    await channel.delete('Rollback Dispatch: ticket creation failed').catch(() => null);
-    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id);
+    // An expired interaction response must never delete a successfully created ticket.
+    await interaction.editReply('Ticket creato: <#' + createdChannel.id + '>').catch(() => null);
+  } catch (error) {
+    if (!persisted) {
+      let safeToRelease = !discordRequestStarted;
+      if (channel) {
+        safeToRelease = await channel.delete('Dispatch: failed ticket persistence').then(() => true)
+          .catch((failure: { code?: number }) => failure.code === 10003);
+      } else if (discordRequestStarted) {
+        const status = (error as { status?: number }).status;
+        safeToRelease = status !== undefined && status >= 400 && status < 500 && status !== 429;
+      }
+      if (safeToRelease) await releaseTicketOpenReservation(guildId, userId, token);
+    }
     throw error;
   }
 }
 
-async function beginTicketOpen(
-  interaction: StringSelectMenuInteraction,
-  sourceKey: string,
-  categoryId: string
-) {
+async function beginTicketOpen(interaction: StringSelectMenuInteraction, sourceKey: string, categoryId: string) {
   if (!interaction.guildId) return;
-
-  const [source, category] = await Promise.all([
-    resolveOpenSource(interaction.guildId, sourceKey, categoryId),
-    prisma.ticketCategory.findFirst({
-      where: { id: categoryId, guildId: interaction.guildId, enabled: true }
-    })
-  ]);
-
-  if (!source || !category) {
-    await interaction.reply({ content: 'Questa richiesta non è più disponibile.', ephemeral: true });
-    return;
-  }
-
-  if (await userIsBlacklisted(interaction.guildId, interaction.user.id)) {
-    await interaction.reply({
-      content: 'Non puoi aprire ticket in questo server.',
-      ephemeral: true
-    });
-    return;
-  }
-
-  const openCount = await prisma.ticket.count({
-    where: {
-      guildId: interaction.guildId,
-      categoryId,
-      openerId: interaction.user.id,
-      status: { in: OPEN_STATUSES }
-    }
+  const source = await resolveOpenSource(interaction.guildId, sourceKey, categoryId);
+  const category = await prisma.ticketCategory.findFirst({
+    where: { id: categoryId, guildId: interaction.guildId, enabled: true }
   });
-  if (openCount >= category.maxOpenPerUser) {
-    await interaction.reply({
-      content: `Hai già raggiunto il limite di ${category.maxOpenPerUser} ticket aperti per questa categoria.`,
-      ephemeral: true
-    });
+  if (!source || !category) {
+    await interaction.reply({ content: 'Questa richiesta non e piu disponibile.', ephemeral: true });
     return;
   }
-
-  const reservation = await reserveTicketOpen(
-    interaction.guildId,
-    interaction.user.id,
-    categoryId
-  );
+  const reservation = await reserveTicketOpen(interaction.guildId, interaction.user.id, categoryId,
+    sourceKey, formVersion(category.formFields));
   if (!reservation.ok) {
-    await interaction.reply({
-      content: ticketOpenReservationMessage(reservation),
-      ephemeral: true
-    });
+    await interaction.reply({ content: ticketOpenReservationMessage(reservation), ephemeral: true });
     return;
   }
-
   const fields = parseFormFields(category.formFields);
   if (!fields.length) {
     await interaction.deferReply({ ephemeral: true });
-    await createTicket(interaction, sourceKey, categoryId, []);
+    await createTicket(interaction, sourceKey, categoryId, [], reservation.token);
     return;
   }
-
-  const modal = new ModalBuilder()
-    .setCustomId(`${OPEN_MODAL_PREFIX}${sourceKey}:${categoryId}`)
-    .setTitle(`Apri ticket - ${category.name}`.slice(0, 45));
-
+  const modal = new ModalBuilder().setCustomId(OPEN_MODAL_PREFIX + reservation.token)
+    .setTitle(('Apri ticket - ' + category.name).slice(0, 45));
   for (const [index, field] of fields.entries()) {
-    const input = new TextInputBuilder()
-      .setCustomId(`field_${index + 1}`)
-      .setLabel(field.label)
+    const input = new TextInputBuilder().setCustomId('field_' + (index + 1)).setLabel(field.label)
       .setStyle(field.style === 'PARAGRAPH' ? TextInputStyle.Paragraph : TextInputStyle.Short)
-      .setRequired(field.required);
-
+      .setRequired(field.required).setMaxLength(field.maxLength ?? 4000);
     if (field.placeholder) input.setPlaceholder(field.placeholder);
-    if (field.minLength !== null && field.minLength !== undefined) input.setMinLength(field.minLength);
-    if (field.maxLength !== null && field.maxLength !== undefined) input.setMaxLength(field.maxLength);
-
+    if (field.minLength != null) input.setMinLength(field.minLength);
     modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
   }
-
-  try {
-    await interaction.showModal(modal);
-  } catch (error) {
-    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id);
+  try { await interaction.showModal(modal); }
+  catch (error) {
+    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id, reservation.token);
     throw error;
   }
 }
@@ -591,6 +461,14 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
     return;
   }
 
+  const panel = await prisma.ticketPanel.findFirst({ where: {
+    id: panelId, guildId: interaction.guildId, channelId: interaction.channelId,
+    messageId: interaction.message.id, enabled: true
+  } });
+  if (!panel) {
+    await interaction.reply({ content: 'Pannello scaduto o non valido.', ephemeral: true });
+    return;
+  }
   await beginTicketOpen(interaction, 'p_' + panelId, categoryId);
 }
 
@@ -650,7 +528,7 @@ async function openMainMenu(interaction: ButtonInteraction) {
     .setPlaceholder('Scegli il tipo di richiesta')
     .setMinValues(1)
     .setMaxValues(1)
-    .addOptions(categories.slice(0, 25).map((category) => ({
+    .addOptions(categories.sort((a, b) => settings.mainMenuCategoryIds.indexOf(a.id) - settings.mainMenuCategoryIds.indexOf(b.id)).slice(0, 25).map((category) => ({
       label: category.name.slice(0, 100),
       value: category.id,
       description: category.description?.slice(0, 100) || undefined
@@ -677,36 +555,34 @@ async function openMainMenuSelection(interaction: StringSelectMenuInteraction) {
 }
 
 async function submitOpenTicket(interaction: ModalSubmitInteraction) {
-  const raw = interaction.customId.slice(OPEN_MODAL_PREFIX.length);
-  const separator = raw.indexOf(':');
-  if (separator < 1) {
-    await interaction.reply({ content: 'Form ticket non valido.', ephemeral: true });
-    return;
-  }
-
-  const sourceKey = raw.slice(0, separator);
-  const categoryId = raw.slice(separator + 1);
-
   if (!interaction.guildId) return;
-
-  const category = await prisma.ticketCategory.findFirst({
-    where: { id: categoryId, guildId: interaction.guildId, enabled: true }
-  });
-  if (!category) {
-    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id);
-    await interaction.reply({ content: 'Categoria non più disponibile.', ephemeral: true });
+  await interaction.deferReply({ ephemeral: true });
+  const token = interaction.customId.slice(OPEN_MODAL_PREFIX.length);
+  const reservation = await getTicketOpenReservation(interaction.guildId, interaction.user.id, token);
+  if (!reservation?.reservationCategoryId || !reservation.reservationSourceKey) {
+    await interaction.editReply('Il modulo e scaduto o e gia stato utilizzato. Apri nuovamente il menu.');
     return;
   }
-
+  const category = await prisma.ticketCategory.findFirst({ where: {
+    id: reservation.reservationCategoryId, guildId: interaction.guildId, enabled: true
+  } });
+  if (!category || formVersion(category.formFields) !== reservation.reservationFormVersion) {
+    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id, token);
+    await interaction.editReply('Il modulo e stato modificato. Apri nuovamente la richiesta.');
+    return;
+  }
   const fields = parseFormFields(category.formFields);
-  const answers = fields.map((field, index) => ({
-    id: field.id,
-    label: field.label,
-    value: interaction.fields.getTextInputValue(`field_${index + 1}`)
-  }));
-
-  await interaction.deferReply({ ephemeral: true });
-  await createTicket(interaction, sourceKey, categoryId, answers);
+  let answers: Array<{ id: string; label: string; value: string }>;
+  try {
+    answers = fields.map((field, index) => ({
+      id: field.id, label: field.label, value: interaction.fields.getTextInputValue('field_' + (index + 1))
+    }));
+  } catch {
+    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id, token);
+    await interaction.editReply('Modulo non valido. Apri nuovamente la richiesta.');
+    return;
+  }
+  await createTicket(interaction, reservation.reservationSourceKey, category.id, answers, token);
 }
 
 async function claimTicket(interaction: ButtonInteraction) {
@@ -1049,6 +925,13 @@ async function submitCloseTicket(interaction: ModalSubmitInteraction) {
 export async function handleTicketInteraction(
   interaction: StringSelectMenuInteraction | ButtonInteraction | ModalSubmitInteraction
 ) {
+  const opening = [PANEL_SELECT_PREFIX, MAIN_MENU_BUTTON_PREFIX, MAIN_MENU_SELECT_PREFIX, OPEN_MODAL_PREFIX]
+    .some((prefix) => interaction.customId.startsWith(prefix));
+  if (opening && interaction.guildId && !allowOpeningInteraction(interaction.guildId, interaction.user.id)) {
+    await interaction.reply({ content: 'Stai usando il menu troppo rapidamente. Riprova tra pochi secondi.', ephemeral: true });
+    return true;
+  }
+
   if (
     interaction.isStringSelectMenu() &&
     interaction.customId.startsWith(PANEL_SELECT_PREFIX)

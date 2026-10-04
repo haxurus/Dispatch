@@ -17,10 +17,15 @@ REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC;
 SELECT format('GRANT CONNECT ON DATABASE %I TO dispatch_api, dispatch_bot', current_database()) \gexec
 GRANT USAGE ON SCHEMA public TO dispatch_api, dispatch_bot;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO dispatch_api;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM dispatch_api, dispatch_bot;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
-  "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript"
+  "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript",
+  "PanelSession", "PanelRoleBinding", "PanelAudit", "TicketNote", "ResponseTemplate", "TicketFeedback", "GuildBlacklist"
+TO dispatch_api;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+  "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript", "TicketFeedback", "TicketOpenAttempt", "TicketUserGuard"
 TO dispatch_bot;
+GRANT SELECT ON TABLE "GuildBlacklist" TO dispatch_bot;
 REVOKE ALL ON TABLE "PanelSession", "PanelRoleBinding", "PanelAudit" FROM dispatch_bot;
 ALTER ROLE dispatch_api NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
 ALTER ROLE dispatch_bot NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;

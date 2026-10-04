@@ -150,7 +150,7 @@ services:
       redis: { condition: service_healthy }
     networks: [bot_db, bot_queue, bot_rpc, bot_egress]
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 12

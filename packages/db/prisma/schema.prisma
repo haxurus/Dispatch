@@ -20,9 +20,9 @@ model GuildSettings {
   antiSpamMaxAttempts           Int     @default(5)
   antiSpamBlockMinutes          Int     @default(15)
 
-  transcriptRetentionDays       Int?    @default(30)
-  closedTicketRetentionDays     Int?    @default(90)
-  retentionDeleteDiscordChannel Boolean @default(true)
+  transcriptRetentionDays       Int?
+  closedTicketRetentionDays     Int?
+  retentionDeleteDiscordChannel Boolean @default(false)
 
   mainMenuEnabled      Boolean  @default(false)
   mainMenuChannelId    String?
@@ -97,6 +97,8 @@ model TicketPanel {
 }
 
 model Ticket {
+  retentionPendingAt DateTime?
+  retentionDeleteChannel Boolean?
   id           String   @id @default(cuid())
   ticketNumber Int
   guildId      String
@@ -133,6 +135,7 @@ model Ticket {
   @@index([openerId, status])
   @@index([claimedById, status])
   @@index([status, id])
+  @@index([guildId, status, closedAt])
 }
 
 model TicketMember {
@@ -281,6 +284,7 @@ model GuildBlacklist {
 
 
 model TicketOpenAttempt {
+  openedAt DateTime?
   id         String   @id @default(cuid())
   guildId    String
   userId     String
@@ -293,9 +297,16 @@ model TicketOpenAttempt {
   @@index([guildId, userId, createdAt(sort: Desc)])
   @@index([guildId, userId, categoryId, createdAt(sort: Desc)])
   @@index([createdAt])
+  @@index([guildId, userId, categoryId, openedAt(sort: Desc)])
 }
 
 model TicketUserGuard {
+  reservationToken       String?
+  reservationCategoryId  String?
+  reservationSourceKey   String?
+  reservationFormVersion String?
+  reservationPhase       String?
+  lastViolationAt        DateTime?
   id           String   @id @default(cuid())
   guildId      String
   userId       String

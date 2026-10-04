@@ -6,9 +6,9 @@ import { startInternalApi } from './internal-api.js';
 import { handleTicketInteraction } from './tickets.js';
 import {
   recordTicketMessage,
-  runTicketAutomations,
-  runTicketRetention
+  runTicketAutomations
 } from './ticket-operations.js';
+import { runTicketRetention } from './retention.js';
 
 const log = pino({ level: config.logLevel });
 
@@ -37,7 +37,7 @@ async function runRetentionCycle() {
   retentionRunning = true;
   try {
     const result = await runTicketRetention(client);
-    if (result.transcriptsDeleted || result.ticketsDeleted || result.channelsDeleted) {
+    if (result.transcriptsDeleted || result.ticketsDeleted || result.channelsDeleted || result.failed) {
       log.info(result, 'Ticket retention cycle completed');
     }
   } catch (error) {
@@ -73,7 +73,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   try {
     await handleTicketInteraction(interaction);
   } catch (error) {
-    log.error({ err: error, customId: interaction.customId }, 'Ticket interaction failed');
+    log.error({ errorType: error instanceof Error ? error.name : 'UnknownError' }, 'Ticket interaction failed');
 
     const message = 'Si è verificato un errore durante la gestione del ticket.';
     if (interaction.deferred || interaction.replied) {

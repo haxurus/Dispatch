@@ -76,9 +76,9 @@ export async function reserveTicketOpen(
     if (settings.antiSpamEnabled) {
       await tx.ticketOpenAttempt.create({ data: { guildId, userId, categoryId } });
       const [globalAttempts, categoryAttempts] = await Promise.all([
-        tx.ticketOpenAttempt.count({ where: { guildId, userId,
+        tx.ticketOpenAttempt.count({ where: { guildId, userId, openedAt: null,
           createdAt: { gte: new Date(now.getTime() - settings.antiSpamWindowMinutes * 60_000) } } }),
-        tx.ticketOpenAttempt.count({ where: { guildId, userId, categoryId,
+        tx.ticketOpenAttempt.count({ where: { guildId, userId, categoryId, openedAt: null,
           createdAt: { gte: new Date(now.getTime() - category.antiSpamWindowMinutes * 60_000) } } })
       ]);
       if (globalAttempts > settings.antiSpamMaxAttempts || categoryAttempts > category.antiSpamMaxAttempts) {
