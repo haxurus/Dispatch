@@ -1,0 +1,97 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: dispatch-production
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/haxurus/dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      app_ref: ${{ steps.refs.outputs.app_ref }}
+      migrate_ref: ${{ steps.refs.outputs.migrate_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Login to GHCR
+        shell: bash
+        run: printf '%s' '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Create Buildx builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx create --name dispatch-builder --driver docker-container --use
+          docker buildx inspect --bootstrap
+
+      - name: Build and push runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build --pull --target runtime --platform linux/amd64             --cache-from type=gha,scope=dispatch-runtime             --cache-to type=gha,scope=dispatch-runtime,mode=max             --provenance=mode=max --sbom=true             --label org.opencontainers.image.source=https://github.com/haxurus/Dispatch             --label org.opencontainers.image.revision=${GITHUB_SHA}             --tag "${IMAGE}:app-${GITHUB_SHA}" --tag "${IMAGE}:app-latest"             --metadata-file /tmp/app-metadata.json --push .
+
+      - name: Build and push migration image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx build --target migrate --platform linux/amd64             --cache-from type=gha,scope=dispatch-migrate             --cache-to type=gha,scope=dispatch-migrate,mode=max             --provenance=mode=max --sbom=true             --label org.opencontainers.image.source=https://github.com/haxurus/Dispatch             --label org.opencontainers.image.revision=${GITHUB_SHA}             --tag "${IMAGE}:migrate-${GITHUB_SHA}" --tag "${IMAGE}:migrate-latest"             --metadata-file /tmp/migrate-metadata.json --push .
+
+      - name: Export immutable image references
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_digest=$(jq -r '."containerimage.digest"' /tmp/app-metadata.json)
+          migrate_digest=$(jq -r '."containerimage.digest"' /tmp/migrate-metadata.json)
+          [[ "$app_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$migrate_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "app_ref=${IMAGE}@${app_digest}" >> "$GITHUB_OUTPUT"
+          echo "migrate_ref=${IMAGE}@${migrate_digest}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    if: ${{ vars.ENABLE_VPS_DEPLOY == 'true' }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Configure restricted SSH key
+        shell: bash
+        env:
+          DEPLOY_KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy immutable release
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          APP_REF: ${{ needs.build.outputs.app_ref }}
+          MIGRATE_REF: ${{ needs.build.outputs.migrate_ref }}
+        run: |
+          set -euo pipefail
+          port=${VPS_PORT:-22}
+          ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -p "$port"             "dispatch-deploy@${VPS_HOST}" "deploy ${APP_REF} ${MIGRATE_REF}"
