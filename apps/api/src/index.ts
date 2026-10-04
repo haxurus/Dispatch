@@ -709,6 +709,114 @@ async function runTicketBotAction<T>(
   }
 }
 
+
+app.get('/api/guilds/:guildId/response-templates', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+
+  const templates = await prisma.responseTemplate.findMany({
+    where: { guildId },
+    orderBy: { name: 'asc' }
+  });
+
+  return templates.map((template) => ({
+    id: template.id,
+    name: template.name,
+    content: decryptText(template.contentEncrypted),
+    createdAt: template.createdAt,
+    updatedAt: template.updatedAt
+  }));
+});
+
+app.post('/api/guilds/:guildId/response-templates', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  const parsed = z.object({
+    name: z.string().trim().min(1).max(80),
+    content: z.string().trim().min(1).max(2000)
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  try {
+    const template = await prisma.responseTemplate.create({
+      data: {
+        guildId,
+        name: parsed.data.name,
+        contentEncrypted: encryptText(parsed.data.content)!
+      }
+    });
+
+    await panelAudit(request, session, guildId, 'response_template.create', {
+      templateId: template.id,
+      name: template.name
+    });
+
+    return reply.code(201).send({
+      id: template.id,
+      name: template.name,
+      content: parsed.data.content
+    });
+  } catch (error) {
+    request.log.warn({ err: error }, 'Response template creation failed');
+    return reply.code(409).send({ error: 'TEMPLATE_NAME_CONFLICT' });
+  }
+});
+
+app.put('/api/guilds/:guildId/response-templates/:templateId', async (request, reply) => {
+  const { guildId, templateId } = request.params as { guildId: string; templateId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+  if (!internalId.safeParse(templateId).success) return reply.code(400).send({ error: 'INVALID_TEMPLATE_ID' });
+
+  const parsed = z.object({
+    name: z.string().trim().min(1).max(80),
+    content: z.string().trim().min(1).max(2000)
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  const existing = await prisma.responseTemplate.findFirst({ where: { id: templateId, guildId } });
+  if (!existing) return reply.code(404).send({ error: 'TEMPLATE_NOT_FOUND' });
+
+  try {
+    const template = await prisma.responseTemplate.update({
+      where: { id: templateId },
+      data: {
+        name: parsed.data.name,
+        contentEncrypted: encryptText(parsed.data.content)!
+      }
+    });
+
+    await panelAudit(request, session, guildId, 'response_template.update', {
+      templateId,
+      name: template.name
+    });
+
+    return { id: template.id, name: template.name, content: parsed.data.content };
+  } catch {
+    return reply.code(409).send({ error: 'TEMPLATE_NAME_CONFLICT' });
+  }
+});
+
+app.delete('/api/guilds/:guildId/response-templates/:templateId', async (request, reply) => {
+  const { guildId, templateId } = request.params as { guildId: string; templateId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+  if (!internalId.safeParse(templateId).success) return reply.code(400).send({ error: 'INVALID_TEMPLATE_ID' });
+
+  const template = await prisma.responseTemplate.findFirst({ where: { id: templateId, guildId } });
+  if (!template) return reply.code(404).send({ error: 'TEMPLATE_NOT_FOUND' });
+
+  await prisma.responseTemplate.delete({ where: { id: templateId } });
+  await panelAudit(request, session, guildId, 'response_template.delete', {
+    templateId,
+    name: template.name
+  });
+  return { ok: true };
+});
+
 app.get('/api/guilds/:guildId/tickets', async (request, reply) => {
   const { guildId } = request.params as { guildId: string };
   const session = await requireGuild(request, reply, guildId, 'MODERATOR');
@@ -777,15 +885,180 @@ app.get('/api/guilds/:guildId/tickets/:ticketId', async (request, reply) => {
       category: true,
       members: { orderBy: { createdAt: 'asc' } },
       audit: { orderBy: { createdAt: 'desc' }, take: 200 },
+      notes: { orderBy: { createdAt: 'desc' }, take: 200 },
       transcript: { select: { messageCount: true, createdAt: true } }
     }
   });
   if (!ticket) return reply.code(404).send({ error: 'TICKET_NOT_FOUND' });
 
+  let formData: unknown = [];
+  const decryptedForm = decryptText(ticket.formDataEncrypted);
+  if (decryptedForm) {
+    try {
+      formData = JSON.parse(decryptedForm);
+    } catch {
+      formData = [];
+    }
+  }
+
   return {
     ...ticket,
-    closeReason: decryptText(ticket.closeReason)
+    closeReason: decryptText(ticket.closeReason),
+    formData,
+    formDataEncrypted: undefined,
+    notes: ticket.notes.map((note) => ({
+      id: note.id,
+      authorId: note.authorId,
+      content: decryptText(note.contentEncrypted),
+      createdAt: note.createdAt
+    }))
   };
+});
+
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/status', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const parsed = z.object({
+    status: z.enum(['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'])
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  return runTicketBotAction(request, reply, () =>
+    setTicketStatus(guildId, ticketId, session.userId, parsed.data.status)
+  );
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/priority', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const parsed = z.object({
+    priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT'])
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  return runTicketBotAction(request, reply, () =>
+    setTicketPriority(guildId, ticketId, session.userId, parsed.data.priority)
+  );
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/notes', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const parsed = z.object({
+    content: z.string().trim().min(1).max(4000)
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId },
+    select: { id: true }
+  });
+  if (!ticket) return reply.code(404).send({ error: 'TICKET_NOT_FOUND' });
+
+  const note = await prisma.ticketNote.create({
+    data: {
+      ticketId,
+      guildId,
+      authorId: session.userId,
+      contentEncrypted: encryptText(parsed.data.content)!
+    }
+  });
+
+  await prisma.ticketAudit.create({
+    data: {
+      ticketId,
+      guildId,
+      actorId: session.userId,
+      action: 'ticket.note.add',
+      details: { noteId: note.id, contentLength: parsed.data.content.length }
+    }
+  });
+
+  return reply.code(201).send({
+    id: note.id,
+    authorId: note.authorId,
+    content: parsed.data.content,
+    createdAt: note.createdAt
+  });
+});
+
+app.delete('/api/guilds/:guildId/tickets/:ticketId/notes/:noteId', async (request, reply) => {
+  const { guildId, ticketId, noteId } = request.params as {
+    guildId: string;
+    ticketId: string;
+    noteId: string;
+  };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success || !internalId.safeParse(noteId).success) {
+    return reply.code(400).send({ error: 'INVALID_INTERNAL_ID' });
+  }
+
+  const note = await prisma.ticketNote.findFirst({
+    where: { id: noteId, ticketId, guildId }
+  });
+  if (!note) return reply.code(404).send({ error: 'NOTE_NOT_FOUND' });
+
+  const canDelete = session.access === 'ADMIN' ||
+    session.access === 'OWNER' ||
+    note.authorId === session.userId;
+  if (!canDelete) return reply.code(403).send({ error: 'FORBIDDEN' });
+
+  await prisma.ticketNote.delete({ where: { id: note.id } });
+  await prisma.ticketAudit.create({
+    data: {
+      ticketId,
+      guildId,
+      actorId: session.userId,
+      action: 'ticket.note.delete',
+      details: { noteId }
+    }
+  });
+
+  return { ok: true };
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/reply', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const parsed = z.object({
+    templateId: internalId.nullable().optional(),
+    content: z.string().trim().min(1).max(2000).optional()
+  }).refine((value) => Boolean(value.templateId) !== Boolean(value.content), {
+    message: 'Provide either templateId or content'
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  let content = parsed.data.content ?? '';
+  let templateId: string | null = null;
+
+  if (parsed.data.templateId) {
+    const template = await prisma.responseTemplate.findFirst({
+      where: { id: parsed.data.templateId, guildId }
+    });
+    if (!template) return reply.code(404).send({ error: 'TEMPLATE_NOT_FOUND' });
+    content = decryptText(template.contentEncrypted) ?? '';
+    templateId = template.id;
+  }
+
+  if (!content.trim()) return reply.code(400).send({ error: 'EMPTY_REPLY' });
+
+  return runTicketBotAction(request, reply, () =>
+    sendTicketReply(guildId, ticketId, session.userId, content, templateId)
+  );
 });
 
 app.post('/api/guilds/:guildId/tickets/:ticketId/unclaim', async (request, reply) => {
