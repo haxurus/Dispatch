@@ -1,0 +1,252 @@
+name: dispatch
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-dispatch_owner}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      POSTGRES_DB: ${POSTGRES_DB:-dispatch}
+    secrets: [postgres_admin_password]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    networks: [api_db, bot_db, migrate_db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:-dispatch_owner} -d ${POSTGRES_DB:-dispatch}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 150
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m", "/var/run/postgresql:rw,nosuid,size=8m"]
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    secrets: [redis_password]
+    command:
+      - sh
+      - -c
+      - |
+        umask 077
+        printf 'appendonly yes\nprotected-mode yes\nbind 0.0.0.0\nmaxmemory 256mb\nmaxmemory-policy noeviction\nrequirepass %s\n' "$$(cat /run/secrets/redis_password)" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf
+    volumes: [redis_data:/data]
+    networks: [bot_queue]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a "$$(cat /run/secrets/redis_password)" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 100
+    mem_limit: 384m
+    cpus: 0.5
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+
+  migrate:
+    image: ${DISPATCH_MIGRATE_IMAGE:?DISPATCH_MIGRATE_IMAGE is required}
+    restart: "no"
+    secrets: [postgres_admin_password]
+    environment: { NODE_ENV: production }
+    command:
+      - sh
+      - -c
+      - |
+        export DATABASE_URL="postgresql://${POSTGRES_ADMIN_USER:-dispatch_owner}:$$(cat /run/secrets/postgres_admin_password)@postgres:5432/${POSTGRES_DB:-dispatch}?schema=public"
+        exec npm run db:migrate
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [migrate_db]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    pids_limit: 100
+
+  secure-db:
+    image: postgres:17-alpine
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-dispatch}
+      PGUSER: ${POSTGRES_ADMIN_USER:-dispatch_owner}
+      POSTGRES_ADMIN_PASSWORD_FILE: /run/secrets/postgres_admin_password
+      API_DB_PASSWORD_FILE: /run/secrets/api_db_password
+      BOT_DB_PASSWORD_FILE: /run/secrets/bot_db_password
+    secrets: [postgres_admin_password, api_db_password, bot_db_password]
+    volumes: [./runtime/harden-users.sh:/usr/local/bin/harden-users.sh:ro]
+    command: ["/usr/local/bin/harden-users.sh"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [migrate_db]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+
+  api:
+    image: ${DISPATCH_APP_IMAGE:?DISPATCH_APP_IMAGE is required}
+    restart: unless-stopped
+    secrets: [discord_client_secret, session_secret, data_encryption_key, bot_internal_api_key, api_db_password]
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
+      DISCORD_CLIENT_SECRET_FILE: /run/secrets/discord_client_secret
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      WEB_URL: ${WEB_URL}
+      SESSION_SECRET_FILE: /run/secrets/session_secret
+      DATA_ENCRYPTION_KEY_FILE: /run/secrets/data_encryption_key
+      BOT_INTERNAL_URL: http://bot:3002
+      BOT_INTERNAL_API_KEY_FILE: /run/secrets/bot_internal_api_key
+    command:
+      - sh
+      - -c
+      - |
+        export DATABASE_URL="postgresql://dispatch_api:$$(cat /run/secrets/api_db_password)@postgres:5432/${POSTGRES_DB:-dispatch}?schema=public"
+        exec node apps/api/dist/index.js
+    depends_on:
+      secure-db: { condition: service_completed_successfully }
+    networks: [backend, api_db, bot_rpc, api_egress]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    pids_limit: 150
+    mem_limit: 512m
+    cpus: 1.0
+
+  bot:
+    image: ${DISPATCH_APP_IMAGE:?DISPATCH_APP_IMAGE is required}
+    restart: unless-stopped
+    secrets: [discord_token, bot_internal_api_key, data_encryption_key, bot_db_password, redis_password]
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DISCORD_TOKEN_FILE: /run/secrets/discord_token
+      BOT_INTERNAL_API_KEY_FILE: /run/secrets/bot_internal_api_key
+      BOT_INTERNAL_PORT: 3002
+      DATA_ENCRYPTION_KEY_FILE: /run/secrets/data_encryption_key
+    command:
+      - sh
+      - -c
+      - |
+        export DATABASE_URL="postgresql://dispatch_bot:$$(cat /run/secrets/bot_db_password)@postgres:5432/${POSTGRES_DB:-dispatch}?schema=public"
+        export REDIS_URL="redis://:$$(cat /run/secrets/redis_password)@redis:6379/0"
+        exec node apps/bot/dist/index.js
+    depends_on:
+      secure-db: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [bot_db, bot_queue, bot_rpc, bot_egress]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    pids_limit: 200
+    mem_limit: 768m
+    cpus: 1.5
+
+  web:
+    image: ${DISPATCH_APP_IMAGE:?DISPATCH_APP_IMAGE is required}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      INTERNAL_API_URL: http://api:3001
+      NEXT_TELEMETRY_DISABLED: 1
+    command: ["npm", "run", "start", "--workspace", "@dispatch/web"]
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [frontend, backend]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m", "/app/apps/web/.next/cache:rw,nosuid,size=64m"]
+    pids_limit: 150
+    mem_limit: 512m
+    cpus: 1.0
+
+  edge:
+    image: nginx:1.29-alpine
+    restart: unless-stopped
+    user: "101:101"
+    command: ["nginx", "-g", "daemon off;"]
+    volumes: [./runtime/nginx.conf:/etc/nginx/nginx.conf:ro]
+    depends_on:
+      web: { condition: service_healthy }
+    networks:
+      frontend: {}
+      proxy_net:
+        aliases: [dispatch-edge]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/backend/health >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 10s
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m", "/var/cache/nginx:rw,nosuid,size=16m"]
+    pids_limit: 80
+    mem_limit: 128m
+    cpus: 0.25
+
+networks:
+  frontend: { internal: true }
+  backend: { internal: true }
+  api_db: { internal: true }
+  bot_db: { internal: true }
+  migrate_db: { internal: true }
+  bot_queue: { internal: true }
+  bot_rpc: { internal: true }
+  api_egress:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: dispatch-api-eg
+      com.docker.network.bridge.enable_icc: "false"
+  bot_egress:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: dispatch-bot-eg
+      com.docker.network.bridge.enable_icc: "false"
+  proxy_net: { external: true }
+
+volumes:
+  postgres_data:
+  redis_data:
+
+secrets:
+  discord_token: { file: ./secrets/discord_token }
+  discord_client_secret: { file: ./secrets/discord_client_secret }
+  session_secret: { file: ./secrets/session_secret }
+  data_encryption_key: { file: ./secrets/data_encryption_key }
+  bot_internal_api_key: { file: ./secrets/bot_internal_api_key }
+  postgres_admin_password: { file: ./secrets/postgres_admin_password }
+  api_db_password: { file: ./secrets/api_db_password }
+  bot_db_password: { file: ./secrets/bot_db_password }
+  redis_password: { file: ./secrets/redis_password }
