@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+set -f
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+original=${SSH_ORIGINAL_COMMAND:-}
+[ -n "$original" ] || { echo 'command required' >&2; exit 126; }
+set -- $original
+
+case "${1:-}" in
+  deploy)
+    [ "$#" -eq 3 ] || { echo 'invalid deploy command' >&2; exit 126; }
+    case "$2" in ghcr.io/haxurus/dispatch@sha256:*) ;; *) echo 'invalid app image' >&2; exit 126;; esac
+    case "$3" in ghcr.io/haxurus/dispatch@sha256:*) ;; *) echo 'invalid migrate image' >&2; exit 126;; esac
+    exec sudo -n /usr/local/sbin/dispatch-deploy deploy "$2" "$3"
+    ;;
+  rollback)
+    [ "$#" -eq 1 ] || { echo 'invalid rollback command' >&2; exit 126; }
+    exec sudo -n /usr/local/sbin/dispatch-deploy rollback
+    ;;
+  status)
+    [ "$#" -eq 1 ] || { echo 'invalid status command' >&2; exit 126; }
+    exec sudo -n /usr/local/sbin/dispatch-deploy status
+    ;;
+  *)
+    echo 'command not allowed' >&2
+    exit 126
+    ;;
+esac
