@@ -1077,6 +1077,12 @@ export async function releaseTicketOpenReservation(guildId: string, userId: stri
 }
 
 export async function markTicketOpened(guildId: string, userId: string) {
+  const settings = await prisma.guildSettings.findUnique({
+    where: { guildId },
+    select: { antiSpamEnabled: true }
+  });
+  if (!settings?.antiSpamEnabled) return;
+
   await prisma.ticketUserGuard.upsert({
     where: { guildId_userId: { guildId, userId } },
     update: {
@@ -1115,6 +1121,8 @@ export function ticketOpenReservationMessage(
     case 'CATEGORY_COOLDOWN':
       return 'Devi attendere circa ' + human + ' prima di aprire un altro ticket di questa categoria.';
   }
+
+  return 'Apertura ticket temporaneamente limitata. Riprova più tardi.';
 }
 
 export async function runTicketRetention(client: Client) {
