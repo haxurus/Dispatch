@@ -107,6 +107,7 @@ model Ticket {
   @@index([guildId, status, createdAt(sort: Desc)])
   @@index([openerId, status])
   @@index([claimedById, status])
+  @@index([status, id])
 }
 
 model TicketMember {
