@@ -43,6 +43,8 @@ model GuildSettings {
   responseTemplates ResponseTemplate[]
   blacklist GuildBlacklist[]
   feedback TicketFeedback[]
+  openAttempts TicketOpenAttempt[]
+  userGuards TicketUserGuard[]
 }
 
 model TicketCategory {
