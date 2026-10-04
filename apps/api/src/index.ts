@@ -15,7 +15,7 @@ import {
   resolveGuildAccess,
   type OAuthGuild
 } from './auth.js';
-import { getGuildResources } from './discord.js';
+import { getGuildResources, publishPanel } from './discord.js';
 import { panelAudit } from './audit.js';
 
 const app = Fastify({
@@ -344,6 +344,280 @@ app.delete('/api/guilds/:guildId/access-bindings/:roleId', async (request, reply
 
   await panelAudit(request, session, guildId, 'access_binding.delete', { roleId });
   return { ok: true };
+});
+
+
+const internalId = z.string().regex(/^[a-z0-9]{20,32}$/i);
+
+const categorySchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().trim().max(500).nullable().default(null),
+  discordCategoryId: snowflake.nullable().default(null),
+  staffRoleIds: z.array(snowflake).max(20).default([]).refine((items) => new Set(items).size === items.length),
+  maxOpenPerUser: z.number().int().min(1).max(10).default(1),
+  enabled: z.boolean().default(true)
+});
+
+const panelSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  channelId: snowflake,
+  title: z.string().trim().min(1).max(256),
+  description: z.string().trim().max(2000).nullable().default(null),
+  categoryIds: z.array(internalId).min(1).max(25).refine((items) => new Set(items).size === items.length),
+  enabled: z.boolean().default(true)
+});
+
+async function validateCategoryResources(
+  guildId: string,
+  data: z.infer<typeof categorySchema>
+) {
+  const resources = await getGuildResources(guildId);
+
+  if (
+    data.discordCategoryId &&
+    !resources.channels.some((channel) => channel.id === data.discordCategoryId && channel.type === 4)
+  ) {
+    return 'CATEGORY_CHANNEL_NOT_FOUND';
+  }
+
+  const roleIds = new Set(resources.roles.map((role) => role.id));
+  if (data.staffRoleIds.some((roleId) => roleId === guildId || !roleIds.has(roleId))) {
+    return 'STAFF_ROLE_NOT_FOUND';
+  }
+
+  return null;
+}
+
+async function validatePanelResources(
+  guildId: string,
+  data: z.infer<typeof panelSchema>
+) {
+  const resources = await getGuildResources(guildId);
+  if (!resources.channels.some((channel) => channel.id === data.channelId && [0, 5].includes(channel.type))) {
+    return 'PANEL_CHANNEL_NOT_FOUND';
+  }
+
+  const count = await prisma.ticketCategory.count({
+    where: {
+      guildId,
+      id: { in: data.categoryIds }
+    }
+  });
+  if (count !== data.categoryIds.length) return 'CATEGORY_NOT_FOUND';
+
+  return null;
+}
+
+app.get('/api/guilds/:guildId/categories', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId);
+  if (!session) return;
+
+  return prisma.ticketCategory.findMany({
+    where: { guildId },
+    orderBy: { createdAt: 'asc' }
+  });
+});
+
+app.post('/api/guilds/:guildId/categories', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  const parsed = categorySchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  }
+
+  const resourceError = await validateCategoryResources(guildId, parsed.data);
+  if (resourceError) return reply.code(400).send({ error: resourceError });
+
+  const category = await prisma.ticketCategory.create({
+    data: { guildId, ...parsed.data }
+  });
+  await panelAudit(request, session, guildId, 'ticket_category.create', {
+    categoryId: category.id,
+    name: category.name
+  });
+  return reply.code(201).send(category);
+});
+
+app.put('/api/guilds/:guildId/categories/:categoryId', async (request, reply) => {
+  const { guildId, categoryId } = request.params as { guildId: string; categoryId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  if (!internalId.safeParse(categoryId).success) {
+    return reply.code(400).send({ error: 'INVALID_CATEGORY_ID' });
+  }
+
+  const existing = await prisma.ticketCategory.findFirst({ where: { id: categoryId, guildId } });
+  if (!existing) return reply.code(404).send({ error: 'CATEGORY_NOT_FOUND' });
+
+  const parsed = categorySchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  }
+
+  const resourceError = await validateCategoryResources(guildId, parsed.data);
+  if (resourceError) return reply.code(400).send({ error: resourceError });
+
+  const category = await prisma.ticketCategory.update({
+    where: { id: categoryId },
+    data: parsed.data
+  });
+  await panelAudit(request, session, guildId, 'ticket_category.update', {
+    categoryId,
+    name: category.name
+  });
+  return category;
+});
+
+app.delete('/api/guilds/:guildId/categories/:categoryId', async (request, reply) => {
+  const { guildId, categoryId } = request.params as { guildId: string; categoryId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  if (!internalId.safeParse(categoryId).success) {
+    return reply.code(400).send({ error: 'INVALID_CATEGORY_ID' });
+  }
+
+  const category = await prisma.ticketCategory.findFirst({ where: { id: categoryId, guildId } });
+  if (!category) return reply.code(404).send({ error: 'CATEGORY_NOT_FOUND' });
+
+  const ticketCount = await prisma.ticket.count({ where: { categoryId } });
+  if (ticketCount > 0) {
+    return reply.code(409).send({ error: 'CATEGORY_IN_USE', tickets: ticketCount });
+  }
+
+  const panels = await prisma.ticketPanel.findMany({
+    where: { guildId, categoryIds: { has: categoryId } }
+  });
+
+  await prisma.$transaction([
+    ...panels.map((panel) => prisma.ticketPanel.update({
+      where: { id: panel.id },
+      data: { categoryIds: panel.categoryIds.filter((id) => id !== categoryId) }
+    })),
+    prisma.ticketCategory.delete({ where: { id: categoryId } })
+  ]);
+
+  await panelAudit(request, session, guildId, 'ticket_category.delete', {
+    categoryId,
+    name: category.name
+  });
+  return { ok: true };
+});
+
+app.get('/api/guilds/:guildId/panels', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId);
+  if (!session) return;
+
+  return prisma.ticketPanel.findMany({
+    where: { guildId },
+    orderBy: { createdAt: 'asc' }
+  });
+});
+
+app.post('/api/guilds/:guildId/panels', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  const parsed = panelSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  }
+
+  const resourceError = await validatePanelResources(guildId, parsed.data);
+  if (resourceError) return reply.code(400).send({ error: resourceError });
+
+  const panel = await prisma.ticketPanel.create({
+    data: { guildId, ...parsed.data }
+  });
+  await panelAudit(request, session, guildId, 'ticket_panel.create', {
+    panelId: panel.id,
+    name: panel.name
+  });
+  return reply.code(201).send(panel);
+});
+
+app.put('/api/guilds/:guildId/panels/:panelId', async (request, reply) => {
+  const { guildId, panelId } = request.params as { guildId: string; panelId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  if (!internalId.safeParse(panelId).success) {
+    return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  }
+
+  const existing = await prisma.ticketPanel.findFirst({ where: { id: panelId, guildId } });
+  if (!existing) return reply.code(404).send({ error: 'PANEL_NOT_FOUND' });
+
+  const parsed = panelSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  }
+
+  const resourceError = await validatePanelResources(guildId, parsed.data);
+  if (resourceError) return reply.code(400).send({ error: resourceError });
+
+  const panel = await prisma.ticketPanel.update({
+    where: { id: panelId },
+    data: parsed.data
+  });
+  await panelAudit(request, session, guildId, 'ticket_panel.update', {
+    panelId,
+    name: panel.name
+  });
+  return panel;
+});
+
+app.delete('/api/guilds/:guildId/panels/:panelId', async (request, reply) => {
+  const { guildId, panelId } = request.params as { guildId: string; panelId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  if (!internalId.safeParse(panelId).success) {
+    return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  }
+
+  const panel = await prisma.ticketPanel.findFirst({ where: { id: panelId, guildId } });
+  if (!panel) return reply.code(404).send({ error: 'PANEL_NOT_FOUND' });
+
+  await prisma.ticketPanel.delete({ where: { id: panelId } });
+  await panelAudit(request, session, guildId, 'ticket_panel.delete', {
+    panelId,
+    name: panel.name,
+    messageId: panel.messageId
+  });
+  return { ok: true };
+});
+
+app.post('/api/guilds/:guildId/panels/:panelId/publish', async (request, reply) => {
+  const { guildId, panelId } = request.params as { guildId: string; panelId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  if (!internalId.safeParse(panelId).success) {
+    return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  }
+
+  const panel = await prisma.ticketPanel.findFirst({ where: { id: panelId, guildId } });
+  if (!panel) return reply.code(404).send({ error: 'PANEL_NOT_FOUND' });
+
+  try {
+    const result = await publishPanel(guildId, panelId);
+    await panelAudit(request, session, guildId, 'ticket_panel.publish', {
+      panelId,
+      messageId: result.messageId
+    });
+    return result;
+  } catch (error) {
+    request.log.error({ err: error, guildId, panelId }, 'Panel publish failed');
+    return reply.code(502).send({ error: 'PANEL_PUBLISH_FAILED' });
+  }
 });
 
 app.get('/api/guilds/:guildId/panel-audit', async (request, reply) => {
