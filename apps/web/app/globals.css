@@ -210,3 +210,66 @@ button.danger {
     grid-template-columns: 1fr;
   }
 }
+
+
+fieldset {
+  border: 1px solid #303744;
+  border-radius: 12px;
+  padding: 16px;
+  margin: 0;
+}
+
+legend {
+  padding: 0 8px;
+  color: #cbd3df;
+  font-weight: 700;
+}
+
+.subcard {
+  border: 1px solid #303744;
+  border-radius: 10px;
+  padding: 14px;
+  background: #12161c;
+}
+
+.checkbox-row {
+  flex-direction: row !important;
+  align-items: center;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.compact-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.preserve {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.facts {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.facts div {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #303744;
+}
+
+.facts dt {
+  color: #9aa7b8;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.facts dd {
+  margin: 0;
+}
