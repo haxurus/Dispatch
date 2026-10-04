@@ -13,6 +13,25 @@ model GuildSettings {
   timezone      String   @default("Europe/Rome")
   locale        String   @default("it")
   ticketCounter Int      @default(0)
+
+  antiSpamEnabled               Boolean @default(true)
+  antiSpamGlobalCooldownSeconds Int     @default(30)
+  antiSpamWindowMinutes         Int     @default(10)
+  antiSpamMaxAttempts           Int     @default(5)
+  antiSpamBlockMinutes          Int     @default(15)
+
+  transcriptRetentionDays       Int?    @default(30)
+  closedTicketRetentionDays     Int?    @default(90)
+  retentionDeleteDiscordChannel Boolean @default(true)
+
+  mainMenuEnabled      Boolean  @default(false)
+  mainMenuChannelId    String?
+  mainMenuMessageId    String?
+  mainMenuTitle        String   @default("Centro assistenza")
+  mainMenuDescription  String   @default("Premi il pulsante per scegliere il tipo di richiesta.")
+  mainMenuButtonLabel  String   @default("Apri un ticket")
+  mainMenuCategoryIds  String[] @default([])
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -34,6 +53,9 @@ model TicketCategory {
   discordCategoryId String?
   staffRoleIds      String[] @default([])
   maxOpenPerUser           Int      @default(1)
+  openCooldownSeconds      Int      @default(60)
+  antiSpamWindowMinutes    Int      @default(10)
+  antiSpamMaxAttempts      Int      @default(3)
   formFields               Json     @default("[]")
   slaFirstResponseMinutes  Int?
   slaResolutionMinutes     Int?
@@ -49,6 +71,7 @@ model TicketCategory {
 
   guild   GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
   tickets Ticket[]
+  openAttempts TicketOpenAttempt[]
 
   @@index([guildId])
 }
@@ -252,4 +275,37 @@ model GuildBlacklist {
 
   @@unique([guildId, userId])
   @@index([guildId, expiresAt])
+}
+
+
+model TicketOpenAttempt {
+  id         String   @id @default(cuid())
+  guildId    String
+  userId     String
+  categoryId String
+  createdAt  DateTime @default(now())
+
+  guild    GuildSettings  @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  category TicketCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, userId, createdAt(sort: Desc)])
+  @@index([guildId, userId, categoryId, createdAt(sort: Desc)])
+  @@index([createdAt])
+}
+
+model TicketUserGuard {
+  id           String   @id @default(cuid())
+  guildId      String
+  userId       String
+  lastOpenedAt DateTime?
+  pendingUntil DateTime?
+  blockedUntil DateTime?
+  strikes      Int      @default(0)
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+
+  guild GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+
+  @@unique([guildId, userId])
+  @@index([guildId, blockedUntil])
 }
