@@ -562,6 +562,12 @@ export async function sendTicketReply(
 
 export async function recordTicketMessage(message: Message) {
   if (!message.guildId || message.author.bot) return;
+  if (
+    message.channel.type !== ChannelType.GuildText ||
+    !message.channel.topic?.startsWith('Dispatch ticket #')
+  ) {
+    return;
+  }
 
   const ticket = await prisma.ticket.findUnique({
     where: { channelId: message.channelId },
