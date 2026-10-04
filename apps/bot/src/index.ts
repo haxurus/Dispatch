@@ -4,6 +4,7 @@ import { prisma } from '@dispatch/db';
 import { config } from './config.js';
 import { startInternalApi } from './internal-api.js';
 import { handleTicketInteraction } from './tickets.js';
+import { recordTicketMessage, runTicketAutomations } from './ticket-operations.js';
 
 const log = pino({ level: config.logLevel });
 
@@ -61,6 +62,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 });
+
+client.on(Events.MessageCreate, async (message) => {
+  try {
+    await recordTicketMessage(message);
+  } catch (error) {
+    log.error({ err: error, channelId: message.channelId }, 'Ticket activity tracking failed');
+  }
+});
+
+setInterval(() => {
+  void runTicketAutomations(client).catch((error) => {
+    log.error({ err: error }, 'Ticket automation cycle failed');
+  });
+}, 60_000).unref();
 
 client.on(Events.Warn, (warning) => log.warn({ warning }, 'Discord client warning'));
 client.on(Events.Error, (error) => log.error({ err: error }, 'Discord client error'));
