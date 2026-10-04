@@ -11,6 +11,10 @@ type Category = {
   slaResolutionMinutes: number | null;
   inactivityCloseHours: number | null;
   inactivityWarningMinutes: number | null;
+  escalationMinutes: number | null;
+  escalationRoleIds: string[];
+  reopenWindowHours: number | null;
+  feedbackEnabled: boolean;
 };
 
 type TicketMember = {
@@ -63,6 +67,7 @@ type TicketDetail = {
   notes: TicketNote[];
   audit: TicketAudit[];
   transcript: { messageCount: number; createdAt: string } | null;
+  feedback: TicketFeedback | null;
 };
 
 type Me = {
@@ -74,6 +79,14 @@ type ResponseTemplate = {
   id: string;
   name: string;
   content: string;
+};
+
+type TicketFeedback = {
+  id: string;
+  rating: number;
+  comment: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export default function TicketDetailPage() {
@@ -403,6 +416,8 @@ export default function TicketDetailPage() {
             <div><dt>SLA prima risposta</dt><dd>{ticket.slaFirstBreachedAt ? 'Superato' : ticket.category.slaFirstResponseMinutes ? `${ticket.category.slaFirstResponseMinutes} min` : 'Disattivato'}</dd></div>
             <div><dt>SLA risoluzione</dt><dd>{ticket.slaResolutionBreachedAt ? 'Superato' : ticket.category.slaResolutionMinutes ? `${ticket.category.slaResolutionMinutes} min` : 'Disattivato'}</dd></div>
             <div><dt>Auto-chiusura</dt><dd>{ticket.category.inactivityCloseHours ? `${ticket.category.inactivityCloseHours} ore` : 'Disattivata'}</dd></div>
+            <div><dt>Escalation</dt><dd>{ticket.category.escalationMinutes ? `${ticket.category.escalationMinutes} min` : 'Disattivata'}</dd></div>
+            <div><dt>Riapertura utente</dt><dd>{ticket.category.reopenWindowHours ? `${ticket.category.reopenWindowHours} ore` : 'Disattivata'}</dd></div>
           </dl>
         </article>
 
@@ -616,6 +631,23 @@ export default function TicketDetailPage() {
               Chiudi ticket
             </button>
           </>
+        )}
+      </section>
+
+      <section className="card">
+        <h2>Feedback utente</h2>
+        {ticket.feedback ? (
+          <>
+            <p><strong>Valutazione:</strong> {'★'.repeat(ticket.feedback.rating)}{'☆'.repeat(5 - ticket.feedback.rating)} ({ticket.feedback.rating}/5)</p>
+            <p className="muted">{new Date(ticket.feedback.updatedAt).toLocaleString()}</p>
+            <p className="preserve">{ticket.feedback.comment || 'Nessun commento.'}</p>
+          </>
+        ) : (
+          <p className="muted">
+            {ticket.category.feedbackEnabled
+              ? 'Nessun feedback ricevuto.'
+              : 'Feedback disattivato per questa categoria.'}
+          </p>
         )}
       </section>
 
