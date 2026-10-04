@@ -608,114 +608,124 @@ async function sendAutomationNotice(
 }
 
 export async function runTicketAutomations(client: Client) {
-  const tickets = await prisma.ticket.findMany({
-    where: { status: { in: OPEN_STATUSES } },
-    include: { category: true },
-    take: 500
-  });
-
+  let cursor: string | undefined;
   const now = Date.now();
 
-  for (const ticket of tickets) {
-    const category = ticket.category;
+  for (;;) {
+    const tickets = await prisma.ticket.findMany({
+      where: { status: { in: OPEN_STATUSES } },
+      include: { category: true },
+      orderBy: { id: 'asc' },
+      take: 200,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
+    });
 
-    if (
-      category.slaFirstResponseMinutes &&
-      !ticket.firstStaffResponseAt &&
-      !ticket.slaFirstBreachedAt &&
-      ticket.createdAt.getTime() + category.slaFirstResponseMinutes * 60_000 <= now
-    ) {
-      await prisma.ticket.update({
-        where: { id: ticket.id },
-        data: { slaFirstBreachedAt: new Date() }
-      });
+    if (!tickets.length) break;
 
-      const mentions = category.staffRoleIds.map((roleId) => '<@&' + roleId + '>').join(' ');
-      await sendAutomationNotice(
-        client,
-        ticket.guildId,
-        ticket.channelId,
-        (mentions ? mentions + ' ' : '') + 'SLA prima risposta superato per il ticket #' + ticket.ticketNumber + '.',
-        category.staffRoleIds
-      );
-      await audit(
-        ticket.id,
-        ticket.guildId,
-        client.user?.id ?? ticket.openerId,
-        'ticket.sla.first_response_breached',
-        { minutes: category.slaFirstResponseMinutes }
-      );
+    for (const ticket of tickets) {
+      const category = ticket.category;
+
+      if (
+        category.slaFirstResponseMinutes &&
+        !ticket.firstStaffResponseAt &&
+        !ticket.slaFirstBreachedAt &&
+        ticket.createdAt.getTime() + category.slaFirstResponseMinutes * 60_000 <= now
+      ) {
+        await prisma.ticket.update({
+          where: { id: ticket.id },
+          data: { slaFirstBreachedAt: new Date() }
+        });
+
+        const mentions = category.staffRoleIds.map((roleId) => '<@&' + roleId + '>').join(' ');
+        await sendAutomationNotice(
+          client,
+          ticket.guildId,
+          ticket.channelId,
+          (mentions ? mentions + ' ' : '') + 'SLA prima risposta superato per il ticket #' + ticket.ticketNumber + '.',
+          category.staffRoleIds
+        );
+        await audit(
+          ticket.id,
+          ticket.guildId,
+          client.user?.id ?? ticket.openerId,
+          'ticket.sla.first_response_breached',
+          { minutes: category.slaFirstResponseMinutes }
+        );
+      }
+
+      if (
+        category.slaResolutionMinutes &&
+        ticket.status !== 'RESOLVED' &&
+        !ticket.slaResolutionBreachedAt &&
+        ticket.createdAt.getTime() + category.slaResolutionMinutes * 60_000 <= now
+      ) {
+        await prisma.ticket.update({
+          where: { id: ticket.id },
+          data: { slaResolutionBreachedAt: new Date() }
+        });
+
+        const mentions = category.staffRoleIds.map((roleId) => '<@&' + roleId + '>').join(' ');
+        await sendAutomationNotice(
+          client,
+          ticket.guildId,
+          ticket.channelId,
+          (mentions ? mentions + ' ' : '') + 'SLA risoluzione superato per il ticket #' + ticket.ticketNumber + '.',
+          category.staffRoleIds
+        );
+        await audit(
+          ticket.id,
+          ticket.guildId,
+          client.user?.id ?? ticket.openerId,
+          'ticket.sla.resolution_breached',
+          { minutes: category.slaResolutionMinutes }
+        );
+      }
+
+      if (category.inactivityCloseHours) {
+        const closeAt = ticket.lastActivityAt.getTime() + category.inactivityCloseHours * 3_600_000;
+        const warningMinutes = category.inactivityWarningMinutes ?? 0;
+        const warnAt = closeAt - warningMinutes * 60_000;
+
+        if (
+          warningMinutes > 0 &&
+          !ticket.inactivityWarnedAt &&
+          now >= warnAt &&
+          now < closeAt
+        ) {
+          await prisma.ticket.update({
+            where: { id: ticket.id },
+            data: { inactivityWarnedAt: new Date() }
+          });
+
+          await sendAutomationNotice(
+            client,
+            ticket.guildId,
+            ticket.channelId,
+            '<@' + ticket.openerId + '> questo ticket verra chiuso automaticamente tra circa ' +
+              warningMinutes + ' minuti se non ci saranno nuove attivita.'
+          );
+          await audit(
+            ticket.id,
+            ticket.guildId,
+            client.user?.id ?? ticket.openerId,
+            'ticket.inactivity.warning',
+            { warningMinutes }
+          );
+        }
+
+        if (now >= closeAt) {
+          await closeTicket(
+            client,
+            ticket.guildId,
+            ticket.id,
+            client.user?.id ?? ticket.openerId,
+            'Chiuso automaticamente per inattivita.'
+          ).catch(() => null);
+        }
+      }
     }
 
-    if (
-      category.slaResolutionMinutes &&
-      ticket.status !== 'RESOLVED' &&
-      !ticket.slaResolutionBreachedAt &&
-      ticket.createdAt.getTime() + category.slaResolutionMinutes * 60_000 <= now
-    ) {
-      await prisma.ticket.update({
-        where: { id: ticket.id },
-        data: { slaResolutionBreachedAt: new Date() }
-      });
-
-      const mentions = category.staffRoleIds.map((roleId) => '<@&' + roleId + '>').join(' ');
-      await sendAutomationNotice(
-        client,
-        ticket.guildId,
-        ticket.channelId,
-        (mentions ? mentions + ' ' : '') + 'SLA risoluzione superato per il ticket #' + ticket.ticketNumber + '.',
-        category.staffRoleIds
-      );
-      await audit(
-        ticket.id,
-        ticket.guildId,
-        client.user?.id ?? ticket.openerId,
-        'ticket.sla.resolution_breached',
-        { minutes: category.slaResolutionMinutes }
-      );
-    }
-
-    if (!category.inactivityCloseHours) continue;
-
-    const closeAt = ticket.lastActivityAt.getTime() + category.inactivityCloseHours * 3_600_000;
-    const warningMinutes = category.inactivityWarningMinutes ?? 0;
-    const warnAt = closeAt - warningMinutes * 60_000;
-
-    if (
-      warningMinutes > 0 &&
-      !ticket.inactivityWarnedAt &&
-      now >= warnAt &&
-      now < closeAt
-    ) {
-      await prisma.ticket.update({
-        where: { id: ticket.id },
-        data: { inactivityWarnedAt: new Date() }
-      });
-
-      await sendAutomationNotice(
-        client,
-        ticket.guildId,
-        ticket.channelId,
-        '<@' + ticket.openerId + '> questo ticket verra chiuso automaticamente tra circa ' +
-          warningMinutes + ' minuti se non ci saranno nuove attivita.'
-      );
-      await audit(
-        ticket.id,
-        ticket.guildId,
-        client.user?.id ?? ticket.openerId,
-        'ticket.inactivity.warning',
-        { warningMinutes }
-      );
-    }
-
-    if (now >= closeAt) {
-      await closeTicket(
-        client,
-        ticket.guildId,
-        ticket.id,
-        client.user?.id ?? ticket.openerId,
-        'Chiuso automaticamente per inattivita.'
-      ).catch(() => null);
-    }
+    cursor = tickets[tickets.length - 1]!.id;
+    if (tickets.length < 200) break;
   }
 }
