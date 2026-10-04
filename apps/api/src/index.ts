@@ -839,7 +839,7 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
   const days = parsed.data.days;
   const since = new Date(Date.now() - days * 86_400_000);
 
-  const [tickets, currentOpen, staffEvents] = await Promise.all([
+  const [tickets, currentOpen, staffEvents, currentAssignments] = await Promise.all([
     prisma.ticket.findMany({
       where: {
         guildId,
@@ -880,6 +880,15 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
             'ticket.reply'
           ]
         }
+      },
+      _count: { _all: true }
+    }),
+    prisma.ticket.groupBy({
+      by: ['claimedById'],
+      where: {
+        guildId,
+        status: { not: 'CLOSED' },
+        claimedById: { not: null }
       },
       _count: { _all: true }
     })
@@ -951,8 +960,23 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
     staffMap.set(event.actorId, row);
   }
 
+  for (const assignment of currentAssignments) {
+    if (!assignment.claimedById) continue;
+    const row = staffMap.get(assignment.claimedById) ?? {
+      userId: assignment.claimedById,
+      claims: 0,
+      closures: 0,
+      firstResponses: 0,
+      replies: 0,
+      currentlyAssigned: 0,
+      ratings: []
+    };
+    row.currentlyAssigned = assignment._count._all;
+    staffMap.set(assignment.claimedById, row);
+  }
+
   for (const ticket of tickets) {
-    if (!ticket.claimedById) continue;
+    if (!ticket.claimedById || !ticket.feedback) continue;
     const row = staffMap.get(ticket.claimedById) ?? {
       userId: ticket.claimedById,
       claims: 0,
@@ -962,8 +986,7 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
       currentlyAssigned: 0,
       ratings: []
     };
-    if (ticket.status !== 'CLOSED') row.currentlyAssigned += 1;
-    if (ticket.feedback) row.ratings.push(ticket.feedback.rating);
+    row.ratings.push(ticket.feedback.rating);
     staffMap.set(ticket.claimedById, row);
   }
 
