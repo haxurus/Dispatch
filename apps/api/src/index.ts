@@ -400,6 +400,12 @@ const categorySchema = z.object({
   slaResolutionMinutes: z.number().int().min(1).max(43200).nullable().default(null),
   inactivityCloseHours: z.number().int().min(1).max(720).nullable().default(null),
   inactivityWarningMinutes: z.number().int().min(1).max(1440).nullable().default(null),
+  escalationMinutes: z.number().int().min(1).max(43200).nullable().default(null),
+  escalationRoleIds: z.array(snowflake).max(20).default([]).refine(
+    (items) => new Set(items).size === items.length
+  ),
+  reopenWindowHours: z.number().int().min(1).max(720).nullable().default(null),
+  feedbackEnabled: z.boolean().default(true),
   enabled: z.boolean().default(true)
 }).superRefine((value, ctx) => {
   if (value.inactivityWarningMinutes !== null && value.inactivityCloseHours === null) {
@@ -448,6 +454,9 @@ async function validateCategoryResources(
   const roleIds = new Set(resources.roles.map((role) => role.id));
   if (data.staffRoleIds.some((roleId) => roleId === guildId || !roleIds.has(roleId))) {
     return 'STAFF_ROLE_NOT_FOUND';
+  }
+  if (data.escalationRoleIds.some((roleId) => roleId === guildId || !roleIds.has(roleId))) {
+    return 'ESCALATION_ROLE_NOT_FOUND';
   }
 
   return null;
@@ -719,6 +728,298 @@ async function runTicketBotAction<T>(
 }
 
 
+
+app.get('/api/guilds/:guildId/blacklist', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  await prisma.guildBlacklist.deleteMany({
+    where: {
+      guildId,
+      expiresAt: { lt: new Date() }
+    }
+  });
+
+  const entries = await prisma.guildBlacklist.findMany({
+    where: { guildId },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  return entries.map((entry) => ({
+    id: entry.id,
+    userId: entry.userId,
+    reason: decryptText(entry.reasonEncrypted),
+    expiresAt: entry.expiresAt,
+    createdById: entry.createdById,
+    createdAt: entry.createdAt
+  }));
+});
+
+app.post('/api/guilds/:guildId/blacklist', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  const parsed = z.object({
+    userId: snowflake,
+    reason: z.string().trim().max(1000).nullable().optional(),
+    expiresInHours: z.number().int().min(1).max(8760).nullable().optional()
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  const expiresAt = parsed.data.expiresInHours
+    ? new Date(Date.now() + parsed.data.expiresInHours * 3_600_000)
+    : null;
+
+  const entry = await prisma.guildBlacklist.upsert({
+    where: {
+      guildId_userId: {
+        guildId,
+        userId: parsed.data.userId
+      }
+    },
+    update: {
+      reasonEncrypted: parsed.data.reason ? encryptText(parsed.data.reason) : null,
+      expiresAt,
+      createdById: session.userId
+    },
+    create: {
+      guildId,
+      userId: parsed.data.userId,
+      reasonEncrypted: parsed.data.reason ? encryptText(parsed.data.reason) : null,
+      expiresAt,
+      createdById: session.userId
+    }
+  });
+
+  await panelAudit(request, session, guildId, 'blacklist.upsert', {
+    userId: parsed.data.userId,
+    expiresAt: entry.expiresAt?.toISOString() ?? null,
+    reasonProvided: Boolean(parsed.data.reason)
+  });
+
+  return reply.code(201).send({
+    id: entry.id,
+    userId: entry.userId,
+    reason: parsed.data.reason ?? null,
+    expiresAt: entry.expiresAt,
+    createdById: entry.createdById,
+    createdAt: entry.createdAt
+  });
+});
+
+app.delete('/api/guilds/:guildId/blacklist/:userId', async (request, reply) => {
+  const { guildId, userId } = request.params as { guildId: string; userId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+  if (!snowflake.safeParse(userId).success) {
+    return reply.code(400).send({ error: 'INVALID_DISCORD_ID', field: 'userId' });
+  }
+
+  const deleted = await prisma.guildBlacklist.deleteMany({
+    where: { guildId, userId }
+  });
+  if (!deleted.count) return reply.code(404).send({ error: 'BLACKLIST_ENTRY_NOT_FOUND' });
+
+  await panelAudit(request, session, guildId, 'blacklist.delete', { userId });
+  return { ok: true };
+});
+
+app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+
+  const parsed = z.object({
+    days: z.coerce.number().int().min(1).max(365).default(30)
+  }).safeParse(request.query);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_QUERY' });
+
+  const days = parsed.data.days;
+  const since = new Date(Date.now() - days * 86_400_000);
+
+  const [tickets, currentOpen, staffEvents] = await Promise.all([
+    prisma.ticket.findMany({
+      where: {
+        guildId,
+        createdAt: { gte: since }
+      },
+      select: {
+        id: true,
+        categoryId: true,
+        status: true,
+        claimedById: true,
+        createdAt: true,
+        firstStaffResponseAt: true,
+        closedAt: true,
+        slaFirstBreachedAt: true,
+        slaResolutionBreachedAt: true,
+        category: { select: { name: true } },
+        feedback: { select: { rating: true } }
+      }
+    }),
+    prisma.ticket.count({
+      where: {
+        guildId,
+        status: { not: 'CLOSED' }
+      }
+    }),
+    prisma.ticketAudit.groupBy({
+      by: ['actorId', 'action'],
+      where: {
+        guildId,
+        createdAt: { gte: since },
+        actorId: { not: null },
+        action: {
+          in: [
+            'ticket.claim',
+            'ticket.assign',
+            'ticket.close',
+            'ticket.first_staff_response',
+            'ticket.reply'
+          ]
+        }
+      },
+      _count: { _all: true }
+    })
+  ]);
+
+  const average = (values: number[]) =>
+    values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+
+  const firstResponseMinutes = tickets.flatMap((ticket) =>
+    ticket.firstStaffResponseAt
+      ? [(ticket.firstStaffResponseAt.getTime() - ticket.createdAt.getTime()) / 60_000]
+      : []
+  );
+  const resolutionMinutes = tickets.flatMap((ticket) =>
+    ticket.closedAt
+      ? [(ticket.closedAt.getTime() - ticket.createdAt.getTime()) / 60_000]
+      : []
+  );
+  const ratings = tickets.flatMap((ticket) => ticket.feedback ? [ticket.feedback.rating] : []);
+
+  const categoryMap = new Map<string, {
+    id: string;
+    name: string;
+    created: number;
+    closed: number;
+    ratings: number[];
+  }>();
+
+  for (const ticket of tickets) {
+    const current = categoryMap.get(ticket.categoryId) ?? {
+      id: ticket.categoryId,
+      name: ticket.category.name,
+      created: 0,
+      closed: 0,
+      ratings: []
+    };
+    current.created += 1;
+    if (ticket.closedAt) current.closed += 1;
+    if (ticket.feedback) current.ratings.push(ticket.feedback.rating);
+    categoryMap.set(ticket.categoryId, current);
+  }
+
+  const staffMap = new Map<string, {
+    userId: string;
+    claims: number;
+    closures: number;
+    firstResponses: number;
+    replies: number;
+    currentlyAssigned: number;
+    ratings: number[];
+  }>();
+
+  for (const event of staffEvents) {
+    if (!event.actorId) continue;
+    const row = staffMap.get(event.actorId) ?? {
+      userId: event.actorId,
+      claims: 0,
+      closures: 0,
+      firstResponses: 0,
+      replies: 0,
+      currentlyAssigned: 0,
+      ratings: []
+    };
+    const count = event._count._all;
+    if (event.action === 'ticket.claim' || event.action === 'ticket.assign') row.claims += count;
+    if (event.action === 'ticket.close') row.closures += count;
+    if (event.action === 'ticket.first_staff_response') row.firstResponses += count;
+    if (event.action === 'ticket.reply') row.replies += count;
+    staffMap.set(event.actorId, row);
+  }
+
+  for (const ticket of tickets) {
+    if (!ticket.claimedById) continue;
+    const row = staffMap.get(ticket.claimedById) ?? {
+      userId: ticket.claimedById,
+      claims: 0,
+      closures: 0,
+      firstResponses: 0,
+      replies: 0,
+      currentlyAssigned: 0,
+      ratings: []
+    };
+    if (ticket.status !== 'CLOSED') row.currentlyAssigned += 1;
+    if (ticket.feedback) row.ratings.push(ticket.feedback.rating);
+    staffMap.set(ticket.claimedById, row);
+  }
+
+  const dayMap = new Map<string, { date: string; created: number; closed: number }>();
+  for (let index = days - 1; index >= 0; index -= 1) {
+    const date = new Date(Date.now() - index * 86_400_000).toISOString().slice(0, 10);
+    dayMap.set(date, { date, created: 0, closed: 0 });
+  }
+  for (const ticket of tickets) {
+    const createdKey = ticket.createdAt.toISOString().slice(0, 10);
+    const createdRow = dayMap.get(createdKey);
+    if (createdRow) createdRow.created += 1;
+    if (ticket.closedAt) {
+      const closedKey = ticket.closedAt.toISOString().slice(0, 10);
+      const closedRow = dayMap.get(closedKey);
+      if (closedRow) closedRow.closed += 1;
+    }
+  }
+
+  const closedCount = tickets.filter((ticket) => ticket.closedAt).length;
+  const firstBreachCount = tickets.filter((ticket) => ticket.slaFirstBreachedAt).length;
+  const resolutionBreachCount = tickets.filter((ticket) => ticket.slaResolutionBreachedAt).length;
+
+  return {
+    period: { days, since },
+    summary: {
+      created: tickets.length,
+      closed: closedCount,
+      currentOpen,
+      averageFirstResponseMinutes: average(firstResponseMinutes),
+      averageResolutionMinutes: average(resolutionMinutes),
+      firstResponseSlaBreaches: firstBreachCount,
+      resolutionSlaBreaches: resolutionBreachCount,
+      feedbackCount: ratings.length,
+      averageRating: average(ratings)
+    },
+    categories: [...categoryMap.values()].map((row) => ({
+      id: row.id,
+      name: row.name,
+      created: row.created,
+      closed: row.closed,
+      averageRating: average(row.ratings)
+    })).sort((a, b) => b.created - a.created),
+    staff: [...staffMap.values()].map((row) => ({
+      userId: row.userId,
+      claims: row.claims,
+      closures: row.closures,
+      firstResponses: row.firstResponses,
+      replies: row.replies,
+      currentlyAssigned: row.currentlyAssigned,
+      averageRating: average(row.ratings)
+    })).sort((a, b) => b.closures - a.closures || b.replies - a.replies),
+    daily: [...dayMap.values()]
+  };
+});
+
 app.get('/api/guilds/:guildId/response-templates', async (request, reply) => {
   const { guildId } = request.params as { guildId: string };
   const session = await requireGuild(request, reply, guildId, 'MODERATOR');
@@ -895,6 +1196,7 @@ app.get('/api/guilds/:guildId/tickets/:ticketId', async (request, reply) => {
       members: { orderBy: { createdAt: 'asc' } },
       audit: { orderBy: { createdAt: 'desc' }, take: 200 },
       notes: { orderBy: { createdAt: 'desc' }, take: 200 },
+      feedback: true,
       transcript: { select: { messageCount: true, createdAt: true } }
     }
   });
@@ -920,7 +1222,14 @@ app.get('/api/guilds/:guildId/tickets/:ticketId', async (request, reply) => {
       authorId: note.authorId,
       content: decryptText(note.contentEncrypted),
       createdAt: note.createdAt
-    }))
+    })),
+    feedback: ticket.feedback ? {
+      id: ticket.feedback.id,
+      rating: ticket.feedback.rating,
+      comment: decryptText(ticket.feedback.commentEncrypted),
+      createdAt: ticket.feedback.createdAt,
+      updatedAt: ticket.feedback.updatedAt
+    } : null
   };
 });
 
