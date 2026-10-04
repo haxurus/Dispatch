@@ -35,6 +35,9 @@ type Category = {
   discordCategoryId: string | null;
   staffRoleIds: string[];
   maxOpenPerUser: number;
+  openCooldownSeconds: number;
+  antiSpamWindowMinutes: number;
+  antiSpamMaxAttempts: number;
   formFields: FormField[];
   slaFirstResponseMinutes: number | null;
   slaResolutionMinutes: number | null;
@@ -70,6 +73,9 @@ const newCategory = () => ({
   discordCategoryId: '',
   staffRoleIds: [] as string[],
   maxOpenPerUser: 1,
+  openCooldownSeconds: 60,
+  antiSpamWindowMinutes: 10,
+  antiSpamMaxAttempts: 3,
   formFields: [] as FormField[],
   slaFirstResponseMinutes: null as number | null,
   slaResolutionMinutes: null as number | null,
@@ -163,6 +169,9 @@ export default function TicketConfigurationPage() {
       discordCategoryId: category.discordCategoryId ?? '',
       staffRoleIds: category.staffRoleIds,
       maxOpenPerUser: category.maxOpenPerUser,
+      openCooldownSeconds: category.openCooldownSeconds,
+      antiSpamWindowMinutes: category.antiSpamWindowMinutes,
+      antiSpamMaxAttempts: category.antiSpamMaxAttempts,
       formFields: category.formFields ?? [],
       slaFirstResponseMinutes: category.slaFirstResponseMinutes,
       slaResolutionMinutes: category.slaResolutionMinutes,
@@ -428,6 +437,7 @@ export default function TicketConfigurationPage() {
         </div>
         <div className="actions">
           <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets/system`}>Sistema</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/analytics`}>Analytics</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/security`}>Blacklist</a>
           <a className="button secondary" href={`/dashboard/${guildId}`}>Permessi dashboard</a>
@@ -507,6 +517,51 @@ export default function TicketConfigurationPage() {
               })}
             />
           </label>
+
+          <fieldset>
+            <legend>Anti-spam categoria</legend>
+            <div className="grid compact-grid">
+              <label>
+                Cooldown dopo apertura, secondi
+                <input
+                  type="number"
+                  min={0}
+                  max={86400}
+                  value={categoryForm.openCooldownSeconds}
+                  onChange={(event) => setCategoryForm({
+                    ...categoryForm,
+                    openCooldownSeconds: Number(event.target.value)
+                  })}
+                />
+              </label>
+              <label>
+                Finestra tentativi, minuti
+                <input
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={categoryForm.antiSpamWindowMinutes}
+                  onChange={(event) => setCategoryForm({
+                    ...categoryForm,
+                    antiSpamWindowMinutes: Number(event.target.value)
+                  })}
+                />
+              </label>
+              <label>
+                Tentativi massimi nella finestra
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={categoryForm.antiSpamMaxAttempts}
+                  onChange={(event) => setCategoryForm({
+                    ...categoryForm,
+                    antiSpamMaxAttempts: Number(event.target.value)
+                  })}
+                />
+              </label>
+            </div>
+          </fieldset>
 
           <fieldset>
             <legend>Form iniziale, massimo 5 domande</legend>
@@ -781,7 +836,7 @@ export default function TicketConfigurationPage() {
               <h3>{category.name}</h3>
               <p>{category.description || 'Nessuna descrizione.'}</p>
               <p className="muted">
-                Limite: {category.maxOpenPerUser} · Domande: {category.formFields?.length ?? 0} · Ruoli staff: {category.staffRoleIds.length}
+                Limite aperti: {category.maxOpenPerUser} · Cooldown: {category.openCooldownSeconds}s · Tentativi: {category.antiSpamMaxAttempts}/{category.antiSpamWindowMinutes}m
               </p>
               <p className="muted">
                 SLA risposta: {category.slaFirstResponseMinutes ?? 'off'} · SLA risoluzione: {category.slaResolutionMinutes ?? 'off'} · Auto-close: {category.inactivityCloseHours ? `${category.inactivityCloseHours}h` : 'off'}
