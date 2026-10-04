@@ -598,12 +598,13 @@ async function sendAutomationNotice(
   guildId: string,
   channelId: string,
   content: string,
-  roleIds: string[] = []
+  roleIds: string[] = [],
+  userIds: string[] = []
 ) {
   const { channel } = await getGuildChannel(client, guildId, channelId);
   await channel.send({
     content,
-    allowedMentions: { roles: roleIds, users: [], parse: [] }
+    allowedMentions: { roles: roleIds, users: userIds, parse: [] }
   }).catch(() => null);
 }
 
@@ -702,7 +703,9 @@ export async function runTicketAutomations(client: Client) {
             ticket.guildId,
             ticket.channelId,
             '<@' + ticket.openerId + '> questo ticket verra chiuso automaticamente tra circa ' +
-              warningMinutes + ' minuti se non ci saranno nuove attivita.'
+              warningMinutes + ' minuti se non ci saranno nuove attivita.',
+          [],
+          [ticket.openerId]
           );
           await audit(
             ticket.id,
