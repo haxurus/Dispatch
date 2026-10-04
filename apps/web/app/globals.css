@@ -98,3 +98,59 @@ select {
 @media (max-width: 700px) {
   .role { grid-template-columns: 1fr; }
 }
+
+
+section { margin-top: 28px; }
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #cbd3df;
+  font-size: 14px;
+}
+
+input, textarea {
+  width: 100%;
+  border: 1px solid #394250;
+  border-radius: 8px;
+  padding: 10px;
+  background: #11151b;
+  color: #f5f7fa;
+  font: inherit;
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+select[multiple] {
+  min-height: 130px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+button.danger {
+  background: #55282c;
+  color: #ffd9dc;
+}
+
+.success {
+  color: #a8e6bd;
+}
+
+.settings-grid {
+  align-items: start;
+}
