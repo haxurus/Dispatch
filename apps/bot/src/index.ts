@@ -3,6 +3,7 @@ import pino from 'pino';
 import { prisma } from '@dispatch/db';
 import { config } from './config.js';
 import { startInternalApi } from './internal-api.js';
+import { handleTicketInteraction } from './tickets.js';
 
 const log = pino({ level: config.logLevel });
 
@@ -40,6 +41,23 @@ client.on(Events.GuildCreate, async (guild) => {
 
 client.on(Events.GuildUpdate, async (_oldGuild, newGuild) => {
   await ensureGuild(newGuild);
+});
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isStringSelectMenu() && !interaction.isButton()) return;
+
+  try {
+    await handleTicketInteraction(interaction);
+  } catch (error) {
+    log.error({ err: error, customId: interaction.customId }, 'Ticket interaction failed');
+
+    const message = 'Si è verificato un errore durante la gestione del ticket.';
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(message).catch(() => null);
+    } else {
+      await interaction.reply({ content: message, ephemeral: true }).catch(() => null);
+    }
+  }
 });
 
 client.on(Events.Warn, (warning) => log.warn({ warning }, 'Discord client warning'));
