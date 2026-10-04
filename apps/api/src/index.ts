@@ -21,6 +21,7 @@ import {
   closeTicket,
   generateTranscript,
   getGuildResources,
+  publishMainMenu,
   publishPanel,
   removeTicketMember,
   reopenTicket,
@@ -392,6 +393,9 @@ const categorySchema = z.object({
   discordCategoryId: snowflake.nullable().default(null),
   staffRoleIds: z.array(snowflake).max(20).default([]).refine((items) => new Set(items).size === items.length),
   maxOpenPerUser: z.number().int().min(1).max(10).default(1),
+  openCooldownSeconds: z.number().int().min(0).max(86400).default(60),
+  antiSpamWindowMinutes: z.number().int().min(1).max(1440).default(10),
+  antiSpamMaxAttempts: z.number().int().min(1).max(100).default(3),
   formFields: z.array(formFieldSchema).max(5).default([]).refine(
     (items) => new Set(items.map((item) => item.id)).size === items.length,
     { message: 'Form field IDs must be unique' }
@@ -429,6 +433,51 @@ const categorySchema = z.object({
   }
 });
 
+const ticketSystemSettingsSchema = z.object({
+  antiSpamEnabled: z.boolean().default(true),
+  antiSpamGlobalCooldownSeconds: z.number().int().min(0).max(86400).default(30),
+  antiSpamWindowMinutes: z.number().int().min(1).max(1440).default(10),
+  antiSpamMaxAttempts: z.number().int().min(1).max(100).default(5),
+  antiSpamBlockMinutes: z.number().int().min(1).max(10080).default(15),
+  transcriptRetentionDays: z.number().int().min(1).max(3650).nullable().default(30),
+  closedTicketRetentionDays: z.number().int().min(1).max(3650).nullable().default(90),
+  retentionDeleteDiscordChannel: z.boolean().default(true),
+  mainMenuEnabled: z.boolean().default(false),
+  mainMenuChannelId: snowflake.nullable().default(null),
+  mainMenuTitle: z.string().trim().min(1).max(256).default('Centro assistenza'),
+  mainMenuDescription: z.string().trim().max(2000).default('Premi il pulsante per scegliere il tipo di richiesta.'),
+  mainMenuButtonLabel: z.string().trim().min(1).max(80).default('Apri un ticket'),
+  mainMenuCategoryIds: z.array(internalId).max(25).default([]).refine(
+    (items) => new Set(items).size === items.length
+  )
+}).superRefine((value, ctx) => {
+  if (value.mainMenuEnabled && !value.mainMenuChannelId) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Main menu channel is required when enabled',
+      path: ['mainMenuChannelId']
+    });
+  }
+  if (value.mainMenuEnabled && value.mainMenuCategoryIds.length < 1) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'At least one main menu category is required',
+      path: ['mainMenuCategoryIds']
+    });
+  }
+  if (
+    value.transcriptRetentionDays !== null &&
+    value.closedTicketRetentionDays !== null &&
+    value.transcriptRetentionDays > value.closedTicketRetentionDays
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Transcript retention cannot exceed closed ticket retention',
+      path: ['transcriptRetentionDays']
+    });
+  }
+});
+
 const panelSchema = z.object({
   name: z.string().trim().min(1).max(80),
   channelId: snowflake,
@@ -462,6 +511,33 @@ async function validateCategoryResources(
   return null;
 }
 
+async function validateTicketSystemResources(
+  guildId: string,
+  data: z.infer<typeof ticketSystemSettingsSchema>
+) {
+  if (data.mainMenuChannelId) {
+    const resources = await getGuildResources(guildId);
+    if (!resources.channels.some(
+      (channel) => channel.id === data.mainMenuChannelId && [0, 5].includes(channel.type)
+    )) {
+      return 'MAIN_MENU_CHANNEL_NOT_FOUND';
+    }
+  }
+
+  if (data.mainMenuCategoryIds.length) {
+    const count = await prisma.ticketCategory.count({
+      where: {
+        guildId,
+        enabled: true,
+        id: { in: data.mainMenuCategoryIds }
+      }
+    });
+    if (count !== data.mainMenuCategoryIds.length) return 'MAIN_MENU_CATEGORY_NOT_FOUND';
+  }
+
+  return null;
+}
+
 async function validatePanelResources(
   guildId: string,
   data: z.infer<typeof panelSchema>
@@ -481,6 +557,94 @@ async function validatePanelResources(
 
   return null;
 }
+
+app.get('/api/guilds/:guildId/ticket-system-settings', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  const settings = await prisma.guildSettings.findUnique({
+    where: { guildId },
+    select: {
+      antiSpamEnabled: true,
+      antiSpamGlobalCooldownSeconds: true,
+      antiSpamWindowMinutes: true,
+      antiSpamMaxAttempts: true,
+      antiSpamBlockMinutes: true,
+      transcriptRetentionDays: true,
+      closedTicketRetentionDays: true,
+      retentionDeleteDiscordChannel: true,
+      mainMenuEnabled: true,
+      mainMenuChannelId: true,
+      mainMenuMessageId: true,
+      mainMenuTitle: true,
+      mainMenuDescription: true,
+      mainMenuButtonLabel: true,
+      mainMenuCategoryIds: true
+    }
+  });
+  if (!settings) return reply.code(404).send({ error: 'GUILD_NOT_FOUND' });
+
+  return settings;
+});
+
+app.put('/api/guilds/:guildId/ticket-system-settings', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  const parsed = ticketSystemSettingsSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  }
+
+  const resourceError = await validateTicketSystemResources(guildId, parsed.data);
+  if (resourceError) return reply.code(400).send({ error: resourceError });
+
+  const previous = await prisma.guildSettings.findUnique({
+    where: { guildId },
+    select: { mainMenuChannelId: true }
+  });
+  if (!previous) return reply.code(404).send({ error: 'GUILD_NOT_FOUND' });
+
+  const settings = await prisma.guildSettings.update({
+    where: { guildId },
+    data: {
+      ...parsed.data,
+      ...(previous.mainMenuChannelId !== parsed.data.mainMenuChannelId
+        ? { mainMenuMessageId: null }
+        : {})
+    }
+  });
+
+  await panelAudit(request, session, guildId, 'ticket_system_settings.update', {
+    antiSpamEnabled: settings.antiSpamEnabled,
+    transcriptRetentionDays: settings.transcriptRetentionDays,
+    closedTicketRetentionDays: settings.closedTicketRetentionDays,
+    mainMenuEnabled: settings.mainMenuEnabled,
+    mainMenuChannelId: settings.mainMenuChannelId,
+    mainMenuCategoryCount: settings.mainMenuCategoryIds.length
+  });
+
+  return settings;
+});
+
+app.post('/api/guilds/:guildId/main-menu/publish', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  try {
+    const result = await publishMainMenu(guildId);
+    await panelAudit(request, session, guildId, 'main_menu.publish', {
+      messageId: result.messageId
+    });
+    return result;
+  } catch (error) {
+    request.log.error({ err: error, guildId }, 'Main menu publish failed');
+    return reply.code(502).send({ error: 'MAIN_MENU_PUBLISH_FAILED' });
+  }
+});
 
 app.get('/api/guilds/:guildId/categories', async (request, reply) => {
   const { guildId } = request.params as { guildId: string };
@@ -573,15 +737,30 @@ app.delete('/api/guilds/:guildId/categories/:categoryId', async (request, reply)
     return reply.code(409).send({ error: 'CATEGORY_IN_USE', tickets: ticketCount });
   }
 
-  const panels = await prisma.ticketPanel.findMany({
-    where: { guildId, categoryIds: { has: categoryId } }
-  });
+  const [panels, settings] = await Promise.all([
+    prisma.ticketPanel.findMany({
+      where: { guildId, categoryIds: { has: categoryId } }
+    }),
+    prisma.guildSettings.findUnique({
+      where: { guildId },
+      select: { mainMenuCategoryIds: true }
+    })
+  ]);
 
   await prisma.$transaction([
     ...panels.map((panel) => prisma.ticketPanel.update({
       where: { id: panel.id },
       data: { categoryIds: panel.categoryIds.filter((id) => id !== categoryId) }
     })),
+    ...(settings?.mainMenuCategoryIds.includes(categoryId) ? [
+      prisma.guildSettings.update({
+        where: { guildId },
+        data: {
+          mainMenuCategoryIds: settings.mainMenuCategoryIds.filter((id) => id !== categoryId),
+          mainMenuMessageId: null
+        }
+      })
+    ] : []),
     prisma.ticketCategory.delete({ where: { id: categoryId } })
   ]);
 
