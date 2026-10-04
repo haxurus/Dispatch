@@ -2,9 +2,43 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import type { Client } from 'discord.js';
 import { publishTicketPanel } from './tickets.js';
+import {
+  addTicketMember,
+  assignTicket,
+  closeTicket,
+  generateTranscript,
+  removeTicketMember,
+  reopenTicket,
+  transferTicketCategory,
+  unclaimTicket
+} from './ticket-operations.js';
 
 const SNOWFLAKE = /^\d{17,20}$/;
 const CUID = /^[a-z0-9]{20,32}$/i;
+
+async function readJson(req: http.IncomingMessage) {
+  const chunks: Buffer[] = [];
+  let size = 0;
+
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 16 * 1024) throw new Error('BODY_TOO_LARGE');
+    chunks.push(buffer);
+  }
+
+  if (!chunks.length) return {};
+  const raw = Buffer.concat(chunks).toString('utf8');
+  const value = JSON.parse(raw);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('INVALID_BODY');
+  return value as Record<string, unknown>;
+}
+
+function bodySnowflake(body: Record<string, unknown>, key: string) {
+  const value = body[key];
+  if (typeof value !== 'string' || !SNOWFLAKE.test(value)) throw new Error(`INVALID_${key.toUpperCase()}`);
+  return value;
+}
 
 function authorized(header: string | undefined, secret: string) {
   const expected = `Bearer ${secret}`;
@@ -97,6 +131,57 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
         return;
       }
 
+
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/tickets\/([a-z0-9]{20,32})\/(unclaim|assign|transfer|member-add|member-remove|close|reopen|transcript)$/i);
+      if (req.method === 'POST' && match) {
+        const guildId = match[1]!;
+        const ticketId = match[2]!;
+        const action = match[3]!;
+        if (!SNOWFLAKE.test(guildId) || !CUID.test(ticketId)) throw new Error('INVALID_ID');
+
+        const body = await readJson(req);
+        const actorId = bodySnowflake(body, 'actorId');
+
+        let result;
+        switch (action) {
+          case 'unclaim':
+            result = await unclaimTicket(client, guildId, ticketId, actorId);
+            break;
+          case 'assign':
+            result = await assignTicket(client, guildId, ticketId, actorId, bodySnowflake(body, 'assigneeId'));
+            break;
+          case 'transfer': {
+            const categoryId = body.categoryId;
+            if (typeof categoryId !== 'string' || !CUID.test(categoryId)) throw new Error('INVALID_CATEGORY_ID');
+            result = await transferTicketCategory(client, guildId, ticketId, actorId, categoryId);
+            break;
+          }
+          case 'member-add':
+            result = await addTicketMember(client, guildId, ticketId, actorId, bodySnowflake(body, 'userId'));
+            break;
+          case 'member-remove':
+            result = await removeTicketMember(client, guildId, ticketId, actorId, bodySnowflake(body, 'userId'));
+            break;
+          case 'close': {
+            const reason = body.reason;
+            if (reason !== undefined && reason !== null && typeof reason !== 'string') throw new Error('INVALID_REASON');
+            result = await closeTicket(client, guildId, ticketId, actorId, typeof reason === 'string' ? reason : null);
+            break;
+          }
+          case 'reopen':
+            result = await reopenTicket(client, guildId, ticketId, actorId);
+            break;
+          case 'transcript':
+            result = await generateTranscript(client, guildId, ticketId, actorId);
+            break;
+          default:
+            throw new Error('ACTION_NOT_ALLOWED');
+        }
+
+        res.end(JSON.stringify(result));
+        return;
+      }
+
       if (!['GET', 'POST'].includes(req.method ?? '')) {
         res.statusCode = 405;
         res.end('{"error":"METHOD_NOT_ALLOWED"}');
@@ -107,7 +192,9 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
       res.end('{"error":"NOT_FOUND"}');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'INTERNAL_ERROR';
-      res.statusCode = message.endsWith('_NOT_FOUND') ? 404 : 400;
+      res.statusCode = message.endsWith('_NOT_FOUND') ? 404
+        : message === 'TICKET_CLOSED' || message === 'TICKET_NOT_CLOSED' || message === 'CANNOT_REMOVE_OPENER' ? 409
+        : 400;
       res.end(JSON.stringify({ error: message }));
     }
   });
