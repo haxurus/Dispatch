@@ -22,6 +22,8 @@ model GuildSettings {
   panelRoles PanelRoleBinding[]
   panelAudit PanelAudit[]
   responseTemplates ResponseTemplate[]
+  blacklist GuildBlacklist[]
+  feedback TicketFeedback[]
 }
 
 model TicketCategory {
@@ -37,6 +39,10 @@ model TicketCategory {
   slaResolutionMinutes     Int?
   inactivityCloseHours     Int?
   inactivityWarningMinutes Int?
+  escalationMinutes        Int?
+  escalationRoleIds        String[] @default([])
+  reopenWindowHours        Int?
+  feedbackEnabled          Boolean  @default(true)
   enabled                  Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
@@ -81,9 +87,11 @@ model Ticket {
   firstStaffResponseAt   DateTime?
   lastActivityAt         DateTime @default(now())
   inactivityWarnedAt     DateTime?
-  slaFirstBreachedAt     DateTime?
+  slaFirstBreachedAt      DateTime?
   slaResolutionBreachedAt DateTime?
-  createdAt              DateTime @default(now())
+  escalatedAt              DateTime?
+  feedbackRequestedAt      DateTime?
+  createdAt                DateTime @default(now())
   updatedAt              DateTime @updatedAt
   closedAt               DateTime?
 
@@ -93,6 +101,7 @@ model Ticket {
   audit      TicketAudit[]
   transcript Transcript?
   notes      TicketNote[]
+  feedback   TicketFeedback?
 
   @@unique([guildId, ticketNumber])
   @@index([guildId, status, createdAt(sort: Desc)])
@@ -208,4 +217,38 @@ model ResponseTemplate {
 
   @@unique([guildId, name])
   @@index([guildId, createdAt])
+}
+
+
+model TicketFeedback {
+  id               String   @id @default(cuid())
+  ticketId         String   @unique
+  guildId          String
+  userId           String
+  rating           Int
+  commentEncrypted String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  guild  GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+
+  @@index([guildId, createdAt(sort: Desc)])
+  @@index([guildId, rating])
+}
+
+model GuildBlacklist {
+  id              String   @id @default(cuid())
+  guildId         String
+  userId          String
+  reasonEncrypted String?
+  expiresAt       DateTime?
+  createdById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  guild GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+
+  @@unique([guildId, userId])
+  @@index([guildId, expiresAt])
 }
