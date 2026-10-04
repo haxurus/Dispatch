@@ -21,6 +21,7 @@ model GuildSettings {
   tickets    Ticket[]
   panelRoles PanelRoleBinding[]
   panelAudit PanelAudit[]
+  responseTemplates ResponseTemplate[]
 }
 
 model TicketCategory {
@@ -30,8 +31,13 @@ model TicketCategory {
   description       String?
   discordCategoryId String?
   staffRoleIds      String[] @default([])
-  maxOpenPerUser    Int      @default(1)
-  enabled           Boolean  @default(true)
+  maxOpenPerUser           Int      @default(1)
+  formFields               Json     @default("[]")
+  slaFirstResponseMinutes  Int?
+  slaResolutionMinutes     Int?
+  inactivityCloseHours     Int?
+  inactivityWarningMinutes Int?
+  enabled                  Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -70,16 +76,23 @@ model Ticket {
   priority     String   @default("NORMAL")
   subject      String?
   claimedById  String?
-  closeReason  String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  closedAt     DateTime?
+  closeReason            String?
+  formDataEncrypted      String?
+  firstStaffResponseAt   DateTime?
+  lastActivityAt         DateTime @default(now())
+  inactivityWarnedAt     DateTime?
+  slaFirstBreachedAt     DateTime?
+  slaResolutionBreachedAt DateTime?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  closedAt               DateTime?
 
   guild      GuildSettings  @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
   category   TicketCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   members    TicketMember[]
   audit      TicketAudit[]
   transcript Transcript?
+  notes      TicketNote[]
 
   @@unique([guildId, ticketNumber])
   @@index([guildId, status, createdAt(sort: Desc)])
@@ -166,4 +179,33 @@ model PanelAudit {
   guild GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
 
   @@index([guildId, createdAt(sort: Desc)])
+}
+
+
+model TicketNote {
+  id               String   @id @default(cuid())
+  ticketId         String
+  guildId          String
+  authorId         String
+  contentEncrypted String
+  createdAt        DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt(sort: Desc)])
+  @@index([guildId, createdAt(sort: Desc)])
+}
+
+model ResponseTemplate {
+  id               String   @id @default(cuid())
+  guildId          String
+  name             String
+  contentEncrypted String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  guild GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+
+  @@unique([guildId, name])
+  @@index([guildId, createdAt])
 }
