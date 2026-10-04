@@ -98,7 +98,8 @@ export default function GuildDashboardPage() {
           <p className="muted">Il tuo livello attuale: {access ?? '...'}</p>
         </div>
         <div className="actions">
-          <a className="button" href={`/dashboard/${guildId}/tickets`}>Configura ticket</a>
+          <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets`}>Configura ticket</a>
           <a className="button secondary" href="/dashboard">Torna ai server</a>
         </div>
       </div>
