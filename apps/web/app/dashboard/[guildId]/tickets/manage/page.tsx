@@ -60,7 +60,9 @@ export default function TicketManagementPage() {
           <p className="muted">{total} ticket trovati</p>
         </div>
         <div className="actions">
-          <a className="button" href={`/dashboard/${guildId}/tickets`}>Configura ticket</a>
+          <a className="button" href={`/dashboard/${guildId}/tickets/analytics`}>Analytics</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets`}>Configura ticket</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets/security`}>Blacklist</a>
           <a className="button secondary" href={`/dashboard/${guildId}`}>Server</a>
         </div>
       </div>
