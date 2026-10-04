@@ -539,7 +539,8 @@ export async function sendTicketReply(
       where: { id: ticket.id },
       data: {
         lastActivityAt: new Date(),
-        inactivityWarnedAt: null
+        inactivityWarnedAt: null,
+        ...(ticket.firstStaffResponseAt ? {} : { firstStaffResponseAt: new Date() })
       }
     }),
     prisma.ticketAudit.create({
