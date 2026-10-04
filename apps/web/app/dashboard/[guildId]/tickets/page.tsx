@@ -18,6 +18,16 @@ type DiscordRole = {
   position: number;
 };
 
+type FormField = {
+  id: string;
+  label: string;
+  style: 'SHORT' | 'PARAGRAPH';
+  required: boolean;
+  placeholder: string | null;
+  minLength: number | null;
+  maxLength: number | null;
+};
+
 type Category = {
   id: string;
   name: string;
@@ -25,6 +35,11 @@ type Category = {
   discordCategoryId: string | null;
   staffRoleIds: string[];
   maxOpenPerUser: number;
+  formFields: FormField[];
+  slaFirstResponseMinutes: number | null;
+  slaResolutionMinutes: number | null;
+  inactivityCloseHours: number | null;
+  inactivityWarningMinutes: number | null;
   enabled: boolean;
 };
 
@@ -39,14 +54,25 @@ type Panel = {
   enabled: boolean;
 };
 
-const emptyCategory = {
+type ResponseTemplate = {
+  id: string;
+  name: string;
+  content: string;
+};
+
+const newCategory = () => ({
   name: '',
   description: '',
   discordCategoryId: '',
   staffRoleIds: [] as string[],
   maxOpenPerUser: 1,
+  formFields: [] as FormField[],
+  slaFirstResponseMinutes: null as number | null,
+  slaResolutionMinutes: null as number | null,
+  inactivityCloseHours: null as number | null,
+  inactivityWarningMinutes: null as number | null,
   enabled: true
-};
+});
 
 const emptyPanel = {
   name: '',
@@ -57,6 +83,10 @@ const emptyPanel = {
   enabled: true
 };
 
+function nullableNumber(value: string) {
+  return value === '' ? null : Number(value);
+}
+
 export default function TicketConfigurationPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
@@ -66,8 +96,12 @@ export default function TicketConfigurationPage() {
   const [roles, setRoles] = useState<DiscordRole[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [panels, setPanels] = useState<Panel[]>([]);
-  const [categoryForm, setCategoryForm] = useState(emptyCategory);
+  const [templates, setTemplates] = useState<ResponseTemplate[]>([]);
+  const [categoryForm, setCategoryForm] = useState(newCategory);
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [panelForm, setPanelForm] = useState(emptyPanel);
+  const [templateName, setTemplateName] = useState('');
+  const [templateContent, setTemplateContent] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -75,11 +109,12 @@ export default function TicketConfigurationPage() {
   const load = async () => {
     setError('');
 
-    const [accessResponse, resourcesResponse, categoriesResponse, panelsResponse] = await Promise.all([
+    const [accessResponse, resourcesResponse, categoriesResponse, panelsResponse, templatesResponse] = await Promise.all([
       fetch(`/backend/api/guilds/${guildId}/access`),
       fetch(`/backend/api/guilds/${guildId}/resources`),
       fetch(`/backend/api/guilds/${guildId}/categories`),
-      fetch(`/backend/api/guilds/${guildId}/panels`)
+      fetch(`/backend/api/guilds/${guildId}/panels`),
+      fetch(`/backend/api/guilds/${guildId}/response-templates`)
     ]);
 
     if (accessResponse.status === 401) {
@@ -87,7 +122,7 @@ export default function TicketConfigurationPage() {
       return;
     }
 
-    if (![accessResponse, resourcesResponse, categoriesResponse, panelsResponse].every((response) => response.ok)) {
+    if (![accessResponse, resourcesResponse, categoriesResponse, panelsResponse, templatesResponse].every((response) => response.ok)) {
       setError('Impossibile caricare la configurazione ticket.');
       return;
     }
@@ -100,21 +135,49 @@ export default function TicketConfigurationPage() {
     setRoles(resources.roles);
     setCategories(await categoriesResponse.json());
     setPanels(await panelsResponse.json());
+    setTemplates(await templatesResponse.json());
   };
 
   useEffect(() => {
     void load();
   }, [guildId]);
 
-  const createCategory = async (event: FormEvent) => {
+  const resetCategory = () => {
+    setCategoryForm(newCategory());
+    setEditingCategoryId(null);
+  };
+
+  const editCategory = (category: Category) => {
+    setEditingCategoryId(category.id);
+    setCategoryForm({
+      name: category.name,
+      description: category.description ?? '',
+      discordCategoryId: category.discordCategoryId ?? '',
+      staffRoleIds: category.staffRoleIds,
+      maxOpenPerUser: category.maxOpenPerUser,
+      formFields: category.formFields ?? [],
+      slaFirstResponseMinutes: category.slaFirstResponseMinutes,
+      slaResolutionMinutes: category.slaResolutionMinutes,
+      inactivityCloseHours: category.inactivityCloseHours,
+      inactivityWarningMinutes: category.inactivityWarningMinutes,
+      enabled: category.enabled
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const saveCategory = async (event: FormEvent) => {
     event.preventDefault();
     setBusy('category');
     setError('');
     setNotice('');
 
     try {
-      const response = await fetch(`/backend/api/guilds/${guildId}/categories`, {
-        method: 'POST',
+      const path = editingCategoryId
+        ? `/backend/api/guilds/${guildId}/categories/${editingCategoryId}`
+        : `/backend/api/guilds/${guildId}/categories`;
+
+      const response = await fetch(path, {
+        method: editingCategoryId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...categoryForm,
@@ -125,16 +188,55 @@ export default function TicketConfigurationPage() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setError(`Creazione categoria fallita: ${body.error ?? response.status}`);
+        setError(`Salvataggio categoria fallito: ${body.error ?? response.status}`);
         return;
       }
 
-      setCategoryForm(emptyCategory);
-      setNotice('Categoria creata.');
+      resetCategory();
+      setNotice(editingCategoryId ? 'Categoria aggiornata.' : 'Categoria creata.');
       await load();
     } finally {
       setBusy('');
     }
+  };
+
+  const addFormField = () => {
+    if (categoryForm.formFields.length >= 5) return;
+    const used = new Set(categoryForm.formFields.map((field) => field.id));
+    let index = 1;
+    while (used.has(`q${index}`)) index += 1;
+
+    setCategoryForm({
+      ...categoryForm,
+      formFields: [
+        ...categoryForm.formFields,
+        {
+          id: `q${index}`,
+          label: '',
+          style: 'SHORT',
+          required: true,
+          placeholder: null,
+          minLength: null,
+          maxLength: 1000
+        }
+      ]
+    });
+  };
+
+  const updateFormField = (index: number, patch: Partial<FormField>) => {
+    setCategoryForm({
+      ...categoryForm,
+      formFields: categoryForm.formFields.map((field, current) =>
+        current === index ? { ...field, ...patch } : field
+      )
+    });
+  };
+
+  const removeFormField = (index: number) => {
+    setCategoryForm({
+      ...categoryForm,
+      formFields: categoryForm.formFields.filter((_, current) => current !== index)
+    });
   };
 
   const deleteCategory = async (categoryId: string) => {
@@ -238,6 +340,57 @@ export default function TicketConfigurationPage() {
     }
   };
 
+  const createTemplate = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy('template');
+    setError('');
+    setNotice('');
+
+    try {
+      const response = await fetch(`/backend/api/guilds/${guildId}/response-templates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: templateName, content: templateContent })
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        setError(`Creazione template fallita: ${body.error ?? response.status}`);
+        return;
+      }
+
+      setTemplateName('');
+      setTemplateContent('');
+      setNotice('Template creato.');
+      await load();
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const deleteTemplate = async (templateId: string) => {
+    setBusy(`template:${templateId}`);
+    setError('');
+    setNotice('');
+
+    try {
+      const response = await fetch(`/backend/api/guilds/${guildId}/response-templates/${templateId}`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        setError(`Eliminazione template fallita: ${body.error ?? response.status}`);
+        return;
+      }
+
+      setNotice('Template eliminato.');
+      await load();
+    } finally {
+      setBusy('');
+    }
+  };
+
   if (access && access !== 'ADMIN' && access !== 'OWNER') {
     return (
       <main className="shell">
@@ -259,7 +412,7 @@ export default function TicketConfigurationPage() {
         <div>
           <p className="eyebrow">Dispatch</p>
           <h1>Configurazione ticket</h1>
-          <p className="muted">Categorie, staff e pannelli di apertura.</p>
+          <p className="muted">Categorie, form, SLA, automazioni e pannelli di apertura.</p>
         </div>
         <div className="actions">
           <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
@@ -271,8 +424,13 @@ export default function TicketConfigurationPage() {
       {notice && <p className="success">{notice}</p>}
 
       <section className="grid settings-grid">
-        <form className="card form" onSubmit={createCategory}>
-          <h2>Nuova categoria ticket</h2>
+        <form className="card form" onSubmit={saveCategory}>
+          <div className="row">
+            <h2>{editingCategoryId ? 'Modifica categoria' : 'Nuova categoria ticket'}</h2>
+            {editingCategoryId && (
+              <button className="secondary" type="button" onClick={resetCategory}>Annulla</button>
+            )}
+          </div>
 
           <label>
             Nome
@@ -336,8 +494,145 @@ export default function TicketConfigurationPage() {
             />
           </label>
 
+          <fieldset>
+            <legend>Form iniziale, massimo 5 domande</legend>
+            <div className="form">
+              {categoryForm.formFields.map((field, index) => (
+                <div className="subcard form" key={field.id}>
+                  <div className="row">
+                    <strong>Domanda {index + 1}</strong>
+                    <button className="danger" type="button" onClick={() => removeFormField(index)}>Rimuovi</button>
+                  </div>
+                  <label>
+                    Etichetta
+                    <input
+                      required
+                      maxLength={45}
+                      value={field.label}
+                      onChange={(event) => updateFormField(index, { label: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Tipo
+                    <select
+                      value={field.style}
+                      onChange={(event) => updateFormField(index, { style: event.target.value as 'SHORT' | 'PARAGRAPH' })}
+                    >
+                      <option value="SHORT">Risposta breve</option>
+                      <option value="PARAGRAPH">Paragrafo</option>
+                    </select>
+                  </label>
+                  <label>
+                    Placeholder
+                    <input
+                      maxLength={100}
+                      value={field.placeholder ?? ''}
+                      onChange={(event) => updateFormField(index, { placeholder: event.target.value || null })}
+                    />
+                  </label>
+                  <label className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={field.required}
+                      onChange={(event) => updateFormField(index, { required: event.target.checked })}
+                    />
+                    Obbligatoria
+                  </label>
+                  <div className="row">
+                    <label>
+                      Min caratteri
+                      <input
+                        type="number"
+                        min={0}
+                        max={4000}
+                        value={field.minLength ?? ''}
+                        onChange={(event) => updateFormField(index, { minLength: nullableNumber(event.target.value) })}
+                      />
+                    </label>
+                    <label>
+                      Max caratteri
+                      <input
+                        type="number"
+                        min={1}
+                        max={4000}
+                        value={field.maxLength ?? ''}
+                        onChange={(event) => updateFormField(index, { maxLength: nullableNumber(event.target.value) })}
+                      />
+                    </label>
+                  </div>
+                </div>
+              ))}
+              <button
+                className="secondary"
+                type="button"
+                disabled={categoryForm.formFields.length >= 5}
+                onClick={addFormField}
+              >
+                Aggiungi domanda
+              </button>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>SLA e automazioni</legend>
+            <div className="grid compact-grid">
+              <label>
+                SLA prima risposta, minuti
+                <input
+                  type="number"
+                  min={1}
+                  max={10080}
+                  value={categoryForm.slaFirstResponseMinutes ?? ''}
+                  onChange={(event) => setCategoryForm({
+                    ...categoryForm,
+                    slaFirstResponseMinutes: nullableNumber(event.target.value)
+                  })}
+                />
+              </label>
+              <label>
+                SLA risoluzione, minuti
+                <input
+                  type="number"
+                  min={1}
+                  max={43200}
+                  value={categoryForm.slaResolutionMinutes ?? ''}
+                  onChange={(event) => setCategoryForm({
+                    ...categoryForm,
+                    slaResolutionMinutes: nullableNumber(event.target.value)
+                  })}
+                />
+              </label>
+              <label>
+                Auto-chiusura inattività, ore
+                <input
+                  type="number"
+                  min={1}
+                  max={720}
+                  value={categoryForm.inactivityCloseHours ?? ''}
+                  onChange={(event) => setCategoryForm({
+                    ...categoryForm,
+                    inactivityCloseHours: nullableNumber(event.target.value)
+                  })}
+                />
+              </label>
+              <label>
+                Preavviso auto-chiusura, minuti
+                <input
+                  type="number"
+                  min={1}
+                  max={1440}
+                  value={categoryForm.inactivityWarningMinutes ?? ''}
+                  onChange={(event) => setCategoryForm({
+                    ...categoryForm,
+                    inactivityWarningMinutes: nullableNumber(event.target.value)
+                  })}
+                />
+              </label>
+            </div>
+          </fieldset>
+
           <button disabled={busy === 'category'} type="submit">
-            {busy === 'category' ? 'Creazione...' : 'Crea categoria'}
+            {busy === 'category' ? 'Salvataggio...' : editingCategoryId ? 'Salva modifiche' : 'Crea categoria'}
           </button>
         </form>
 
@@ -418,15 +713,21 @@ export default function TicketConfigurationPage() {
               <h3>{category.name}</h3>
               <p>{category.description || 'Nessuna descrizione.'}</p>
               <p className="muted">
-                Limite: {category.maxOpenPerUser} • Ruoli staff: {category.staffRoleIds.length}
+                Limite: {category.maxOpenPerUser} · Domande: {category.formFields?.length ?? 0} · Ruoli staff: {category.staffRoleIds.length}
               </p>
-              <button
-                className="danger"
-                disabled={busy === `category:${category.id}`}
-                onClick={() => void deleteCategory(category.id)}
-              >
-                Elimina
-              </button>
+              <p className="muted">
+                SLA risposta: {category.slaFirstResponseMinutes ?? 'off'} · SLA risoluzione: {category.slaResolutionMinutes ?? 'off'} · Auto-close: {category.inactivityCloseHours ? `${category.inactivityCloseHours}h` : 'off'}
+              </p>
+              <div className="actions">
+                <button className="secondary" onClick={() => editCategory(category)}>Modifica</button>
+                <button
+                  className="danger"
+                  disabled={busy === `category:${category.id}`}
+                  onClick={() => void deleteCategory(category.id)}
+                >
+                  Elimina
+                </button>
+              </div>
             </article>
           ))}
         </div>
@@ -440,7 +741,7 @@ export default function TicketConfigurationPage() {
               <h3>{panel.name}</h3>
               <p>{panel.title}</p>
               <p className="muted">
-                Categorie: {panel.categoryIds.length} • {panel.messageId ? 'Pubblicato' : 'Non pubblicato'}
+                Categorie: {panel.categoryIds.length} · {panel.messageId ? 'Pubblicato' : 'Non pubblicato'}
               </p>
               <div className="actions">
                 <button
@@ -459,6 +760,53 @@ export default function TicketConfigurationPage() {
               </div>
             </article>
           ))}
+        </div>
+      </section>
+
+      <section className="grid settings-grid">
+        <form className="card form" onSubmit={createTemplate}>
+          <h2>Nuovo template risposta</h2>
+          <label>
+            Nome
+            <input
+              required
+              maxLength={80}
+              value={templateName}
+              onChange={(event) => setTemplateName(event.target.value)}
+            />
+          </label>
+          <label>
+            Messaggio
+            <textarea
+              required
+              maxLength={2000}
+              value={templateContent}
+              onChange={(event) => setTemplateContent(event.target.value)}
+            />
+          </label>
+          <button disabled={busy === 'template'} type="submit">Crea template</button>
+        </form>
+
+        <div className="card">
+          <h2>Template disponibili</h2>
+          <div className="member-list">
+            {templates.map((template) => (
+              <div className="list-item" key={template.id}>
+                <div className="row">
+                  <strong>{template.name}</strong>
+                  <button
+                    className="danger"
+                    disabled={busy === `template:${template.id}`}
+                    onClick={() => void deleteTemplate(template.id)}
+                  >
+                    Elimina
+                  </button>
+                </div>
+                <p className="muted preserve">{template.content}</p>
+              </div>
+            ))}
+            {templates.length === 0 && <p className="muted">Nessun template configurato.</p>}
+          </div>
         </div>
       </section>
     </main>
