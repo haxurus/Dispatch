@@ -9,6 +9,9 @@ import {
   generateTranscript,
   removeTicketMember,
   reopenTicket,
+  sendTicketReply,
+  setTicketPriority,
+  setTicketStatus,
   transferTicketCategory,
   unclaimTicket
 } from './ticket-operations.js';
@@ -132,7 +135,7 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
       }
 
 
-      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/tickets\/([a-z0-9]{20,32})\/(unclaim|assign|transfer|member-add|member-remove|close|reopen|transcript)$/i);
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/tickets\/([a-z0-9]{20,32})\/(unclaim|assign|transfer|member-add|member-remove|close|reopen|transcript|status|priority|reply)$/i);
       if (req.method === 'POST' && match) {
         const guildId = match[1]!;
         const ticketId = match[2]!;
@@ -174,6 +177,53 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
           case 'transcript':
             result = await generateTranscript(client, guildId, ticketId, actorId);
             break;
+          case 'status': {
+            const status = body.status;
+            if (!['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'].includes(String(status))) {
+              throw new Error('INVALID_STATUS');
+            }
+            result = await setTicketStatus(
+              client,
+              guildId,
+              ticketId,
+              actorId,
+              status as 'OPEN' | 'WAITING' | 'IN_PROGRESS' | 'RESOLVED'
+            );
+            break;
+          }
+          case 'priority': {
+            const priority = body.priority;
+            if (!['LOW', 'NORMAL', 'HIGH', 'URGENT'].includes(String(priority))) {
+              throw new Error('INVALID_PRIORITY');
+            }
+            result = await setTicketPriority(
+              client,
+              guildId,
+              ticketId,
+              actorId,
+              priority as 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'
+            );
+            break;
+          }
+          case 'reply': {
+            const content = body.content;
+            const templateId = body.templateId;
+            if (typeof content !== 'string' || !content.trim() || content.length > 2000) {
+              throw new Error('INVALID_REPLY');
+            }
+            if (templateId !== undefined && templateId !== null && (typeof templateId !== 'string' || !CUID.test(templateId))) {
+              throw new Error('INVALID_TEMPLATE_ID');
+            }
+            result = await sendTicketReply(
+              client,
+              guildId,
+              ticketId,
+              actorId,
+              content,
+              typeof templateId === 'string' ? templateId : null
+            );
+            break;
+          }
           default:
             throw new Error('ACTION_NOT_ALLOWED');
         }
