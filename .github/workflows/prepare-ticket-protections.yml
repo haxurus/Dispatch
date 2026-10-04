@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   verify:
-    if: startsWith(github.event.head_commit.message, 'build: verify ticket protections')
+    if: "startsWith(github.event.head_commit.message, 'build: verify ticket protections')"
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
