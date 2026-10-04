@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
@@ -640,8 +640,8 @@ function ensureInternalId(value: string, error: string) {
 }
 
 async function runTicketBotAction<T>(
-  request: Parameters<typeof app.log.info>[0] extends never ? never : any,
-  reply: any,
+  request: FastifyRequest,
+  reply: FastifyReply,
   fn: () => Promise<T>
 ) {
   try {
