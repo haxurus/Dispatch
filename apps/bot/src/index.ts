@@ -71,10 +71,17 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
+let automationRunning = false;
 setInterval(() => {
-  void runTicketAutomations(client).catch((error) => {
-    log.error({ err: error }, 'Ticket automation cycle failed');
-  });
+  if (automationRunning) return;
+  automationRunning = true;
+  void runTicketAutomations(client)
+    .catch((error) => {
+      log.error({ err: error }, 'Ticket automation cycle failed');
+    })
+    .finally(() => {
+      automationRunning = false;
+    });
 }, 60_000).unref();
 
 client.on(Events.Warn, (warning) => log.warn({ warning }, 'Discord client warning'));
