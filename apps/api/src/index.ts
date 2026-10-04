@@ -865,23 +865,24 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
         status: { not: 'CLOSED' }
       }
     }),
-    prisma.ticketAudit.groupBy({
-      by: ['actorId', 'action'],
+    prisma.ticketAudit.findMany({
       where: {
         guildId,
         createdAt: { gte: since },
-        actorId: { not: null },
         action: {
           in: [
             'ticket.claim',
             'ticket.assign',
-            'ticket.close',
             'ticket.first_staff_response',
             'ticket.reply'
           ]
         }
       },
-      _count: { _all: true }
+      select: {
+        actorId: true,
+        action: true,
+        details: true
+      }
     }),
     prisma.ticket.groupBy({
       by: ['claimedById'],
@@ -942,9 +943,21 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
   }>();
 
   for (const event of staffEvents) {
-    if (!event.actorId) continue;
-    const row = staffMap.get(event.actorId) ?? {
-      userId: event.actorId,
+    let staffId = event.actorId;
+
+    if (event.action === 'ticket.assign') {
+      const details = event.details && typeof event.details === 'object' && !Array.isArray(event.details)
+        ? event.details as Record<string, unknown>
+        : null;
+      if (details && typeof details.assigneeId === 'string') {
+        staffId = details.assigneeId;
+      }
+    }
+
+    if (!staffId) continue;
+
+    const row = staffMap.get(staffId) ?? {
+      userId: staffId,
       claims: 0,
       closures: 0,
       firstResponses: 0,
@@ -952,12 +965,11 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
       currentlyAssigned: 0,
       ratings: []
     };
-    const count = event._count._all;
-    if (event.action === 'ticket.claim' || event.action === 'ticket.assign') row.claims += count;
-    if (event.action === 'ticket.close') row.closures += count;
-    if (event.action === 'ticket.first_staff_response') row.firstResponses += count;
-    if (event.action === 'ticket.reply') row.replies += count;
-    staffMap.set(event.actorId, row);
+
+    if (event.action === 'ticket.claim' || event.action === 'ticket.assign') row.claims += 1;
+    if (event.action === 'ticket.first_staff_response') row.firstResponses += 1;
+    if (event.action === 'ticket.reply') row.replies += 1;
+    staffMap.set(staffId, row);
   }
 
   for (const assignment of currentAssignments) {
@@ -976,7 +988,7 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
   }
 
   for (const ticket of tickets) {
-    if (!ticket.claimedById || !ticket.feedback) continue;
+    if (!ticket.claimedById) continue;
     const row = staffMap.get(ticket.claimedById) ?? {
       userId: ticket.claimedById,
       claims: 0,
@@ -986,7 +998,8 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
       currentlyAssigned: 0,
       ratings: []
     };
-    row.ratings.push(ticket.feedback.rating);
+    if (ticket.closedAt) row.closures += 1;
+    if (ticket.feedback) row.ratings.push(ticket.feedback.rating);
     staffMap.set(ticket.claimedById, row);
   }
 
