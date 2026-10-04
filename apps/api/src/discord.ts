@@ -12,16 +12,36 @@ const internalKey = required('BOT_INTERNAL_API_KEY');
 const SNOWFLAKE = /^\d{17,20}$/;
 const CUID = /^[a-z0-9]{20,32}$/i;
 
-const api = async <T>(path: string, method: 'GET' | 'POST' = 'GET'): Promise<T> => {
+const api = async <T>(
+  path: string,
+  method: 'GET' | 'POST' = 'GET',
+  body?: Record<string, unknown>
+): Promise<T> => {
   const response = await fetch(`${internalUrl}${path}`, {
     method,
-    headers: { Authorization: `Bearer ${internalKey}` },
-    signal: AbortSignal.timeout(8_000)
+    headers: {
+      Authorization: `Bearer ${internalKey}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15_000)
   });
+
   if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`Internal bot API failed with status ${response.status}: ${body.slice(0, 300)}`);
+    const responseBody = await response.text().catch(() => '');
+    const error = new Error(
+      `Internal bot API failed with status ${response.status}: ${responseBody.slice(0, 300)}`
+    ) as Error & { status?: number; code?: string };
+    error.status = response.status;
+    try {
+      const parsed = JSON.parse(responseBody) as { error?: string };
+      error.code = parsed.error;
+    } catch {
+      // Ignore malformed internal error body.
+    }
+    throw error;
   }
+
   return response.json() as Promise<T>;
 };
 
@@ -55,3 +75,45 @@ export async function publishPanel(guildId: string, panelId: string) {
     'POST'
   );
 }
+
+function ticketAction<T>(
+  guildId: string,
+  ticketId: string,
+  action: string,
+  body: Record<string, unknown>
+) {
+  return api<T>(
+    `/guilds/${id(guildId)}/tickets/${cuid(ticketId)}/${action}`,
+    'POST',
+    body
+  );
+}
+
+export const unclaimTicket = (guildId: string, ticketId: string, actorId: string) =>
+  ticketAction(guildId, ticketId, 'unclaim', { actorId });
+
+export const assignTicket = (guildId: string, ticketId: string, actorId: string, assigneeId: string) =>
+  ticketAction(guildId, ticketId, 'assign', { actorId, assigneeId });
+
+export const transferTicket = (guildId: string, ticketId: string, actorId: string, categoryId: string) =>
+  ticketAction(guildId, ticketId, 'transfer', { actorId, categoryId });
+
+export const addTicketMember = (guildId: string, ticketId: string, actorId: string, userId: string) =>
+  ticketAction(guildId, ticketId, 'member-add', { actorId, userId });
+
+export const removeTicketMember = (guildId: string, ticketId: string, actorId: string, userId: string) =>
+  ticketAction(guildId, ticketId, 'member-remove', { actorId, userId });
+
+export const closeTicket = (guildId: string, ticketId: string, actorId: string, reason: string | null) =>
+  ticketAction(guildId, ticketId, 'close', { actorId, reason });
+
+export const reopenTicket = (guildId: string, ticketId: string, actorId: string) =>
+  ticketAction(guildId, ticketId, 'reopen', { actorId });
+
+export const generateTranscript = (guildId: string, ticketId: string, actorId: string) =>
+  ticketAction<{ ok: true; messageCount: number }>(
+    guildId,
+    ticketId,
+    'transcript',
+    { actorId }
+  );
