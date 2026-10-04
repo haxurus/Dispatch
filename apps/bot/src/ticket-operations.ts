@@ -3,12 +3,13 @@ import {
   PermissionFlagsBits,
   type Client,
   type GuildMember,
+  type Message,
   type TextChannel
 } from 'discord.js';
 import { prisma } from '@dispatch/db';
 import { encryptText } from './security.js';
 
-const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS'];
+const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 
 const PARTICIPANT_PERMISSIONS = {
   ViewChannel: true,
@@ -424,4 +425,296 @@ export async function reopenTicket(client: Client, guildId: string, ticketId: st
 
 export function ticketIsOpen(status: string) {
   return OPEN_STATUSES.includes(status);
+}
+
+
+export async function setTicketStatus(
+  client: Client,
+  guildId: string,
+  ticketId: string,
+  actorId: string,
+  status: 'OPEN' | 'WAITING' | 'IN_PROGRESS' | 'RESOLVED'
+) {
+  const ticket = await getTicket(guildId, ticketId);
+  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+
+  const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const previousStatus = ticket.status;
+
+  await prisma.$transaction([
+    prisma.ticket.update({
+      where: { id: ticket.id },
+      data: {
+        status,
+        lastActivityAt: new Date(),
+        inactivityWarnedAt: null
+      }
+    }),
+    prisma.ticketAudit.create({
+      data: {
+        ticketId: ticket.id,
+        guildId,
+        actorId,
+        action: 'ticket.status',
+        details: { previousStatus, status }
+      }
+    })
+  ]);
+
+  const labels: Record<string, string> = {
+    OPEN: 'aperto',
+    WAITING: 'in attesa',
+    IN_PROGRESS: 'in lavorazione',
+    RESOLVED: 'risolto'
+  };
+
+  await channel.send({
+    content: 'Stato ticket impostato su **' + labels[status] + '** da <@' + actorId + '>.',
+    allowedMentions: { users: [actorId] }
+  }).catch(() => null);
+
+  return { ok: true, status };
+}
+
+export async function setTicketPriority(
+  client: Client,
+  guildId: string,
+  ticketId: string,
+  actorId: string,
+  priority: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'
+) {
+  const ticket = await getTicket(guildId, ticketId);
+  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+
+  const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const previousPriority = ticket.priority;
+
+  await prisma.$transaction([
+    prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { priority }
+    }),
+    prisma.ticketAudit.create({
+      data: {
+        ticketId: ticket.id,
+        guildId,
+        actorId,
+        action: 'ticket.priority',
+        details: { previousPriority, priority }
+      }
+    })
+  ]);
+
+  await channel.send({
+    content: 'Priorita impostata su **' + priority + '** da <@' + actorId + '>.',
+    allowedMentions: { users: [actorId] }
+  }).catch(() => null);
+
+  return { ok: true, priority };
+}
+
+export async function sendTicketReply(
+  client: Client,
+  guildId: string,
+  ticketId: string,
+  actorId: string,
+  content: string,
+  templateId?: string | null
+) {
+  const ticket = await getTicket(guildId, ticketId);
+  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+
+  const trimmed = content.trim().slice(0, 2000);
+  if (!trimmed) throw new Error('EMPTY_REPLY');
+
+  const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
+
+  await channel.send({
+    content: trimmed,
+    allowedMentions: { parse: [], repliedUser: false }
+  });
+
+  await prisma.$transaction([
+    prisma.ticket.update({
+      where: { id: ticket.id },
+      data: {
+        lastActivityAt: new Date(),
+        inactivityWarnedAt: null
+      }
+    }),
+    prisma.ticketAudit.create({
+      data: {
+        ticketId: ticket.id,
+        guildId,
+        actorId,
+        action: 'ticket.reply.template',
+        details: {
+          templateId: templateId ?? null,
+          contentLength: trimmed.length
+        }
+      }
+    })
+  ]);
+
+  return { ok: true };
+}
+
+export async function recordTicketMessage(message: Message) {
+  if (!message.guildId || message.author.bot) return;
+
+  const ticket = await prisma.ticket.findUnique({
+    where: { channelId: message.channelId },
+    include: { category: true }
+  });
+  if (!ticket || ticket.status === 'CLOSED') return;
+
+  let firstStaffResponseAt = ticket.firstStaffResponseAt;
+  if (!firstStaffResponseAt) {
+    const member = message.member ?? await message.guild?.members.fetch(message.author.id).catch(() => null);
+    if (member && hasStaffAccess(member, ticket.category.staffRoleIds)) {
+      firstStaffResponseAt = new Date();
+    }
+  }
+
+  await prisma.ticket.update({
+    where: { id: ticket.id },
+    data: {
+      lastActivityAt: new Date(),
+      inactivityWarnedAt: null,
+      ...(firstStaffResponseAt && !ticket.firstStaffResponseAt ? { firstStaffResponseAt } : {})
+    }
+  });
+
+  if (firstStaffResponseAt && !ticket.firstStaffResponseAt) {
+    await audit(ticket.id, ticket.guildId, message.author.id, 'ticket.first_staff_response', {
+      messageId: message.id
+    });
+  }
+}
+
+async function sendAutomationNotice(
+  client: Client,
+  guildId: string,
+  channelId: string,
+  content: string,
+  roleIds: string[] = []
+) {
+  const { channel } = await getGuildChannel(client, guildId, channelId);
+  await channel.send({
+    content,
+    allowedMentions: { roles: roleIds, users: [], parse: [] }
+  }).catch(() => null);
+}
+
+export async function runTicketAutomations(client: Client) {
+  const tickets = await prisma.ticket.findMany({
+    where: { status: { in: OPEN_STATUSES } },
+    include: { category: true },
+    take: 500
+  });
+
+  const now = Date.now();
+
+  for (const ticket of tickets) {
+    const category = ticket.category;
+
+    if (
+      category.slaFirstResponseMinutes &&
+      !ticket.firstStaffResponseAt &&
+      !ticket.slaFirstBreachedAt &&
+      ticket.createdAt.getTime() + category.slaFirstResponseMinutes * 60_000 <= now
+    ) {
+      await prisma.ticket.update({
+        where: { id: ticket.id },
+        data: { slaFirstBreachedAt: new Date() }
+      });
+
+      const mentions = category.staffRoleIds.map((roleId) => '<@&' + roleId + '>').join(' ');
+      await sendAutomationNotice(
+        client,
+        ticket.guildId,
+        ticket.channelId,
+        (mentions ? mentions + ' ' : '') + 'SLA prima risposta superato per il ticket #' + ticket.ticketNumber + '.',
+        category.staffRoleIds
+      );
+      await audit(
+        ticket.id,
+        ticket.guildId,
+        client.user?.id ?? ticket.openerId,
+        'ticket.sla.first_response_breached',
+        { minutes: category.slaFirstResponseMinutes }
+      );
+    }
+
+    if (
+      category.slaResolutionMinutes &&
+      ticket.status !== 'RESOLVED' &&
+      !ticket.slaResolutionBreachedAt &&
+      ticket.createdAt.getTime() + category.slaResolutionMinutes * 60_000 <= now
+    ) {
+      await prisma.ticket.update({
+        where: { id: ticket.id },
+        data: { slaResolutionBreachedAt: new Date() }
+      });
+
+      const mentions = category.staffRoleIds.map((roleId) => '<@&' + roleId + '>').join(' ');
+      await sendAutomationNotice(
+        client,
+        ticket.guildId,
+        ticket.channelId,
+        (mentions ? mentions + ' ' : '') + 'SLA risoluzione superato per il ticket #' + ticket.ticketNumber + '.',
+        category.staffRoleIds
+      );
+      await audit(
+        ticket.id,
+        ticket.guildId,
+        client.user?.id ?? ticket.openerId,
+        'ticket.sla.resolution_breached',
+        { minutes: category.slaResolutionMinutes }
+      );
+    }
+
+    if (!category.inactivityCloseHours) continue;
+
+    const closeAt = ticket.lastActivityAt.getTime() + category.inactivityCloseHours * 3_600_000;
+    const warningMinutes = category.inactivityWarningMinutes ?? 0;
+    const warnAt = closeAt - warningMinutes * 60_000;
+
+    if (
+      warningMinutes > 0 &&
+      !ticket.inactivityWarnedAt &&
+      now >= warnAt &&
+      now < closeAt
+    ) {
+      await prisma.ticket.update({
+        where: { id: ticket.id },
+        data: { inactivityWarnedAt: new Date() }
+      });
+
+      await sendAutomationNotice(
+        client,
+        ticket.guildId,
+        ticket.channelId,
+        '<@' + ticket.openerId + '> questo ticket verra chiuso automaticamente tra circa ' +
+          warningMinutes + ' minuti se non ci saranno nuove attivita.'
+      );
+      await audit(
+        ticket.id,
+        ticket.guildId,
+        client.user?.id ?? ticket.openerId,
+        'ticket.inactivity.warning',
+        { warningMinutes }
+      );
+    }
+
+    if (now >= closeAt) {
+      await closeTicket(
+        client,
+        ticket.guildId,
+        ticket.id,
+        client.user?.id ?? ticket.openerId,
+        'Chiuso automaticamente per inattivita.'
+      ).catch(() => null);
+    }
+  }
 }
