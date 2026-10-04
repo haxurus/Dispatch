@@ -273,3 +273,81 @@ legend {
 .facts dd {
   margin: 0;
 }
+
+
+.stat-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stat-card span {
+  color: #9aa7b8;
+  font-size: 13px;
+}
+
+.stat-card strong {
+  font-size: 26px;
+}
+
+.daily-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.daily-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 64px;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.bars {
+  display: grid;
+  gap: 3px;
+}
+
+.bar {
+  min-height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.bar.created {
+  color: #9bc1ff;
+}
+
+.bar.closed {
+  color: #9dd9ae;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 10px 8px;
+  text-align: left;
+  border-bottom: 1px solid #303744;
+  white-space: nowrap;
+}
+
+th {
+  color: #9aa7b8;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
