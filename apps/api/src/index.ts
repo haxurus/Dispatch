@@ -24,11 +24,14 @@ import {
   publishPanel,
   removeTicketMember,
   reopenTicket,
+  sendTicketReply,
+  setTicketPriority,
+  setTicketStatus,
   transferTicket,
   unclaimTicket
 } from './discord.js';
 import { panelAudit } from './audit.js';
-import { decryptText } from './security.js';
+import { decryptText, encryptText } from './security.js';
 
 const app = Fastify({
   trustProxy: 1,
@@ -361,13 +364,63 @@ app.delete('/api/guilds/:guildId/access-bindings/:roleId', async (request, reply
 
 const internalId = z.string().regex(/^[a-z0-9]{20,32}$/i);
 
+const formFieldSchema = z.object({
+  id: z.string().regex(/^[a-z0-9_-]{1,40}$/i),
+  label: z.string().trim().min(1).max(45),
+  style: z.enum(['SHORT', 'PARAGRAPH']).default('SHORT'),
+  required: z.boolean().default(true),
+  placeholder: z.string().trim().max(100).nullable().default(null),
+  minLength: z.number().int().min(0).max(4000).nullable().default(null),
+  maxLength: z.number().int().min(1).max(4000).nullable().default(null)
+}).superRefine((field, ctx) => {
+  if (
+    field.minLength !== null &&
+    field.maxLength !== null &&
+    field.minLength > field.maxLength
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'minLength cannot exceed maxLength',
+      path: ['minLength']
+    });
+  }
+});
+
 const categorySchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().trim().max(500).nullable().default(null),
   discordCategoryId: snowflake.nullable().default(null),
   staffRoleIds: z.array(snowflake).max(20).default([]).refine((items) => new Set(items).size === items.length),
   maxOpenPerUser: z.number().int().min(1).max(10).default(1),
+  formFields: z.array(formFieldSchema).max(5).default([]).refine(
+    (items) => new Set(items.map((item) => item.id)).size === items.length,
+    { message: 'Form field IDs must be unique' }
+  ),
+  slaFirstResponseMinutes: z.number().int().min(1).max(10080).nullable().default(null),
+  slaResolutionMinutes: z.number().int().min(1).max(43200).nullable().default(null),
+  inactivityCloseHours: z.number().int().min(1).max(720).nullable().default(null),
+  inactivityWarningMinutes: z.number().int().min(1).max(1440).nullable().default(null),
   enabled: z.boolean().default(true)
+}).superRefine((value, ctx) => {
+  if (value.inactivityWarningMinutes !== null && value.inactivityCloseHours === null) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Inactivity close must be enabled when a warning is configured',
+      path: ['inactivityWarningMinutes']
+    });
+  }
+
+  if (
+    value.inactivityWarningMinutes !== null &&
+    value.inactivityCloseHours !== null &&
+    value.inactivityWarningMinutes >= value.inactivityCloseHours * 60
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Warning must occur before automatic close',
+      path: ['inactivityWarningMinutes']
+    });
+  }
 });
 
 const panelSchema = z.object({
