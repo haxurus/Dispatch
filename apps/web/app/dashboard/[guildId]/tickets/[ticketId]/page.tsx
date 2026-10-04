@@ -7,6 +7,10 @@ type Category = {
   id: string;
   name: string;
   enabled: boolean;
+  slaFirstResponseMinutes: number | null;
+  slaResolutionMinutes: number | null;
+  inactivityCloseHours: number | null;
+  inactivityWarningMinutes: number | null;
 };
 
 type TicketMember = {
@@ -24,6 +28,19 @@ type TicketAudit = {
   createdAt: string;
 };
 
+type TicketNote = {
+  id: string;
+  authorId: string;
+  content: string;
+  createdAt: string;
+};
+
+type FormAnswer = {
+  id: string;
+  label: string;
+  value: string;
+};
+
 type TicketDetail = {
   id: string;
   ticketNumber: number;
@@ -34,10 +51,16 @@ type TicketDetail = {
   priority: string;
   claimedById: string | null;
   closeReason: string | null;
+  formData: FormAnswer[];
+  firstStaffResponseAt: string | null;
+  lastActivityAt: string;
+  slaFirstBreachedAt: string | null;
+  slaResolutionBreachedAt: string | null;
   createdAt: string;
   closedAt: string | null;
   category: Category;
   members: TicketMember[];
+  notes: TicketNote[];
   audit: TicketAudit[];
   transcript: { messageCount: number; createdAt: string } | null;
 };
@@ -47,17 +70,27 @@ type Me = {
   username: string;
 };
 
+type ResponseTemplate = {
+  id: string;
+  name: string;
+  content: string;
+};
+
 export default function TicketDetailPage() {
   const params = useParams<{ guildId: string; ticketId: string }>();
   const { guildId, ticketId } = params;
 
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [templates, setTemplates] = useState<ResponseTemplate[]>([]);
   const [me, setMe] = useState<Me | null>(null);
   const [assigneeId, setAssigneeId] = useState('');
   const [memberId, setMemberId] = useState('');
   const [closeReason, setCloseReason] = useState('');
   const [transferCategoryId, setTransferCategoryId] = useState('');
+  const [noteContent, setNoteContent] = useState('');
+  const [replyContent, setReplyContent] = useState('');
+  const [templateId, setTemplateId] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -65,9 +98,10 @@ export default function TicketDetailPage() {
   const load = async () => {
     setError('');
 
-    const [ticketResponse, categoriesResponse, meResponse] = await Promise.all([
+    const [ticketResponse, categoriesResponse, templatesResponse, meResponse] = await Promise.all([
       fetch(`/backend/api/guilds/${guildId}/tickets/${ticketId}`),
       fetch(`/backend/api/guilds/${guildId}/categories`),
+      fetch(`/backend/api/guilds/${guildId}/response-templates`),
       fetch('/backend/api/me')
     ]);
 
@@ -76,7 +110,7 @@ export default function TicketDetailPage() {
       return;
     }
 
-    if (!ticketResponse.ok || !categoriesResponse.ok || !meResponse.ok) {
+    if (!ticketResponse.ok || !categoriesResponse.ok || !templatesResponse.ok || !meResponse.ok) {
       setError('Impossibile caricare il ticket.');
       return;
     }
@@ -84,6 +118,7 @@ export default function TicketDetailPage() {
     const ticketData = await ticketResponse.json();
     setTicket(ticketData);
     setCategories(await categoriesResponse.json());
+    setTemplates(await templatesResponse.json());
     setMe(await meResponse.json());
     setTransferCategoryId(ticketData.categoryId);
     setCloseReason(ticketData.closeReason ?? '');
@@ -150,6 +185,46 @@ export default function TicketDetailPage() {
     if (ok) setMemberId('');
   };
 
+  const addNote = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!noteContent.trim()) return;
+
+    const ok = await action(
+      'note',
+      `/backend/api/guilds/${guildId}/tickets/${ticketId}/notes`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: noteContent })
+      }
+    );
+    if (ok) setNoteContent('');
+  };
+
+  const sendReply = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!templateId && !replyContent.trim()) return;
+
+    const body = templateId
+      ? { templateId }
+      : { content: replyContent };
+
+    const ok = await action(
+      'reply',
+      `/backend/api/guilds/${guildId}/tickets/${ticketId}/reply`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }
+    );
+
+    if (ok) {
+      setReplyContent('');
+      setTemplateId('');
+    }
+  };
+
   if (!ticket) {
     return (
       <main className="shell">
@@ -167,12 +242,19 @@ export default function TicketDetailPage() {
           <p className="eyebrow">Dispatch Ticket</p>
           <h1>#{ticket.ticketNumber} · {ticket.category.name}</h1>
           <p className="muted">
-            Stato: {ticket.status} · Utente: {ticket.openerId}
+            Stato: {ticket.status} · Priorità: {ticket.priority} · Utente: {ticket.openerId}
           </p>
         </div>
         <div className="actions">
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/manage`}>Tutti i ticket</a>
-          <a className="button secondary" href={`https://discord.com/channels/${guildId}/${ticket.channelId}`} target="_blank" rel="noreferrer">Apri Discord</a>
+          <a
+            className="button secondary"
+            href={`https://discord.com/channels/${guildId}/${ticket.channelId}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Apri Discord
+          </a>
         </div>
       </div>
 
@@ -180,8 +262,56 @@ export default function TicketDetailPage() {
       {notice && <p className="success">{notice}</p>}
 
       <section className="grid settings-grid">
+        <article className="card form">
+          <h2>Stato e priorità</h2>
+          <label>
+            Stato
+            <select
+              value={ticket.status}
+              disabled={closed || Boolean(busy)}
+              onChange={(event) => void action(
+                'status',
+                `/backend/api/guilds/${guildId}/tickets/${ticketId}/status`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ status: event.target.value })
+                }
+              )}
+            >
+              <option value="OPEN">Aperto</option>
+              <option value="WAITING">In attesa</option>
+              <option value="IN_PROGRESS">In lavorazione</option>
+              <option value="RESOLVED">Risolto</option>
+              {closed && <option value="CLOSED">Chiuso</option>}
+            </select>
+          </label>
+
+          <label>
+            Priorità
+            <select
+              value={ticket.priority}
+              disabled={closed || Boolean(busy)}
+              onChange={(event) => void action(
+                'priority',
+                `/backend/api/guilds/${guildId}/tickets/${ticketId}/priority`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ priority: event.target.value })
+                }
+              )}
+            >
+              <option value="LOW">Bassa</option>
+              <option value="NORMAL">Normale</option>
+              <option value="HIGH">Alta</option>
+              <option value="URGENT">Urgente</option>
+            </select>
+          </label>
+        </article>
+
         <article className="card">
-          <h2>Gestione</h2>
+          <h2>Assegnazione</h2>
           <p><strong>Assegnato:</strong> {ticket.claimedById ?? 'Nessuno'}</p>
           <div className="actions">
             {!closed && me && (
@@ -231,7 +361,7 @@ export default function TicketDetailPage() {
           )}
         </article>
 
-        <article className="card">
+        <article className="card form">
           <h2>Categoria</h2>
           <select
             value={transferCategoryId}
@@ -259,6 +389,36 @@ export default function TicketDetailPage() {
             >
               Trasferisci
             </button>
+          )}
+        </article>
+      </section>
+
+      <section className="grid settings-grid">
+        <article className="card">
+          <h2>SLA</h2>
+          <dl className="facts">
+            <div><dt>Creato</dt><dd>{new Date(ticket.createdAt).toLocaleString()}</dd></div>
+            <div><dt>Ultima attività</dt><dd>{new Date(ticket.lastActivityAt).toLocaleString()}</dd></div>
+            <div><dt>Prima risposta staff</dt><dd>{ticket.firstStaffResponseAt ? new Date(ticket.firstStaffResponseAt).toLocaleString() : 'Non ancora'}</dd></div>
+            <div><dt>SLA prima risposta</dt><dd>{ticket.slaFirstBreachedAt ? 'Superato' : ticket.category.slaFirstResponseMinutes ? `${ticket.category.slaFirstResponseMinutes} min` : 'Disattivato'}</dd></div>
+            <div><dt>SLA risoluzione</dt><dd>{ticket.slaResolutionBreachedAt ? 'Superato' : ticket.category.slaResolutionMinutes ? `${ticket.category.slaResolutionMinutes} min` : 'Disattivato'}</dd></div>
+            <div><dt>Auto-chiusura</dt><dd>{ticket.category.inactivityCloseHours ? `${ticket.category.inactivityCloseHours} ore` : 'Disattivata'}</dd></div>
+          </dl>
+        </article>
+
+        <article className="card">
+          <h2>Risposte iniziali</h2>
+          {ticket.formData?.length ? (
+            <dl className="facts">
+              {ticket.formData.map((answer) => (
+                <div key={answer.id}>
+                  <dt>{answer.label}</dt>
+                  <dd className="preserve">{answer.value || 'Nessuna risposta'}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p className="muted">Nessun form configurato per questo ticket.</p>
           )}
         </article>
 
@@ -289,6 +449,88 @@ export default function TicketDetailPage() {
             )}
           </div>
         </article>
+      </section>
+
+      <section className="grid settings-grid">
+        <form className="card form" onSubmit={sendReply}>
+          <h2>Risposta staff</h2>
+          <label>
+            Template
+            <select
+              value={templateId}
+              disabled={closed}
+              onChange={(event) => {
+                setTemplateId(event.target.value);
+                if (event.target.value) setReplyContent('');
+              }}
+            >
+              <option value="">Messaggio personalizzato</option>
+              {templates.map((template) => (
+                <option value={template.id} key={template.id}>{template.name}</option>
+              ))}
+            </select>
+          </label>
+
+          {!templateId && (
+            <label>
+              Messaggio
+              <textarea
+                required
+                maxLength={2000}
+                disabled={closed}
+                value={replyContent}
+                onChange={(event) => setReplyContent(event.target.value)}
+              />
+            </label>
+          )}
+
+          {templateId && (
+            <p className="muted preserve">
+              {templates.find((template) => template.id === templateId)?.content}
+            </p>
+          )}
+
+          <button disabled={closed || busy === 'reply'} type="submit">Invia nel ticket</button>
+        </form>
+
+        <form className="card form" onSubmit={addNote}>
+          <h2>Nota interna</h2>
+          <textarea
+            required
+            maxLength={4000}
+            value={noteContent}
+            onChange={(event) => setNoteContent(event.target.value)}
+            placeholder="Visibile solo nel pannello staff."
+          />
+          <button disabled={busy === 'note'} type="submit">Aggiungi nota</button>
+
+          <div className="audit-list">
+            {ticket.notes.map((note) => (
+              <div className="list-item" key={note.id}>
+                <div className="row">
+                  <div>
+                    <strong>{note.authorId}</strong>
+                    <div className="muted">{new Date(note.createdAt).toLocaleString()}</div>
+                  </div>
+                  <button
+                    className="danger"
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => void action(
+                      `note-delete:${note.id}`,
+                      `/backend/api/guilds/${guildId}/tickets/${ticketId}/notes/${note.id}`,
+                      { method: 'DELETE' }
+                    )}
+                  >
+                    Elimina
+                  </button>
+                </div>
+                <p className="preserve">{note.content}</p>
+              </div>
+            ))}
+            {ticket.notes.length === 0 && <p className="muted">Nessuna nota interna.</p>}
+          </div>
+        </form>
       </section>
 
       <section className="card">
