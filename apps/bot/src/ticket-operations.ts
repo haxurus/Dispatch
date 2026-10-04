@@ -1053,6 +1053,22 @@ export async function reserveTicketOpen(
   }
 }
 
+export async function hasTicketOpenReservation(guildId: string, userId: string) {
+  const settings = await prisma.guildSettings.findUnique({
+    where: { guildId },
+    select: { antiSpamEnabled: true }
+  });
+  if (!settings) throw new Error('GUILD_NOT_FOUND');
+  if (!settings.antiSpamEnabled) return true;
+
+  const guard = await prisma.ticketUserGuard.findUnique({
+    where: { guildId_userId: { guildId, userId } },
+    select: { pendingUntil: true }
+  });
+
+  return Boolean(guard?.pendingUntil && guard.pendingUntil.getTime() > Date.now());
+}
+
 export async function releaseTicketOpenReservation(guildId: string, userId: string) {
   await prisma.ticketUserGuard.updateMany({
     where: { guildId, userId },
