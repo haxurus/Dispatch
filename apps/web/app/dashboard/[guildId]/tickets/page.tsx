@@ -261,7 +261,10 @@ export default function TicketConfigurationPage() {
           <h1>Configurazione ticket</h1>
           <p className="muted">Categorie, staff e pannelli di apertura.</p>
         </div>
-        <a className="button secondary" href={`/dashboard/${guildId}`}>Permessi dashboard</a>
+        <div className="actions">
+          <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
+          <a className="button secondary" href={`/dashboard/${guildId}`}>Permessi dashboard</a>
+        </div>
       </div>
 
       {error && <p className="error">{error}</p>}
