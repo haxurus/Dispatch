@@ -17,7 +17,7 @@ import {
 } from 'discord.js';
 import { prisma } from '@dispatch/db';
 import { encryptText } from './security.js';
-import { closeTicket, setTicketStatus, unclaimTicket } from './ticket-operations.js';
+import { closeTicket, reopenTicket, setTicketStatus, unclaimTicket } from './ticket-operations.js';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 const PANEL_SELECT_PREFIX = 'dispatch:open:';
@@ -28,6 +28,9 @@ const WAITING_PREFIX = 'dispatch:waiting:';
 const RESOLVED_PREFIX = 'dispatch:resolved:';
 const CLOSE_PREFIX = 'dispatch:close:';
 const CLOSE_MODAL_PREFIX = 'dispatch:close-modal:';
+const FEEDBACK_PREFIX = 'dispatch:feedback:';
+const FEEDBACK_MODAL_PREFIX = 'dispatch:feedback-modal:';
+const REOPEN_PREFIX = 'dispatch:reopen:';
 
 type FormField = {
   id: string;
@@ -205,6 +208,24 @@ async function createTicket(
   if (!category) {
     await interaction.editReply('Questa categoria non è più disponibile.');
     return;
+  }
+
+  const blacklist = await prisma.guildBlacklist.findUnique({
+    where: {
+      guildId_userId: {
+        guildId: interaction.guildId,
+        userId: interaction.user.id
+      }
+    }
+  });
+
+  if (blacklist) {
+    if (!blacklist.expiresAt || blacklist.expiresAt.getTime() > Date.now()) {
+      await interaction.editReply('Non puoi aprire ticket in questo server.');
+      return;
+    }
+
+    await prisma.guildBlacklist.delete({ where: { id: blacklist.id } }).catch(() => null);
   }
 
   const openCount = await prisma.ticket.count({
@@ -540,6 +561,147 @@ async function statusTicketInteraction(
   });
 }
 
+
+async function promptFeedback(interaction: ButtonInteraction) {
+  if (!interaction.guildId) return;
+
+  const raw = interaction.customId.slice(FEEDBACK_PREFIX.length);
+  const separator = raw.lastIndexOf(':');
+  const ticketId = separator > 0 ? raw.slice(0, separator) : '';
+  const rating = Number(separator > 0 ? raw.slice(separator + 1) : '');
+
+  if (!ticketId || !Number.isInteger(rating) || rating < 1 || rating > 5) {
+    await interaction.reply({ content: 'Feedback non valido.', ephemeral: true });
+    return;
+  }
+
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId: interaction.guildId },
+    include: { category: true }
+  });
+
+  if (
+    !ticket ||
+    ticket.status !== 'CLOSED' ||
+    !ticket.category.feedbackEnabled ||
+    ticket.openerId !== interaction.user.id
+  ) {
+    await interaction.reply({ content: 'Non puoi inviare feedback per questo ticket.', ephemeral: true });
+    return;
+  }
+
+  const comment = new TextInputBuilder()
+    .setCustomId('comment')
+    .setLabel('Commento opzionale')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(false)
+    .setMaxLength(1500)
+    .setPlaceholder('Cosa è andato bene o cosa possiamo migliorare?');
+
+  const modal = new ModalBuilder()
+    .setCustomId(FEEDBACK_MODAL_PREFIX + ticket.id + ':' + rating)
+    .setTitle('Feedback ticket - ' + rating + '/5')
+    .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(comment));
+
+  await interaction.showModal(modal);
+}
+
+async function submitFeedback(interaction: ModalSubmitInteraction) {
+  if (!interaction.guildId) return;
+
+  const raw = interaction.customId.slice(FEEDBACK_MODAL_PREFIX.length);
+  const separator = raw.lastIndexOf(':');
+  const ticketId = separator > 0 ? raw.slice(0, separator) : '';
+  const rating = Number(separator > 0 ? raw.slice(separator + 1) : '');
+
+  if (!ticketId || !Number.isInteger(rating) || rating < 1 || rating > 5) {
+    await interaction.reply({ content: 'Feedback non valido.', ephemeral: true });
+    return;
+  }
+
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId: interaction.guildId },
+    include: { category: true }
+  });
+
+  if (
+    !ticket ||
+    ticket.status !== 'CLOSED' ||
+    !ticket.category.feedbackEnabled ||
+    ticket.openerId !== interaction.user.id
+  ) {
+    await interaction.reply({ content: 'Non puoi inviare feedback per questo ticket.', ephemeral: true });
+    return;
+  }
+
+  const comment = interaction.fields.getTextInputValue('comment').trim().slice(0, 1500);
+
+  await prisma.$transaction([
+    prisma.ticketFeedback.upsert({
+      where: { ticketId: ticket.id },
+      update: {
+        rating,
+        commentEncrypted: comment ? encryptText(comment) : null,
+        userId: interaction.user.id
+      },
+      create: {
+        ticketId: ticket.id,
+        guildId: interaction.guildId,
+        userId: interaction.user.id,
+        rating,
+        commentEncrypted: comment ? encryptText(comment) : null
+      }
+    }),
+    prisma.ticketAudit.create({
+      data: {
+        ticketId: ticket.id,
+        guildId: interaction.guildId,
+        actorId: interaction.user.id,
+        action: 'ticket.feedback',
+        details: { rating, commentProvided: Boolean(comment) }
+      }
+    })
+  ]);
+
+  await interaction.reply({
+    content: 'Grazie. Il tuo feedback è stato registrato.',
+    ephemeral: true
+  });
+}
+
+async function reopenTicketInteraction(interaction: ButtonInteraction) {
+  if (!interaction.guildId) return;
+
+  const ticketId = interaction.customId.slice(REOPEN_PREFIX.length);
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId: interaction.guildId }
+  });
+
+  if (!ticket || ticket.openerId !== interaction.user.id) {
+    await interaction.reply({ content: 'Non puoi riaprire questo ticket.', ephemeral: true });
+    return;
+  }
+
+  try {
+    await reopenTicket(
+      interaction.client,
+      interaction.guildId,
+      ticket.id,
+      interaction.user.id,
+      true
+    );
+    await interaction.reply({ content: 'Ticket riaperto.', ephemeral: true });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : 'REOPEN_FAILED';
+    const message = code === 'REOPEN_WINDOW_EXPIRED'
+      ? 'La finestra di riapertura è scaduta.'
+      : code === 'REOPEN_DISABLED'
+        ? 'La riapertura utente non è abilitata per questa categoria.'
+        : 'Non è possibile riaprire questo ticket.';
+    await interaction.reply({ content: message, ephemeral: true }).catch(() => null);
+  }
+}
+
 async function promptCloseTicket(interaction: ButtonInteraction) {
   if (!interaction.guild || !interaction.guildId || !interaction.channelId) return;
 
@@ -669,6 +831,24 @@ export async function handleTicketInteraction(
     interaction.customId.startsWith(RESOLVED_PREFIX)
   ) {
     await statusTicketInteraction(interaction, 'RESOLVED');
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith(FEEDBACK_PREFIX)) {
+    await promptFeedback(interaction);
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith(REOPEN_PREFIX)) {
+    await reopenTicketInteraction(interaction);
+    return true;
+  }
+
+  if (
+    interaction.isModalSubmit() &&
+    interaction.customId.startsWith(FEEDBACK_MODAL_PREFIX)
+  ) {
+    await submitFeedback(interaction);
     return true;
   }
 
