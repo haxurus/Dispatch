@@ -1,19 +1,70 @@
-import { Client, GatewayIntentBits } from 'discord.js';
-import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { Client, Events, GatewayIntentBits } from 'discord.js';
 import pino from 'pino';
+import { prisma } from '@dispatch/db';
+import { config } from './config.js';
+import { startInternalApi } from './internal-api.js';
 
-const log = pino({ level: process.env.LOG_LEVEL ?? 'info' });
-const tokenFile = process.env.DISCORD_TOKEN_FILE;
-if (!tokenFile) throw new Error('DISCORD_TOKEN_FILE is required');
+const log = pino({ level: config.logLevel });
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-client.once('ready', () => log.info({ user: client.user?.tag }, 'Dispatch bot ready'));
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers
+  ]
+});
 
-const port = Number(process.env.BOT_INTERNAL_PORT ?? 3002);
-createServer((_req, res) => {
-  res.writeHead(client.isReady() ? 200 : 503, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ ok: client.isReady() }));
-}).listen(port, '0.0.0.0');
+async function ensureGuild(guild: { id: string; name: string }) {
+  await prisma.guildSettings.upsert({
+    where: { guildId: guild.id },
+    update: { guildName: guild.name },
+    create: { guildId: guild.id, guildName: guild.name }
+  });
+}
 
-await client.login(readFileSync(tokenFile, 'utf8').trim());
+let internalApi: ReturnType<typeof startInternalApi> | null = null;
+
+client.once(Events.ClientReady, async (ready) => {
+  log.info({ user: ready.user.tag, guilds: ready.guilds.cache.size }, 'Dispatch bot ready');
+
+  for (const guild of ready.guilds.cache.values()) {
+    await ensureGuild(guild);
+  }
+
+  internalApi = startInternalApi(client, config.internalApiKey, config.internalApiPort);
+});
+
+client.on(Events.GuildCreate, async (guild) => {
+  await ensureGuild(guild);
+  log.info({ guildId: guild.id, guildName: guild.name }, 'Dispatch joined guild');
+});
+
+client.on(Events.GuildUpdate, async (_oldGuild, newGuild) => {
+  await ensureGuild(newGuild);
+});
+
+client.on(Events.Warn, (warning) => log.warn({ warning }, 'Discord client warning'));
+client.on(Events.Error, (error) => log.error({ err: error }, 'Discord client error'));
+
+const shutdown = async (signal: string) => {
+  log.info({ signal }, 'Shutting down');
+  client.destroy();
+  if (internalApi) {
+    await new Promise<void>((resolve) => internalApi!.close(() => resolve()));
+  }
+  await prisma.$disconnect();
+  process.exit(0);
+};
+
+process.on('unhandledRejection', (reason) => {
+  log.error({ reason }, 'Unhandled promise rejection');
+});
+
+process.on('uncaughtException', (error) => {
+  log.fatal({ err: error }, 'Uncaught exception');
+  process.exit(1);
+});
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+
+await client.login(config.discordToken);
