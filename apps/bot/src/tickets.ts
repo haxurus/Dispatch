@@ -4,19 +4,26 @@ import {
   ButtonStyle,
   ChannelType,
   EmbedBuilder,
+  ModalBuilder,
   PermissionFlagsBits,
   StringSelectMenuBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   type ButtonInteraction,
   type Client,
   type GuildMember,
+  type ModalSubmitInteraction,
   type StringSelectMenuInteraction
 } from 'discord.js';
 import { prisma } from '@dispatch/db';
+import { closeTicket, unclaimTicket } from './ticket-operations.js';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS'];
 const PANEL_SELECT_PREFIX = 'dispatch:open:';
 const CLAIM_PREFIX = 'dispatch:claim:';
+const UNCLAIM_PREFIX = 'dispatch:unclaim:';
 const CLOSE_PREFIX = 'dispatch:close:';
+const CLOSE_MODAL_PREFIX = 'dispatch:close-modal:';
 
 function safeChannelPart(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 24) || 'user';
@@ -28,6 +35,10 @@ function ticketControls(ticketId: string) {
       .setCustomId(`${CLAIM_PREFIX}${ticketId}`)
       .setLabel('Claim')
       .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`${UNCLAIM_PREFIX}${ticketId}`)
+      .setLabel('Unclaim')
+      .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`${CLOSE_PREFIX}${ticketId}`)
       .setLabel('Chiudi')
@@ -300,7 +311,35 @@ async function claimTicket(interaction: ButtonInteraction) {
   await interaction.reply({ content: `Ticket preso in carico da <@${interaction.user.id}>.` });
 }
 
-async function closeTicket(interaction: ButtonInteraction) {
+async function unclaimTicketInteraction(interaction: ButtonInteraction) {
+  if (!interaction.guildId) return;
+
+  try {
+    const ticketId = interaction.customId.slice(UNCLAIM_PREFIX.length);
+    const ticket = await prisma.ticket.findFirst({
+      where: { id: ticketId, guildId: interaction.guildId },
+      include: { category: true }
+    });
+    if (!ticket) {
+      await interaction.reply({ content: 'Ticket non disponibile.', ephemeral: true });
+      return;
+    }
+
+    const member = await interaction.guild!.members.fetch(interaction.user.id);
+    if (!hasStaffAccess(member, ticket.category.staffRoleIds)) {
+      await interaction.reply({ content: 'Non hai i permessi per rilasciare questo ticket.', ephemeral: true });
+      return;
+    }
+
+    await unclaimTicket(interaction.client, interaction.guildId, ticketId, interaction.user.id);
+    await interaction.reply({ content: 'Ticket rilasciato.', ephemeral: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'INTERNAL_ERROR';
+    await interaction.reply({ content: `Operazione non riuscita: ${message}`, ephemeral: true }).catch(() => null);
+  }
+}
+
+async function promptCloseTicket(interaction: ButtonInteraction) {
   if (!interaction.guild || !interaction.guildId || !interaction.channelId) return;
 
   const ticketId = interaction.customId.slice(CLOSE_PREFIX.length);
@@ -322,41 +361,51 @@ async function closeTicket(interaction: ButtonInteraction) {
     return;
   }
 
-  await interaction.deferReply();
+  const reason = new TextInputBuilder()
+    .setCustomId('reason')
+    .setLabel('Motivo della chiusura')
+    .setStyle(TextInputStyle.Paragraph)
+    .setRequired(false)
+    .setMaxLength(1000)
+    .setPlaceholder('Opzionale');
 
-  await prisma.$transaction([
-    prisma.ticket.update({
-      where: { id: ticket.id },
-      data: {
-        status: 'CLOSED',
-        closedAt: new Date()
-      }
-    }),
-    prisma.ticketAudit.create({
-      data: {
-        ticketId: ticket.id,
-        guildId: interaction.guildId,
-        actorId: interaction.user.id,
-        action: 'ticket.close',
-        details: {}
-      }
-    })
-  ]);
+  const modal = new ModalBuilder()
+    .setCustomId(`${CLOSE_MODAL_PREFIX}${ticket.id}`)
+    .setTitle(`Chiudi ticket #${ticket.ticketNumber}`)
+    .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reason));
 
-  const channel = interaction.channel;
-  if (channel && 'permissionOverwrites' in channel) {
-    await channel.permissionOverwrites.edit(ticket.openerId, {
-      SendMessages: false
-    }).catch(() => null);
-  }
-  if (channel && 'setName' in channel) {
-    await channel.setName(`closed-${String(ticket.ticketNumber).padStart(4, '0')}`).catch(() => null);
-  }
-
-  await interaction.editReply(`Ticket chiuso da <@${interaction.user.id}>.`);
+  await interaction.showModal(modal);
 }
 
-export async function handleTicketInteraction(interaction: StringSelectMenuInteraction | ButtonInteraction) {
+async function submitCloseTicket(interaction: ModalSubmitInteraction) {
+  if (!interaction.guildId) return;
+
+  const ticketId = interaction.customId.slice(CLOSE_MODAL_PREFIX.length);
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId: interaction.guildId },
+    include: { category: true }
+  });
+
+  if (!ticket || ticket.status === 'CLOSED') {
+    await interaction.reply({ content: 'Il ticket è già chiuso o non esiste.', ephemeral: true });
+    return;
+  }
+
+  const member = await interaction.guild!.members.fetch(interaction.user.id);
+  const allowed = interaction.user.id === ticket.openerId ||
+    hasStaffAccess(member, ticket.category.staffRoleIds);
+  if (!allowed) {
+    await interaction.reply({ content: 'Non hai i permessi per chiudere questo ticket.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  const reason = interaction.fields.getTextInputValue('reason').trim() || null;
+  await closeTicket(interaction.client, interaction.guildId, ticket.id, interaction.user.id, reason);
+  await interaction.editReply('Ticket chiuso e transcript aggiornato.');
+}
+
+export async function handleTicketInteraction(interaction: StringSelectMenuInteraction | ButtonInteraction | ModalSubmitInteraction) {
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith(PANEL_SELECT_PREFIX)) {
     await openTicket(interaction);
     return true;
@@ -367,8 +416,18 @@ export async function handleTicketInteraction(interaction: StringSelectMenuInter
     return true;
   }
 
+  if (interaction.isButton() && interaction.customId.startsWith(UNCLAIM_PREFIX)) {
+    await unclaimTicketInteraction(interaction);
+    return true;
+  }
+
   if (interaction.isButton() && interaction.customId.startsWith(CLOSE_PREFIX)) {
-    await closeTicket(interaction);
+    await promptCloseTicket(interaction);
+    return true;
+  }
+
+  if (interaction.isModalSubmit() && interaction.customId.startsWith(CLOSE_MODAL_PREFIX)) {
+    await submitCloseTicket(interaction);
     return true;
   }
 
