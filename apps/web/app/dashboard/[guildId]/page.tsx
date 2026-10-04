@@ -97,7 +97,10 @@ export default function GuildDashboardPage() {
           <h1>Permessi dashboard</h1>
           <p className="muted">Il tuo livello attuale: {access ?? '...'}</p>
         </div>
-        <a className="button secondary" href="/dashboard">Torna ai server</a>
+        <div className="actions">
+          <a className="button" href={`/dashboard/${guildId}/tickets`}>Configura ticket</a>
+          <a className="button secondary" href="/dashboard">Torna ai server</a>
+        </div>
       </div>
 
       {error && <p className="error">{error}</p>}
