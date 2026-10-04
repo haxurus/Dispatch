@@ -431,10 +431,12 @@ export async function closeTicket(
       components
     }).catch(() => null);
 
-    await prisma.ticket.update({
-      where: { id: ticket.id },
-      data: { feedbackRequestedAt: new Date() }
-    });
+    if (ticket.category.feedbackEnabled) {
+      await prisma.ticket.update({
+        where: { id: ticket.id },
+        data: { feedbackRequestedAt: new Date() }
+      });
+    }
   }
 
   await generateTranscript(client, guildId, ticket.id).catch(() => null);
