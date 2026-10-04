@@ -1,0 +1,14 @@
+node_modules/
+.next/
+dist/
+.env
+*.log
+coverage/
+.DS_Store
+secrets/*
+!secrets/README.md
+backups/
+*.dump
+*.sql.gz
+dispatch_deploy
+dispatch_deploy.pub
