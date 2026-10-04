@@ -44,7 +44,7 @@ client.on(Events.GuildUpdate, async (_oldGuild, newGuild) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isStringSelectMenu() && !interaction.isButton()) return;
+  if (!interaction.isStringSelectMenu() && !interaction.isButton() && !interaction.isModalSubmit()) return;
 
   try {
     await handleTicketInteraction(interaction);
