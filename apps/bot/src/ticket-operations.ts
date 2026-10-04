@@ -634,7 +634,18 @@ export async function sendTicketReply(
           contentLength: trimmed.length
         }
       }
-    })
+    }),
+    ...(!ticket.firstStaffResponseAt ? [
+      prisma.ticketAudit.create({
+        data: {
+          ticketId: ticket.id,
+          guildId,
+          actorId,
+          action: 'ticket.first_staff_response',
+          details: { source: 'dashboard' }
+        }
+      })
+    ] : [])
   ]);
 
   return { ok: true };
