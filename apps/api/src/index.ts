@@ -713,6 +713,23 @@ app.put('/api/guilds/:guildId/categories/:categoryId', async (request, reply) =>
       formFields: JSON.parse(JSON.stringify(formFields))
     }
   });
+  if (!category.enabled) {
+    const settings = await prisma.guildSettings.findUnique({
+      where: { guildId },
+      select: { mainMenuCategoryIds: true }
+    });
+
+    if (settings?.mainMenuCategoryIds.includes(category.id)) {
+      await prisma.guildSettings.update({
+        where: { guildId },
+        data: {
+          mainMenuCategoryIds: settings.mainMenuCategoryIds.filter((id) => id !== category.id),
+          mainMenuMessageId: null
+        }
+      });
+    }
+  }
+
   await panelAudit(request, session, guildId, 'ticket_category.update', {
     categoryId,
     name: category.name
