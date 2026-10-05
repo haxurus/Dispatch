@@ -32,10 +32,15 @@ import {
   unclaimTicket
 } from './discord.js';
 import { panelAudit } from './audit.js';
-import { decryptText, encryptText } from './security.js';
+import { decryptText, encryptText, unprotectJson } from './security.js';
+
+const isUniqueViolation = (error: unknown) =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
 
 const app = Fastify({
-  trustProxy: 1,
+  // edge -> web -> api are private hops; request.ip is the first public
+  // address, i.e. the client set by edge (rate limit and audit ipHash).
+  trustProxy: 'loopback, linklocal, uniquelocal',
   bodyLimit: 32 * 1024,
   requestTimeout: 15_000,
   connectionTimeout: 10_000,
@@ -171,7 +176,7 @@ app.get('/auth/discord/callback', async (request, reply) => {
   const stateMatches = Boolean(
     query.success &&
     stateCookie &&
-    query.data.state.length === stateCookie.length &&
+    Buffer.byteLength(query.data.state) === Buffer.byteLength(stateCookie) &&
     crypto.timingSafeEqual(Buffer.from(query.data.state), Buffer.from(stateCookie))
   );
 
@@ -319,6 +324,11 @@ app.put('/api/guilds/:guildId/access-bindings/:roleId', async (request, reply) =
       error: 'INVALID_BODY',
       details: parsed.error.flatten()
     });
+  }
+
+  // @everyone shares the guild id: binding it would grant the level to every member.
+  if (roleId === guildId) {
+    return reply.code(400).send({ error: 'EVERYONE_ROLE_NOT_ALLOWED' });
   }
 
   const resources = await getGuildResources(guildId);
@@ -1302,6 +1312,7 @@ app.post('/api/guilds/:guildId/response-templates', async (request, reply) => {
       content: parsed.data.content
     });
   } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
     request.log.warn({ err: error }, 'Response template creation failed');
     return reply.code(409).send({ error: 'TEMPLATE_NAME_CONFLICT' });
   }
@@ -1337,7 +1348,8 @@ app.put('/api/guilds/:guildId/response-templates/:templateId', async (request, r
     });
 
     return { id: template.id, name: template.name, content: parsed.data.content };
-  } catch {
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
     return reply.code(409).send({ error: 'TEMPLATE_NAME_CONFLICT' });
   }
 });
@@ -1740,11 +1752,12 @@ app.get('/api/guilds/:guildId/panel-audit', async (request, reply) => {
   const session = await requireGuild(request, reply, guildId, 'ADMIN');
   if (!session) return;
 
-  return prisma.panelAudit.findMany({
+  const entries = await prisma.panelAudit.findMany({
     where: { guildId },
     orderBy: { createdAt: 'desc' },
     take: 200
   });
+  return entries.map((entry) => ({ ...entry, details: unprotectJson(entry.details) }));
 });
 
 await app.listen({

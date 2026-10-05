@@ -9,7 +9,7 @@ import {
   type Message,
   type TextChannel
 } from 'discord.js';
-import { prisma } from '@dispatch/db';
+import { prisma, type Prisma } from '@dispatch/db';
 import { encryptText } from './security.js';
 import { assertTranscriptRetention, lockTicket } from './retention.js';
 import { reserveTicketOpen, consumeTicketOpenReservation, commitTicketOpen,
@@ -17,12 +17,27 @@ import { reserveTicketOpen, consumeTicketOpenReservation, commitTicketOpen,
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 
+// Staff actions are only valid on active tickets: REOPENING is owned by the
+// reopen flow until it completes, CLOSED by close/feedback/reopen.
+function assertTicketActive(status: string) {
+  if (status === 'CLOSED') throw new Error('TICKET_CLOSED');
+  if (!OPEN_STATUSES.includes(status)) throw new Error('TICKET_REOPENING');
+}
+
+// Threads escape the close lock, transcripts and activity tracking.
+const THREAD_DENY = {
+  CreatePublicThreads: false,
+  CreatePrivateThreads: false,
+  SendMessagesInThreads: false
+} as const;
+
 const PARTICIPANT_PERMISSIONS = {
   ViewChannel: true,
   SendMessages: true,
   ReadMessageHistory: true,
   AttachFiles: true,
-  EmbedLinks: true
+  EmbedLinks: true,
+  ...THREAD_DENY
 } as const;
 
 const STAFF_PERMISSIONS = {
@@ -109,7 +124,7 @@ async function audit(ticketId: string, guildId: string, actorId: string, action:
 
 export async function unclaimTicket(client: Client, guildId: string, ticketId: string, actorId: string) {
   const ticket = await getTicket(guildId, ticketId);
-  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+  assertTicketActive(ticket.status);
   if (!ticket.claimedById) return { ok: true, claimedById: null, status: ticket.status };
 
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
@@ -136,7 +151,7 @@ export async function unclaimTicket(client: Client, guildId: string, ticketId: s
 
 export async function assignTicket(client: Client, guildId: string, ticketId: string, actorId: string, assigneeId: string) {
   const ticket = await getTicket(guildId, ticketId);
-  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+  assertTicketActive(ticket.status);
 
   const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const assignee = await guild.members.fetch(assigneeId).catch(() => null);
@@ -169,7 +184,7 @@ export async function assignTicket(client: Client, guildId: string, ticketId: st
 
 export async function transferTicketCategory(client: Client, guildId: string, ticketId: string, actorId: string, categoryId: string) {
   const ticket = await getTicket(guildId, ticketId);
-  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+  assertTicketActive(ticket.status);
 
   const category = await prisma.ticketCategory.findFirst({
     where: { id: categoryId, guildId, enabled: true }
@@ -225,7 +240,7 @@ export async function transferTicketCategory(client: Client, guildId: string, ti
 
 export async function addTicketMember(client: Client, guildId: string, ticketId: string, actorId: string, userId: string) {
   const ticket = await getTicket(guildId, ticketId);
-  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+  assertTicketActive(ticket.status);
 
   const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const member = await guild.members.fetch(userId).catch(() => null);
@@ -381,22 +396,24 @@ export async function closeTicket(
   reason: string | null
 ) {
   const ticket = await getTicket(guildId, ticketId);
-  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+  assertTicketActive(ticket.status);
 
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const trimmedReason = reason?.trim().slice(0, 1000) || null;
 
-  await prisma.$transaction([
-    prisma.ticket.update({
-      where: { id: ticket.id },
+  // Conditional write: a concurrent close (opener, staff, auto-close) loses
+  // instead of duplicating audit/messages and moving the retention clock.
+  await prisma.$transaction(async (tx) => {
+    const changed = await tx.ticket.updateMany({
+      where: { id: ticket.id, status: { in: OPEN_STATUSES } },
       data: {
         status: 'CLOSED',
-        claimedById: ticket.claimedById,
         closeReason: encryptText(trimmedReason),
         closedAt: new Date()
       }
-    }),
-    prisma.ticketAudit.create({
+    });
+    if (changed.count !== 1) throw new Error('TICKET_CLOSED');
+    await tx.ticketAudit.create({
       data: {
         ticketId: ticket.id,
         guildId,
@@ -404,11 +421,11 @@ export async function closeTicket(
         action: 'ticket.close',
         details: { reasonProvided: Boolean(trimmedReason) }
       }
-    })
-  ]);
+    });
+  });
 
   for (const member of ticket.members) {
-    await channel.permissionOverwrites.edit(member.userId, { SendMessages: false }).catch(() => null);
+    await channel.permissionOverwrites.edit(member.userId, { SendMessages: false, ...THREAD_DENY }).catch(() => null);
   }
 
   await channel.setName(`closed-${String(ticket.ticketNumber).padStart(4, '0')}`).catch(() => null);
@@ -522,7 +539,7 @@ export async function setTicketStatus(
   status: 'OPEN' | 'WAITING' | 'IN_PROGRESS' | 'RESOLVED'
 ) {
   const ticket = await getTicket(guildId, ticketId);
-  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+  assertTicketActive(ticket.status);
 
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const previousStatus = ticket.status;
@@ -570,7 +587,7 @@ export async function setTicketPriority(
   priority: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT'
 ) {
   const ticket = await getTicket(guildId, ticketId);
-  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+  assertTicketActive(ticket.status);
 
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const previousPriority = ticket.priority;
@@ -608,7 +625,7 @@ export async function sendTicketReply(
   templateId?: string | null
 ) {
   const ticket = await getTicket(guildId, ticketId);
-  if (ticket.status === 'CLOSED') throw new Error('TICKET_CLOSED');
+  assertTicketActive(ticket.status);
 
   const trimmed = content.trim().slice(0, 2000);
   if (!trimmed) throw new Error('EMPTY_REPLY');
@@ -721,155 +738,164 @@ export async function runTicketAutomations(client: Client) {
 
   for (;;) {
     const tickets = await prisma.ticket.findMany({
-      where: { status: { in: OPEN_STATUSES } },
+      where: { status: { in: OPEN_STATUSES }, ...(cursor ? { id: { gt: cursor } } : {}) },
       include: { category: true },
       orderBy: { id: 'asc' },
-      take: 200,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {})
+      take: 200
     });
 
     if (!tickets.length) break;
 
     for (const ticket of tickets) {
-      const category = ticket.category;
-
-      if (
-        category.slaFirstResponseMinutes &&
-        !ticket.firstStaffResponseAt &&
-        !ticket.slaFirstBreachedAt &&
-        ticket.createdAt.getTime() + category.slaFirstResponseMinutes * 60_000 <= now
-      ) {
-        await prisma.ticket.update({
-          where: { id: ticket.id },
-          data: { slaFirstBreachedAt: new Date() }
-        });
-
-        const mentions = category.staffRoleIds.map((roleId) => '<@&' + roleId + '>').join(' ');
-        await sendAutomationNotice(
-          client,
-          ticket.guildId,
-          ticket.channelId,
-          (mentions ? mentions + ' ' : '') + 'SLA prima risposta superato per il ticket #' + ticket.ticketNumber + '.',
-          category.staffRoleIds
-        );
-        await audit(
-          ticket.id,
-          ticket.guildId,
-          client.user?.id ?? ticket.openerId,
-          'ticket.sla.first_response_breached',
-          { minutes: category.slaFirstResponseMinutes }
-        );
-      }
-
-      if (
-        category.slaResolutionMinutes &&
-        ticket.status !== 'RESOLVED' &&
-        !ticket.slaResolutionBreachedAt &&
-        ticket.createdAt.getTime() + category.slaResolutionMinutes * 60_000 <= now
-      ) {
-        await prisma.ticket.update({
-          where: { id: ticket.id },
-          data: { slaResolutionBreachedAt: new Date() }
-        });
-
-        const mentions = category.staffRoleIds.map((roleId) => '<@&' + roleId + '>').join(' ');
-        await sendAutomationNotice(
-          client,
-          ticket.guildId,
-          ticket.channelId,
-          (mentions ? mentions + ' ' : '') + 'SLA risoluzione superato per il ticket #' + ticket.ticketNumber + '.',
-          category.staffRoleIds
-        );
-        await audit(
-          ticket.id,
-          ticket.guildId,
-          client.user?.id ?? ticket.openerId,
-          'ticket.sla.resolution_breached',
-          { minutes: category.slaResolutionMinutes }
-        );
-      }
-
-      if (
-        category.escalationMinutes &&
-        !ticket.escalatedAt &&
-        ticket.status !== 'RESOLVED' &&
-        ticket.createdAt.getTime() + category.escalationMinutes * 60_000 <= now
-      ) {
-        await prisma.ticket.update({
-          where: { id: ticket.id },
-          data: { escalatedAt: new Date() }
-        });
-
-        const escalationRoles = category.escalationRoleIds.length
-          ? category.escalationRoleIds
-          : category.staffRoleIds;
-        const mentions = escalationRoles.map((roleId) => '<@&' + roleId + '>').join(' ');
-
-        await sendAutomationNotice(
-          client,
-          ticket.guildId,
-          ticket.channelId,
-          (mentions ? mentions + ' ' : '') +
-            'Escalation automatica per il ticket #' + ticket.ticketNumber + '.',
-          escalationRoles
-        );
-        await audit(
-          ticket.id,
-          ticket.guildId,
-          client.user?.id ?? ticket.openerId,
-          'ticket.escalation',
-          { minutes: category.escalationMinutes, roleIds: escalationRoles }
-        );
-      }
-
-      if (category.inactivityCloseHours) {
-        const closeAt = ticket.lastActivityAt.getTime() + category.inactivityCloseHours * 3_600_000;
-        const warningMinutes = category.inactivityWarningMinutes ?? 0;
-        const warnAt = closeAt - warningMinutes * 60_000;
-
-        if (
-          warningMinutes > 0 &&
-          !ticket.inactivityWarnedAt &&
-          now >= warnAt &&
-          now < closeAt
-        ) {
-          await prisma.ticket.update({
-            where: { id: ticket.id },
-            data: { inactivityWarnedAt: new Date() }
-          });
-
-          await sendAutomationNotice(
-            client,
-            ticket.guildId,
-            ticket.channelId,
-            '<@' + ticket.openerId + '> questo ticket verra chiuso automaticamente tra circa ' +
-              warningMinutes + ' minuti se non ci saranno nuove attivita.',
-          [],
-          [ticket.openerId]
-          );
-          await audit(
-            ticket.id,
-            ticket.guildId,
-            client.user?.id ?? ticket.openerId,
-            'ticket.inactivity.warning',
-            { warningMinutes }
-          );
-        }
-
-        if (now >= closeAt) {
-          await closeTicket(
-            client,
-            ticket.guildId,
-            ticket.id,
-            client.user?.id ?? ticket.openerId,
-            'Chiuso automaticamente per inattivita.'
-          ).catch(() => null);
-        }
-      }
+      // One failing ticket must not abort the cycle for the remaining ones.
+      await automateTicket(client, ticket, now).catch(() => null);
     }
 
     cursor = tickets[tickets.length - 1]!.id;
     if (tickets.length < 200) break;
+  }
+}
+
+type AutomationTicket = Prisma.TicketGetPayload<{ include: { category: true } }>;
+
+async function automateTicket(client: Client, ticket: AutomationTicket, now: number) {
+  const category = ticket.category;
+
+  if (
+    category.slaFirstResponseMinutes &&
+    !ticket.firstStaffResponseAt &&
+    !ticket.slaFirstBreachedAt &&
+    ticket.createdAt.getTime() + category.slaFirstResponseMinutes * 60_000 <= now
+  ) {
+    await prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { slaFirstBreachedAt: new Date() }
+    });
+
+    const mentions = category.staffRoleIds.map((roleId) => '<@&' + roleId + '>').join(' ');
+    await sendAutomationNotice(
+      client,
+      ticket.guildId,
+      ticket.channelId,
+      (mentions ? mentions + ' ' : '') + 'SLA prima risposta superato per il ticket #' + ticket.ticketNumber + '.',
+      category.staffRoleIds
+    );
+    await audit(
+      ticket.id,
+      ticket.guildId,
+      client.user?.id ?? ticket.openerId,
+      'ticket.sla.first_response_breached',
+      { minutes: category.slaFirstResponseMinutes }
+    );
+  }
+
+  if (
+    category.slaResolutionMinutes &&
+    ticket.status !== 'RESOLVED' &&
+    !ticket.slaResolutionBreachedAt &&
+    ticket.createdAt.getTime() + category.slaResolutionMinutes * 60_000 <= now
+  ) {
+    await prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { slaResolutionBreachedAt: new Date() }
+    });
+
+    const mentions = category.staffRoleIds.map((roleId) => '<@&' + roleId + '>').join(' ');
+    await sendAutomationNotice(
+      client,
+      ticket.guildId,
+      ticket.channelId,
+      (mentions ? mentions + ' ' : '') + 'SLA risoluzione superato per il ticket #' + ticket.ticketNumber + '.',
+      category.staffRoleIds
+    );
+    await audit(
+      ticket.id,
+      ticket.guildId,
+      client.user?.id ?? ticket.openerId,
+      'ticket.sla.resolution_breached',
+      { minutes: category.slaResolutionMinutes }
+    );
+  }
+
+  if (
+    category.escalationMinutes &&
+    !ticket.escalatedAt &&
+    ticket.status !== 'RESOLVED' &&
+    ticket.createdAt.getTime() + category.escalationMinutes * 60_000 <= now
+  ) {
+    await prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { escalatedAt: new Date() }
+    });
+
+    const escalationRoles = category.escalationRoleIds.length
+      ? category.escalationRoleIds
+      : category.staffRoleIds;
+    const mentions = escalationRoles.map((roleId) => '<@&' + roleId + '>').join(' ');
+
+    await sendAutomationNotice(
+      client,
+      ticket.guildId,
+      ticket.channelId,
+      (mentions ? mentions + ' ' : '') +
+        'Escalation automatica per il ticket #' + ticket.ticketNumber + '.',
+      escalationRoles
+    );
+    await audit(
+      ticket.id,
+      ticket.guildId,
+      client.user?.id ?? ticket.openerId,
+      'ticket.escalation',
+      { minutes: category.escalationMinutes, roleIds: escalationRoles }
+    );
+  }
+
+  if (category.inactivityCloseHours) {
+    const closeAt = ticket.lastActivityAt.getTime() + category.inactivityCloseHours * 3_600_000;
+    const warningMinutes = category.inactivityWarningMinutes ?? 0;
+    const warnAt = closeAt - warningMinutes * 60_000;
+
+    if (
+      warningMinutes > 0 &&
+      !ticket.inactivityWarnedAt &&
+      now >= warnAt &&
+      now < closeAt
+    ) {
+      await prisma.ticket.update({
+        where: { id: ticket.id },
+        data: { inactivityWarnedAt: new Date() }
+      });
+
+      await sendAutomationNotice(
+        client,
+        ticket.guildId,
+        ticket.channelId,
+        '<@' + ticket.openerId + '> questo ticket verra chiuso automaticamente tra circa ' +
+          warningMinutes + ' minuti se non ci saranno nuove attivita.',
+      [],
+      [ticket.openerId]
+      );
+      await audit(
+        ticket.id,
+        ticket.guildId,
+        client.user?.id ?? ticket.openerId,
+        'ticket.inactivity.warning',
+        { warningMinutes }
+      );
+    }
+
+    if (now >= closeAt) {
+      // Re-read: a message may have arrived since this page was loaded.
+      const fresh = await prisma.ticket.findUnique({ where: { id: ticket.id }, select: { lastActivityAt: true } });
+      if (!fresh || now < fresh.lastActivityAt.getTime() + category.inactivityCloseHours * 3_600_000) return;
+      await closeTicket(
+        client,
+        ticket.guildId,
+        ticket.id,
+        client.user?.id ?? ticket.openerId,
+        'Chiuso automaticamente per inattivita.'
+      ).catch(() => null);
+    }
   }
 }
 

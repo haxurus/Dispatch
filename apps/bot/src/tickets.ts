@@ -362,7 +362,8 @@ async function createTicket(
       type: ChannelType.GuildText, parent: category.discordCategoryId ?? undefined,
       topic: ('Dispatch ticket #' + number + ' - ' + userId + ' - ' + category.name).slice(0, 1024),
       permissionOverwrites: [
-        { id: guildId, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: guildId, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.CreatePublicThreads,
+          PermissionFlagsBits.CreatePrivateThreads, PermissionFlagsBits.SendMessagesInThreads] },
         { id: interaction.client.user!.id, type: 1, allow: [...participant, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
         { id: userId, type: 1, allow: participant },
         ...category.staffRoleIds.map((id) => ({ id, type: 0 as const, allow: [...participant, PermissionFlagsBits.ManageMessages] }))
@@ -594,7 +595,7 @@ async function claimTicket(interaction: ButtonInteraction) {
     include: { category: true }
   });
 
-  if (!ticket || ticket.status === 'CLOSED') {
+  if (!ticket || !OPEN_STATUSES.includes(ticket.status)) {
     await interaction.reply({ content: 'Ticket non disponibile.', ephemeral: true });
     return;
   }
@@ -616,21 +617,32 @@ async function claimTicket(interaction: ButtonInteraction) {
     return;
   }
 
-  await prisma.$transaction([
-    prisma.ticket.update({
-      where: { id: ticket.id },
+  // Conditional write: of two concurrent claims only one wins.
+  const claimed = await prisma.$transaction(async (tx) => {
+    const changed = await tx.ticket.updateMany({
+      where: {
+        id: ticket.id,
+        status: { in: OPEN_STATUSES },
+        OR: [{ claimedById: null }, { claimedById: interaction.user.id }]
+      },
       data: { claimedById: interaction.user.id, status: 'IN_PROGRESS' }
-    }),
-    prisma.ticketAudit.create({
+    });
+    if (changed.count !== 1) return false;
+    await tx.ticketAudit.create({
       data: {
         ticketId: ticket.id,
-        guildId: interaction.guildId,
+        guildId: interaction.guildId!,
         actorId: interaction.user.id,
         action: 'ticket.claim',
         details: {}
       }
-    })
-  ]);
+    });
+    return true;
+  });
+  if (!claimed) {
+    await interaction.reply({ content: 'Ticket non disponibile o già preso in carico.', ephemeral: true });
+    return;
+  }
 
   await interaction.reply({
     content: `Ticket preso in carico da <@${interaction.user.id}>.`
@@ -642,7 +654,7 @@ async function unclaimTicketInteraction(interaction: ButtonInteraction) {
 
   const ticketId = interaction.customId.slice(UNCLAIM_PREFIX.length);
   const ticket = await prisma.ticket.findFirst({
-    where: { id: ticketId, guildId: interaction.guildId },
+    where: { id: ticketId, guildId: interaction.guildId, channelId: interaction.channelId },
     include: { category: true }
   });
 
@@ -673,10 +685,10 @@ async function statusTicketInteraction(
   const prefix = status === 'WAITING' ? WAITING_PREFIX : RESOLVED_PREFIX;
   const ticketId = interaction.customId.slice(prefix.length);
   const ticket = await prisma.ticket.findFirst({
-    where: { id: ticketId, guildId: interaction.guildId },
+    where: { id: ticketId, guildId: interaction.guildId, channelId: interaction.channelId },
     include: { category: true }
   });
-  if (!ticket || ticket.status === 'CLOSED') {
+  if (!ticket || !OPEN_STATUSES.includes(ticket.status)) {
     await interaction.reply({ content: 'Ticket non disponibile.', ephemeral: true });
     return;
   }
@@ -847,7 +859,7 @@ async function promptCloseTicket(interaction: ButtonInteraction) {
     include: { category: true }
   });
 
-  if (!ticket || ticket.status === 'CLOSED') {
+  if (!ticket || !OPEN_STATUSES.includes(ticket.status)) {
     await interaction.reply({
       content: 'Il ticket è già chiuso o non esiste.',
       ephemeral: true
@@ -891,7 +903,7 @@ async function submitCloseTicket(interaction: ModalSubmitInteraction) {
     include: { category: true }
   });
 
-  if (!ticket || ticket.status === 'CLOSED') {
+  if (!ticket || !OPEN_STATUSES.includes(ticket.status)) {
     await interaction.reply({
       content: 'Il ticket è già chiuso o non esiste.',
       ephemeral: true
@@ -912,14 +924,14 @@ async function submitCloseTicket(interaction: ModalSubmitInteraction) {
 
   await interaction.deferReply({ ephemeral: true });
   const reason = interaction.fields.getTextInputValue('reason').trim() || null;
-  await closeTicket(
+  const closed = await closeTicket(
     interaction.client,
     interaction.guildId,
     ticket.id,
     interaction.user.id,
     reason
-  );
-  await interaction.editReply('Ticket chiuso e transcript aggiornato.');
+  ).then(() => true, () => false);
+  await interaction.editReply(closed ? 'Ticket chiuso.' : 'Il ticket è già chiuso o non è più disponibile.');
 }
 
 export async function handleTicketInteraction(

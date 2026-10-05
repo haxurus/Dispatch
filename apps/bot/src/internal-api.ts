@@ -44,9 +44,10 @@ function bodySnowflake(body: Record<string, unknown>, key: string) {
 }
 
 function authorized(header: string | undefined, secret: string) {
-  const expected = `Bearer ${secret}`;
-  if (!header || header.length !== expected.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(header), Buffer.from(expected));
+  if (!header) return false;
+  // Fixed-length digests: never throws on byte-length mismatch and leaks no length.
+  const digest = (value: string) => crypto.createHash('sha256').update(value, 'utf8').digest();
+  return crypto.timingSafeEqual(digest(header), digest(`Bearer ${secret}`));
 }
 
 export function startInternalApi(client: Client, secret: string, port = 3002) {
@@ -251,9 +252,12 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
       res.statusCode = 404;
       res.end('{"error":"NOT_FOUND"}');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'INTERNAL_ERROR';
+      // Only stable codes leave the bot; Prisma/Discord exception text stays internal.
+      const raw = error instanceof Error ? error.message : '';
+      const message = /^[A-Z][A-Z0-9_]{1,63}$/.test(raw) ? raw : 'INTERNAL_ERROR';
       res.statusCode = message.endsWith('_NOT_FOUND') ? 404
-        : message === 'TICKET_CLOSED' || message === 'TICKET_NOT_CLOSED' || message === 'CANNOT_REMOVE_OPENER' ? 409
+        : message === 'TICKET_CLOSED' || message === 'TICKET_NOT_CLOSED' || message === 'TICKET_REOPENING'
+          || message === 'CANNOT_REMOVE_OPENER' ? 409
         : 400;
       res.end(JSON.stringify({ error: message }));
     }

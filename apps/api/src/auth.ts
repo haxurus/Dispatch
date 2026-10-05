@@ -162,6 +162,12 @@ export async function requireGuild(
   const session = await requireSession(request, reply);
   if (!session) return null;
 
+  // Membership first, so non-members cannot probe which guilds have the bot installed.
+  if (!session.guilds.some((guild) => guild.id === guildId)) {
+    reply.code(403).send({ error: 'FORBIDDEN', required: minimum, access: null });
+    return null;
+  }
+
   const installed = await prisma.guildSettings.findUnique({
     where: { guildId },
     select: { guildId: true }

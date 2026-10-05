@@ -28,8 +28,10 @@ export function decryptText(value: string | null | undefined): string | null {
   if (!value.startsWith(PREFIX)) return value;
   const [ivB64, tagB64, dataB64] = value.slice(PREFIX.length).split('.');
   if (!ivB64 || !tagB64 || !dataB64) throw new Error('Invalid encrypted payload');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64url'));
-  decipher.setAuthTag(Buffer.from(tagB64, 'base64url'));
+  const tag = Buffer.from(tagB64, 'base64url');
+  if (tag.length !== 16) throw new Error('Invalid encrypted payload');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64url'), { authTagLength: 16 });
+  decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64url')), decipher.final()]).toString('utf8');
 }
 

@@ -11,6 +11,7 @@ const internalUrl = required('BOT_INTERNAL_URL').replace(/\/$/, '');
 const internalKey = required('BOT_INTERNAL_API_KEY');
 const SNOWFLAKE = /^\d{17,20}$/;
 const CUID = /^[a-z0-9]{20,32}$/i;
+const ERROR_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
 
 const api = async <T>(
   path: string,
@@ -34,8 +35,9 @@ const api = async <T>(
     ) as Error & { status?: number; code?: string };
     error.status = response.status;
     try {
-      const parsed = JSON.parse(responseBody) as { error?: string };
-      error.code = parsed.error;
+      const parsed = JSON.parse(responseBody) as { error?: unknown };
+      // Only stable error codes reach clients; raw exception text stays internal.
+      if (typeof parsed.error === 'string' && ERROR_CODE.test(parsed.error)) error.code = parsed.error;
     } catch {
       // Ignore malformed internal error body.
     }

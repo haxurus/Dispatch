@@ -50,8 +50,9 @@ async function runRetentionCycle() {
 client.once(Events.ClientReady, async (ready) => {
   log.info({ user: ready.user.tag, guilds: ready.guilds.cache.size }, 'Dispatch bot ready');
 
+  // A transient DB error on one guild must not leave the bot without its RPC API.
   for (const guild of ready.guilds.cache.values()) {
-    await ensureGuild(guild);
+    await ensureGuild(guild).catch((error) => log.error({ err: error, guildId: guild.id }, 'Guild sync failed'));
   }
 
   internalApi = startInternalApi(client, config.internalApiKey, config.internalApiPort);
@@ -59,12 +60,12 @@ client.once(Events.ClientReady, async (ready) => {
 });
 
 client.on(Events.GuildCreate, async (guild) => {
-  await ensureGuild(guild);
+  await ensureGuild(guild).catch((error) => log.error({ err: error, guildId: guild.id }, 'Guild sync failed'));
   log.info({ guildId: guild.id, guildName: guild.name }, 'Dispatch joined guild');
 });
 
 client.on(Events.GuildUpdate, async (_oldGuild, newGuild) => {
-  await ensureGuild(newGuild);
+  await ensureGuild(newGuild).catch((error) => log.error({ err: error, guildId: newGuild.id }, 'Guild sync failed'));
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
