@@ -85,4 +85,4 @@ docker compose up -d --build
 
 ## Production
 
-Production deployment is intentionally separate from local Compose. See `docs/DEPLOYMENT.md` once the VPS deployment account and GitHub production environment are configured.
+Production deployment is intentionally separate from local development. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for VPS installation, secrets, Nginx Proxy Manager, the GitHub `production` environment, deploy, rollback and restore.
