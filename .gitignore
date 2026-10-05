@@ -2,10 +2,14 @@ node_modules/
 .next/
 dist/
 .env
+.env.*
+!.env.example
+!*.env.*.example
+!.env.*.example
 *.log
 coverage/
 .DS_Store
-secrets/*
+**/secrets/*
 !secrets/README.md
 backups/
 *.dump

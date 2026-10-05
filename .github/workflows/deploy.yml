@@ -35,7 +35,10 @@ jobs:
 
       - name: Login to GHCR
         shell: bash
-        run: printf '%s' '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
       - name: Create Buildx builder
         shell: bash
@@ -83,7 +86,9 @@ jobs:
           echo "migrate_ref=${IMAGE}@${migrate_digest}" >> "$GITHUB_OUTPUT"
 
   deploy:
-    if: ${{ vars.ENABLE_VPS_DEPLOY == 'true' }}
+    # Defence in depth only: the real gate is the `production` environment's
+    # branch policy (main only) and required reviewers, see docs/DEPLOYMENT.md.
+    if: ${{ github.ref == 'refs/heads/main' && vars.ENABLE_VPS_DEPLOY == 'true' }}
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10

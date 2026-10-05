@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -24,6 +26,8 @@ jobs:
         run: |
           set -euo pipefail
           find ops security deploy/runtime -type f -name '*.sh' -print0 | xargs -0 -r -n1 sh -n
+          sh -n ops/dispatch-deploy
+          sh -n ops/dispatch-deploy-entrypoint
 
       - name: Validate production Compose
         shell: bash

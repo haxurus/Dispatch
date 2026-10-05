@@ -5,7 +5,15 @@ export PGPASSWORD="$(cat "$POSTGRES_ADMIN_PASSWORD_FILE")"
 API_DB_PASSWORD="$(cat "$API_DB_PASSWORD_FILE")"
 BOT_DB_PASSWORD="$(cat "$BOT_DB_PASSWORD_FILE")"
 
-psql -v ON_ERROR_STOP=1 -v api_password="$API_DB_PASSWORD" -v bot_password="$BOT_DB_PASSWORD" <<'SQL'
+# Passwords go through stdin, never argv (visible to host `ps`). The installer
+# generates hex; the charset check keeps them safe inside the quoted \set.
+case "$API_DB_PASSWORD$BOT_DB_PASSWORD" in *[!0-9A-Za-z_]*) echo 'DB passwords must match [0-9A-Za-z_]' >&2; exit 1 ;; esac
+{
+cat <<VARS
+\\set api_password '$API_DB_PASSWORD'
+\\set bot_password '$BOT_DB_PASSWORD'
+VARS
+cat <<'SQL'
 SELECT 'CREATE ROLE dispatch_api LOGIN' WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dispatch_api') \gexec
 SELECT 'CREATE ROLE dispatch_bot LOGIN' WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dispatch_bot') \gexec
 SELECT format('ALTER ROLE dispatch_api PASSWORD %L', :'api_password') \gexec
@@ -30,4 +38,5 @@ REVOKE ALL ON TABLE "PanelSession", "PanelRoleBinding", "PanelAudit" FROM dispat
 ALTER ROLE dispatch_api NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
 ALTER ROLE dispatch_bot NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
 SQL
+} | psql -v ON_ERROR_STOP=1
 unset PGPASSWORD API_DB_PASSWORD BOT_DB_PASSWORD

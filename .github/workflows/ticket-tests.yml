@@ -3,6 +3,7 @@ name: Ticket protection tests
 on:
   workflow_call:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

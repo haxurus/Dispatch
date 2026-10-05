@@ -8,6 +8,7 @@ ENV_FILE="$STATE_DIR/.env"
 CURRENT_FILE="$STATE_DIR/.release"
 PREVIOUS_FILE="$STATE_DIR/.previous-release"
 BACKUP_DIR="$STATE_DIR/backups"
+LOG_DIR="$STATE_DIR/logs"
 PROJECT=dispatch
 
 log() { printf '[dispatch-deploy] %s\n' "$*"; }
@@ -18,7 +19,11 @@ die() { printf '[dispatch-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 [ -f "$ENV_FILE" ] || die "missing $ENV_FILE"
 
 valid_ref() {
-  printf '%s' "$1" | grep -Eq '^ghcr\.io/haxurus/dispatch@sha256:[0-9a-f]{64}$'
+  # Pattern matching on the whole value: unlike grep, embedded newlines cannot pass.
+  case "$1" in ghcr.io/haxurus/dispatch@sha256:*) ;; *) return 1 ;; esac
+  digest=${1#ghcr.io/haxurus/dispatch@sha256:}
+  [ "${#digest}" -eq 64 ] || return 1
+  case "$digest" in *[!0-9a-f]*) return 1 ;; esac
 }
 
 read_release() {
@@ -63,6 +68,7 @@ backup_database() {
   log "creating pre-deploy database backup"
   if compose "$app" "$migrate" exec -T postgres sh -c     'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; exec pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$out"; then
     chmod 600 "$out"
+    # Prune only after a good dump: a failing backup never leaves zero copies.
     find "$BACKUP_DIR" -type f -name 'predeploy-*.dump' -mtime +14 -delete 2>/dev/null || true
   else
     rm -f "$out"
@@ -116,7 +122,13 @@ deploy_release() {
   fi
 
   log "new release failed health checks"
-  compose "$new_app" "$new_migrate" logs --no-color --tail=120 api bot web edge migrate secure-db >&2 || true
+  # Service logs may contain personal data: keep them on the VPS (root-only),
+  # never in the SSH output that ends up in GitHub Actions logs.
+  install -d -o root -g root -m 700 "$LOG_DIR"
+  failure_log="$LOG_DIR/deploy-failed-$(date -u +%Y%m%dT%H%M%SZ).log"
+  (umask 077; compose "$new_app" "$new_migrate" logs --no-color --tail=200 api bot web edge migrate secure-db > "$failure_log" 2>&1) || true
+  find "$LOG_DIR" -type f -name 'deploy-failed-*.log' -mtime +30 -delete 2>/dev/null || true
+  log "service logs saved on the VPS: $failure_log"
 
   if [ -n "$old_app" ] && [ -n "$old_migrate" ]; then
     log "rolling application back"

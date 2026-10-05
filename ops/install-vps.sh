@@ -27,6 +27,8 @@ fi
 deploy_key=''
 if [ -n "$KEY_FILE" ]; then
   [ -f "$KEY_FILE" ] || die 'deploy public key file not found'
+  # Exactly one key: extra lines would be installed without the forced command.
+  [ "$(grep -c '' "$KEY_FILE")" -eq 1 ] || die 'deploy public key file must contain exactly one key'
   deploy_key=$(cat "$KEY_FILE")
   printf '%s\n' "$deploy_key" | grep -Eq '^ssh-ed25519 [A-Za-z0-9+/=]+' || die 'only an Ed25519 deploy public key is accepted'
 fi
@@ -81,13 +83,24 @@ chown root:root "$STATE_DIR/secrets/postgres_admin_password"
 chmod 600 "$STATE_DIR/secrets/postgres_admin_password"
 
 home=$(getent passwd "$DEPLOY_USER" | cut -d: -f6)
-install -d -o "$DEPLOY_USER" -g "$DEPLOY_USER" -m 700 "$home/.ssh"
+# Home, .ssh and authorized_keys are root-owned: the deploy account cannot
+# strip the forced command or plant symlinks that root would write through.
+for path in "$home" "$home/.ssh" "$home/.ssh/authorized_keys"; do
+  [ ! -L "$path" ] || die "refusing to use symlink $path"
+done
+chown root:root "$home"
+chmod 755 "$home"
+install -d -o root -g root -m 755 "$home/.ssh"
 if [ -n "$deploy_key" ]; then
-  printf 'restrict,command="/usr/local/libexec/dispatch-deploy-entrypoint" %s\n' "$deploy_key" > "$home/.ssh/authorized_keys"
-  chown "$DEPLOY_USER:$DEPLOY_USER" "$home/.ssh/authorized_keys"
-  chmod 600 "$home/.ssh/authorized_keys"
+  tmp_keys="$home/.ssh/authorized_keys.tmp.$$"
+  printf 'restrict,command="/usr/local/libexec/dispatch-deploy-entrypoint" %s\n' "$deploy_key" > "$tmp_keys"
+  chmod 644 "$tmp_keys"
+  mv -f "$tmp_keys" "$home/.ssh/authorized_keys"
 elif [ ! -s "$home/.ssh/authorized_keys" ]; then
   die 'first install requires the deploy public key'
+else
+  chown root:root "$home/.ssh/authorized_keys"
+  chmod 644 "$home/.ssh/authorized_keys"
 fi
 
 cat > /etc/sudoers.d/dispatch-deploy <<'SUDOEOF'
