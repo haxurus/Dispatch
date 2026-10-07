@@ -1052,6 +1052,197 @@ app.post('/api/guilds/:guildId/panels/:panelId/publish', async (request, reply) 
 });
 
 
+app.get('/api/guilds/:guildId/forms', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId);
+  if (!session) return;
+  return prisma.formDefinition.findMany({ where: { guildId }, orderBy: { createdAt: 'asc' } });
+});
+
+app.post('/api/guilds/:guildId/forms', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+  const parsed = formDefinitionSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  const resourceError = await validateFormResources(guildId, parsed.data);
+  if (resourceError) return reply.code(400).send({ error: resourceError });
+  const { questions, ...rest } = parsed.data;
+  const form = await prisma.formDefinition.create({
+    data: { guildId, ...rest, questions: JSON.parse(JSON.stringify(questions)) }
+  });
+  await panelAudit(request, session, guildId, 'form.create', { formId: form.id, name: form.name });
+  return reply.code(201).send(form);
+});
+
+app.put('/api/guilds/:guildId/forms/:formId', async (request, reply) => {
+  const { guildId, formId } = request.params as { guildId: string; formId: string };
+  if (!internalId.safeParse(formId).success) return reply.code(400).send({ error: 'INVALID_FORM_ID' });
+  const session = await requireFormPermission(request, reply, guildId, formId, 'canManage');
+  if (!session) return;
+  const parsed = formDefinitionSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  const resourceError = await validateFormResources(guildId, parsed.data);
+  if (resourceError) return reply.code(400).send({ error: resourceError });
+  const { questions, ...rest } = parsed.data;
+  const form = await prisma.formDefinition.update({
+    where: { id: formId },
+    data: { ...rest, questions: JSON.parse(JSON.stringify(questions)) }
+  });
+  await prisma.formSession.updateMany({
+    where: { formId, state: 'ACTIVE' },
+    data: { state: 'CANCELLED' }
+  });
+  await panelAudit(request, session, guildId, 'form.update', { formId, name: form.name });
+  return form;
+});
+
+app.delete('/api/guilds/:guildId/forms/:formId', async (request, reply) => {
+  const { guildId, formId } = request.params as { guildId: string; formId: string };
+  if (!internalId.safeParse(formId).success) return reply.code(400).send({ error: 'INVALID_FORM_ID' });
+  const session = await requireFormPermission(request, reply, guildId, formId, 'canManage');
+  if (!session) return;
+  const submissions = await prisma.formSubmission.count({ where: { formId } });
+  if (submissions) return reply.code(409).send({ error: 'FORM_IN_USE', submissions });
+  const form = await prisma.formDefinition.findUnique({ where: { id: formId } });
+  await prisma.formDefinition.delete({ where: { id: formId } });
+  await panelAudit(request, session, guildId, 'form.delete', { formId, name: form?.name ?? null });
+  return { ok: true };
+});
+
+app.get('/api/guilds/:guildId/forms/:formId/permissions', async (request, reply) => {
+  const { guildId, formId } = request.params as { guildId: string; formId: string };
+  if (!internalId.safeParse(formId).success) return reply.code(400).send({ error: 'INVALID_FORM_ID' });
+  const session = await requireFormPermission(request, reply, guildId, formId, 'canManage');
+  if (!session) return;
+  return prisma.formPermissionBinding.findMany({ where: { guildId, formId }, orderBy: { createdAt: 'asc' } });
+});
+
+app.put('/api/guilds/:guildId/forms/:formId/permissions/:roleId', async (request, reply) => {
+  const { guildId, formId, roleId } = request.params as { guildId: string; formId: string; roleId: string };
+  if (!internalId.safeParse(formId).success || !snowflake.safeParse(roleId).success) {
+    return reply.code(400).send({ error: 'INVALID_ID' });
+  }
+  if (roleId === guildId) return reply.code(400).send({ error: 'EVERYONE_ROLE_NOT_ALLOWED' });
+  const session = await requireFormPermission(request, reply, guildId, formId, 'canManage');
+  if (!session) return;
+  const parsed = formPermissionSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  const resources = await getGuildResources(guildId);
+  if (!resources.roles.some((role) => role.id === roleId)) return reply.code(404).send({ error: 'ROLE_NOT_FOUND' });
+  const binding = await prisma.formPermissionBinding.upsert({
+    where: { formId_discordRoleId: { formId, discordRoleId: roleId } },
+    create: { guildId, formId, discordRoleId: roleId, ...parsed.data },
+    update: parsed.data
+  });
+  await panelAudit(request, session, guildId, 'form.permission.update', { formId, roleId, ...parsed.data });
+  return binding;
+});
+
+app.delete('/api/guilds/:guildId/forms/:formId/permissions/:roleId', async (request, reply) => {
+  const { guildId, formId, roleId } = request.params as { guildId: string; formId: string; roleId: string };
+  if (!internalId.safeParse(formId).success || !snowflake.safeParse(roleId).success) {
+    return reply.code(400).send({ error: 'INVALID_ID' });
+  }
+  const session = await requireFormPermission(request, reply, guildId, formId, 'canManage');
+  if (!session) return;
+  await prisma.formPermissionBinding.deleteMany({ where: { guildId, formId, discordRoleId: roleId } });
+  await panelAudit(request, session, guildId, 'form.permission.delete', { formId, roleId });
+  return { ok: true };
+});
+
+app.get('/api/guilds/:guildId/forms/:formId/submissions', async (request, reply) => {
+  const { guildId, formId } = request.params as { guildId: string; formId: string };
+  if (!internalId.safeParse(formId).success) return reply.code(400).send({ error: 'INVALID_FORM_ID' });
+  const session = await requireFormPermission(request, reply, guildId, formId, 'canReview');
+  if (!session) return;
+  const rows = await prisma.formSubmission.findMany({
+    where: { guildId, formId },
+    orderBy: { createdAt: 'desc' },
+    take: 200
+  });
+  return rows.map((row) => ({
+    ...row,
+    answers: JSON.parse(decryptText(row.answersEncrypted) ?? '[]'),
+    answersEncrypted: undefined
+  }));
+});
+
+app.get('/api/guilds/:guildId/form-panels', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId);
+  if (!session) return;
+  return prisma.formPanel.findMany({ where: { guildId }, include: { form: { select: { name: true } } }, orderBy: { createdAt: 'asc' } });
+});
+
+app.post('/api/guilds/:guildId/form-panels', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const parsed = formPanelSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  const session = await requireFormPermission(request, reply, guildId, parsed.data.formId, 'canManage');
+  if (!session) return;
+  const resources = await getGuildResources(guildId);
+  if (!resources.channels.some((channel) => channel.id === parsed.data.channelId && (channel.type === 0 || channel.type === 5))) {
+    return reply.code(400).send({ error: 'FORM_PANEL_CHANNEL_NOT_FOUND' });
+  }
+  const panel = await prisma.formPanel.create({ data: { guildId, ...parsed.data } });
+  await panelAudit(request, session, guildId, 'form_panel.create', { panelId: panel.id, formId: panel.formId });
+  return reply.code(201).send(panel);
+});
+
+app.put('/api/guilds/:guildId/form-panels/:panelId', async (request, reply) => {
+  const { guildId, panelId } = request.params as { guildId: string; panelId: string };
+  if (!internalId.safeParse(panelId).success) return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  const existing = await prisma.formPanel.findFirst({ where: { id: panelId, guildId } });
+  if (!existing) return reply.code(404).send({ error: 'FORM_PANEL_NOT_FOUND' });
+  const session = await requireFormPermission(request, reply, guildId, existing.formId, 'canManage');
+  if (!session) return;
+  const parsed = formPanelSchema.safeParse(request.body);
+  if (!parsed.success || parsed.data.formId !== existing.formId) {
+    return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.success ? undefined : parsed.error.flatten() });
+  }
+  const resources = await getGuildResources(guildId);
+  if (!resources.channels.some((channel) => channel.id === parsed.data.channelId && (channel.type === 0 || channel.type === 5))) {
+    return reply.code(400).send({ error: 'FORM_PANEL_CHANNEL_NOT_FOUND' });
+  }
+  const panel = await prisma.formPanel.update({
+    where: { id: panelId },
+    data: { ...parsed.data, ...(parsed.data.channelId !== existing.channelId ? { messageId: null } : {}) }
+  });
+  await panelAudit(request, session, guildId, 'form_panel.update', { panelId });
+  return panel;
+});
+
+app.delete('/api/guilds/:guildId/form-panels/:panelId', async (request, reply) => {
+  const { guildId, panelId } = request.params as { guildId: string; panelId: string };
+  if (!internalId.safeParse(panelId).success) return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  const panel = await prisma.formPanel.findFirst({ where: { id: panelId, guildId } });
+  if (!panel) return reply.code(404).send({ error: 'FORM_PANEL_NOT_FOUND' });
+  const session = await requireFormPermission(request, reply, guildId, panel.formId, 'canManage');
+  if (!session) return;
+  await prisma.formPanel.delete({ where: { id: panelId } });
+  await panelAudit(request, session, guildId, 'form_panel.delete', { panelId, formId: panel.formId });
+  return { ok: true };
+});
+
+app.post('/api/guilds/:guildId/form-panels/:panelId/publish', async (request, reply) => {
+  const { guildId, panelId } = request.params as { guildId: string; panelId: string };
+  if (!internalId.safeParse(panelId).success) return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  const panel = await prisma.formPanel.findFirst({ where: { id: panelId, guildId } });
+  if (!panel) return reply.code(404).send({ error: 'FORM_PANEL_NOT_FOUND' });
+  const session = await requireFormPermission(request, reply, guildId, panel.formId, 'canManage');
+  if (!session) return;
+  try {
+    const result = await publishFormPanel(guildId, panelId);
+    await panelAudit(request, session, guildId, 'form_panel.publish', { panelId, messageId: result.messageId });
+    return result;
+  } catch (error) {
+    request.log.error({ err: error, guildId, panelId }, 'Form panel publish failed');
+    return reply.code(502).send({ error: 'FORM_PANEL_PUBLISH_FAILED' });
+  }
+});
+
+
 const ticketStatus = z.enum(['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']);
 
 function ensureInternalId(value: string, error: string) {
