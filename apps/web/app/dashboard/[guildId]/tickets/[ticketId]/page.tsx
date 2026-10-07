@@ -475,7 +475,6 @@ export default function TicketDetailPage() {
               insieme al ticket.
             </p>
           )}
-          </div>
         </article>
       </section>
 
