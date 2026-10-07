@@ -214,7 +214,7 @@ export function displayAnswer(answer: FormAnswer, question?: FormQuestion) {
   }
   if (answer.type === 'BOOLEAN') return answer.value === 'true' ? 'Sì' : answer.value === 'false' ? 'No' : 'Nessuna risposta';
   if (answer.type === 'SINGLE_SELECT') {
-    return question?.options?.find((option) => option.value === answer.value)?.label ?? answer.value || 'Nessuna risposta';
+    return question?.options?.find((option) => option.value === answer.value)?.label ?? (answer.value || 'Nessuna risposta');
   }
   return answer.value || 'Nessuna risposta';
 }
