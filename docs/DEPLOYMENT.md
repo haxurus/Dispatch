@@ -18,7 +18,7 @@ Esempio di riferimento in questa guida: dominio `dispatch.haxurus.com`, VPS Debi
 Nel Developer Portal, applicazione `Dispatch`:
 
 - **Bot > Privileged Gateway Intents**: Server Members ON, Message Content ON (necessario per transcript completi), Presence OFF.
-- **OAuth2 > Redirects**: `https://dispatch.haxurus.com/backend/auth/discord/callback`. Gli scope usati dal pannello sono `identify` e `guilds`.
+- **OAuth2 > Redirects**: `https://dispatch.haxurus.com/backend/auth/discord/callback`. Gli scope usati dal pannello sono `identify` e `guilds`. Il link di installazione generato da `/backend/bot/invite` (scope `bot applications.commands`, permessi elencati sotto, bitfield `268561424`) non usa `redirect_uri`: non serve registrare redirect aggiuntivi, il redirect esistente resta invariato.
 - **Installazione**: Guild Install con i soli permessi View Channels, Manage Channels, Manage Roles, Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History. Non concedere Administrator, Manage Server, Manage Webhooks, Mention Everyone, Kick/Ban o Manage Nicknames.
 - Annotare l'**Application ID**, che serve per `DISCORD_CLIENT_ID`. Bot Token e Client Secret si scrivono **solo** nei file secret sulla VPS (sezione 3).
 
@@ -105,7 +105,12 @@ WEB_URL=https://dispatch.haxurus.com
 POSTGRES_ADMIN_USER=dispatch_owner
 POSTGRES_DB=dispatch
 LOG_LEVEL=info
+SUPER_ADMIN_USER_ID=<Discord user ID del proprietario dell'istanza>
+INVITE_ALLOWED_USER_IDS=<ID Discord separati da virgola, opzionale>
 ```
+
+- `SUPER_ADMIN_USER_ID` (opzionale, supporta anche `SUPER_ADMIN_USER_ID_FILE`): un solo Discord user ID (17-20 cifre). Abilita la super console su `/super` e le API `/api/super/*`; se vuoto nessuno vi accede. Un valore non valido blocca l'avvio dell'API.
+- `INVITE_ALLOWED_USER_IDS` (opzionale, supporta `_FILE`): account, oltre al super admin, autorizzati ad aggiungere il bot ospitato tramite `/backend/bot/invite`. Gli altri utenti vengono reindirizzati a `/it/development` (o `/en/development`). Un utente bloccato dalla super console non può installare il bot anche se è in lista.
 
 `WEB_URL` deve coincidere esattamente con l'origine del browser: le richieste di modifica con un `Origin` diverso vengono rifiutate (CSRF).
 
