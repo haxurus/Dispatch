@@ -15,6 +15,7 @@ die() { printf '[dispatch-install] ERROR: %s\n' "$*" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || die 'Docker is required'
 command -v openssl >/dev/null 2>&1 || die 'OpenSSL is required'
 command -v visudo >/dev/null 2>&1 || die 'sudo/visudo is required'
+command -v flock >/dev/null 2>&1 || die 'flock (util-linux) is required'
 docker compose version >/dev/null 2>&1 || die 'Docker Compose plugin is required'
 
 if command -v sshd >/dev/null 2>&1; then
