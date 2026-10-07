@@ -493,6 +493,7 @@ async function beginTicketOpen(interaction: StringSelectMenuInteraction, sourceK
     await interaction.reply({
       content: '**1/' + selects.length + ' - ' + selects[0]!.label + '**',
       components: [ticketSelectRow(reservation.token, selects[0]!)],
+      allowedMentions: { parse: [] },
       ephemeral: true
     });
     return;
@@ -522,7 +523,24 @@ async function submitOpenTicketSelect(interaction: StringSelectMenuInteraction) 
   }
   const fields = parseFormFields(category.formFields);
   const selects = fields.filter((field) => field.type === 'SINGLE_SELECT');
+  const texts = fields.filter((item) => item.type !== 'SINGLE_SELECT');
   const index = reservation.reservationQuestionIndex ?? 0;
+  const guildId = interaction.guildId;
+  const categoryName = category.name;
+  const showTextModal = async () => {
+    try { await interaction.showModal(ticketTextModal(token, categoryName, texts)); }
+    catch (error) {
+      await releaseTicketOpenReservation(guildId, interaction.user.id, token);
+      throw error;
+    }
+  };
+  // Every select is answered but the user dismissed the modal: offer it again
+  // instead of trapping the reservation until it expires.
+  if (index >= selects.length) {
+    if (texts.length) await showTextModal();
+    else await interaction.reply({ content: 'Questa richiesta è scaduta.', ephemeral: true });
+    return;
+  }
   const field = selects[index];
   const value = interaction.values[0];
   if (!field || !value || !field.options.some((option) => option.value === value)) {
@@ -531,24 +549,33 @@ async function submitOpenTicketSelect(interaction: StringSelectMenuInteraction) 
   }
   const answers = storedTicketAnswers(reservation.reservationAnswersEncrypted);
   answers.push({ id: field.id, label: field.label, value });
-  await prisma.ticketUserGuard.update({
-    where: { id: reservation.id },
+  // Conditional write: a stale or concurrent select for the same step loses
+  // instead of appending a duplicate answer and skipping a question.
+  const advanced = await prisma.ticketUserGuard.updateMany({
+    where: {
+      id: reservation.id, reservationToken: token, reservationPhase: 'FORM',
+      reservationQuestionIndex: index, pendingUntil: { gt: new Date() }
+    },
     data: {
       reservationAnswersEncrypted: encryptText(JSON.stringify(answers)),
       reservationQuestionIndex: index + 1
     }
   });
+  if (advanced.count !== 1) {
+    await interaction.reply({ content: 'Questa selezione non è più valida.', ephemeral: true });
+    return;
+  }
   const next = selects[index + 1];
   if (next) {
     await interaction.update({
       content: '**' + (index + 2) + '/' + selects.length + ' - ' + next.label + '**',
-      components: [ticketSelectRow(token, next)]
+      components: [ticketSelectRow(token, next)],
+      allowedMentions: { parse: [] }
     });
     return;
   }
-  const texts = fields.filter((item) => item.type !== 'SINGLE_SELECT');
   if (texts.length) {
-    await interaction.showModal(ticketTextModal(token, category.name, texts));
+    await showTextModal();
     return;
   }
   await interaction.deferReply({ ephemeral: true });

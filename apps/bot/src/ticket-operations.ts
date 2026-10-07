@@ -383,19 +383,30 @@ ${rows}
   };
 }
 
+// Building a transcript is slow (Discord pagination). A reopen that commits in
+// the meantime deletes stored transcripts, so the write happens under the same
+// ticket lock reopen uses and only if the lifecycle state is still the one the
+// transcript was built for. Returns false when the snapshot is stale.
 async function persistTranscript(build: TranscriptBuild) {
-  await prisma.transcript.upsert({
-    where: { ticketId: build.ticket.id },
-    update: {
-      contentEncrypted: encryptText(build.html)!,
-      messageCount: build.messageCount,
-      createdAt: new Date()
-    },
-    create: {
-      ticketId: build.ticket.id,
-      contentEncrypted: encryptText(build.html)!,
-      messageCount: build.messageCount
-    }
+  const contentEncrypted = encryptText(build.html)!;
+  return prisma.$transaction(async (tx) => {
+    await lockTicket(tx, build.ticket.id);
+    const current = await tx.ticket.findUnique({
+      where: { id: build.ticket.id },
+      select: { status: true, closedAt: true, retentionPendingAt: true }
+    });
+    if (!current || current.retentionPendingAt) return false;
+    const builtClosed = build.ticket.status === 'CLOSED';
+    const unchanged = builtClosed
+      ? current.status === 'CLOSED' && current.closedAt?.getTime() === build.ticket.closedAt?.getTime()
+      : current.status !== 'CLOSED' && current.status !== 'REOPENING' && current.closedAt === null;
+    if (!unchanged) return false;
+    await tx.transcript.upsert({
+      where: { ticketId: build.ticket.id },
+      update: { contentEncrypted, messageCount: build.messageCount, createdAt: new Date() },
+      create: { ticketId: build.ticket.id, contentEncrypted, messageCount: build.messageCount }
+    });
+    return true;
   });
 }
 
@@ -405,12 +416,12 @@ function transcriptAttachment(build: TranscriptBuild) {
 
 export async function generateTranscript(client: Client, guildId: string, ticketId: string, actorId?: string) {
   const build = await buildTranscript(client, guildId, ticketId);
-  await persistTranscript(build);
+  if (!(await persistTranscript(build))) throw new Error('TRANSCRIPT_STATE_CHANGED');
 
   if (actorId) {
     await audit(build.ticket.id, guildId, actorId, 'ticket.transcript.generate', {
       messageCount: build.messageCount,
-      temporary: !build.ticket.category.transcriptStoreTemporary
+      temporary: !build.ticket.category.transcriptRetain
     });
   }
 
@@ -428,8 +439,17 @@ async function generateAndDeliverAutomaticTranscript(client: Client, guildId: st
   let openerFailed = false;
   let channelFailed = false;
 
-  if (category.transcriptStoreTemporary) {
-    await persistTranscript(build);
+  if (category.transcriptRetain) {
+    // Reopened (or retention-claimed) while building: the snapshot no longer
+    // describes a closed ticket, so it is neither stored nor delivered.
+    if (!(await persistTranscript(build))) return { ok: true, skipped: true };
+  } else {
+    const current = await prisma.ticket.findUnique({
+      where: { id: build.ticket.id }, select: { status: true, closedAt: true }
+    });
+    if (current?.status !== 'CLOSED' || current.closedAt?.getTime() !== build.ticket.closedAt?.getTime()) {
+      return { ok: true, skipped: true };
+    }
   }
 
   if (category.transcriptSendToOpener) {
@@ -470,7 +490,7 @@ async function generateAndDeliverAutomaticTranscript(client: Client, guildId: st
       action: 'ticket.transcript.auto',
       details: {
         messageCount: build.messageCount,
-        storedTemporary: category.transcriptStoreTemporary,
+        storedTemporary: category.transcriptRetain,
         openerDelivered,
         channelDelivered,
         openerFailed,

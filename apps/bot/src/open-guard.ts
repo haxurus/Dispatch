@@ -56,7 +56,7 @@ export async function reserveTicketOpen(
   version: string
 ): Promise<TicketOpenReservationResult> {
   if (!/^\d{17,20}$/.test(guildId) || !/^\d{17,20}$/.test(userId) ||
-      !/^[a-z0-9]{20,32}$/i.test(categoryId) || !/^(p_|m_|r_)[a-z0-9]{17,32}$/i.test(sourceKey)) {
+      !/^[a-z0-9]{20,32}$/i.test(categoryId) || !/^(p_|m_|r_|f_)[a-z0-9]{17,32}$/i.test(sourceKey)) {
     return deny('INVALID_OPEN_REQUEST');
   }
   return transaction(async (tx) => {
