@@ -45,6 +45,11 @@ model GuildSettings {
   feedback TicketFeedback[]
   openAttempts TicketOpenAttempt[]
   userGuards TicketUserGuard[]
+  forms FormDefinition[]
+  formPanels FormPanel[]
+  formSubmissions FormSubmission[]
+  formSessions FormSession[]
+  formPermissions FormPermissionBinding[]
 }
 
 model TicketCategory {
@@ -321,4 +326,125 @@ model TicketUserGuard {
 
   @@unique([guildId, userId])
   @@index([guildId, blockedUntil])
+}
+
+
+model FormDefinition {
+  id                    String   @id @default(cuid())
+  guildId               String
+  name                  String
+  description           String?
+  questions             Json     @default("[]")
+  enabled               Boolean  @default(true)
+  openAt                DateTime?
+  closeAt               DateTime?
+  deliveryMode          String   @default("EPHEMERAL")
+  resultChannelId       String?
+  resultRoleIds          String[] @default([])
+  allowedRoleIds         String[] @default([])
+  deniedRoleIds          String[] @default([])
+  maxSubmissionsPerUser  Int      @default(1)
+  cooldownSeconds        Int      @default(300)
+  submissionWindowMinutes Int     @default(60)
+  maxAttemptsPerWindow   Int      @default(5)
+  createTicketOnSubmit   Boolean  @default(false)
+  ticketCategoryId       String?
+  ticketParentCategoryId String?
+  ticketStaffRoleIds     String[] @default([])
+  ticketPrefix           String   @default("form")
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  guild       GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  panels      FormPanel[]
+  submissions FormSubmission[]
+  sessions    FormSession[]
+  permissions FormPermissionBinding[]
+
+  @@index([guildId, enabled])
+  @@index([guildId, createdAt])
+}
+
+model FormPanel {
+  id          String   @id @default(cuid())
+  guildId     String
+  formId      String
+  channelId   String
+  messageId   String?
+  title       String
+  description String?
+  buttonLabel String   @default("Compila")
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  guild GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  form  FormDefinition @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([guildId])
+  @@index([formId])
+}
+
+model FormSubmission {
+  id               String   @id @default(cuid())
+  guildId          String
+  formId           String
+  userId           String
+  username         String
+  answersEncrypted String
+  source           String
+  status           String   @default("SUBMITTED")
+  reportChannelId  String?
+  reportMessageId  String?
+  ticketChannelId  String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  guild GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  form  FormDefinition @relation(fields: [formId], references: [id], onDelete: Restrict)
+
+  @@index([guildId, formId, createdAt(sort: Desc)])
+  @@index([guildId, userId, createdAt(sort: Desc)])
+  @@index([formId, userId, createdAt(sort: Desc)])
+}
+
+model FormSession {
+  id               String   @id @default(cuid())
+  guildId          String
+  formId           String
+  userId           String
+  token            String   @unique
+  source           String
+  channelId        String?
+  currentQuestion  Int      @default(0)
+  answersEncrypted String?
+  state            String   @default("ACTIVE")
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  guild GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  form  FormDefinition @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, userId, state])
+  @@index([expiresAt])
+}
+
+model FormPermissionBinding {
+  id            String   @id @default(cuid())
+  guildId       String
+  formId        String
+  discordRoleId String
+  canManage     Boolean  @default(false)
+  canView       Boolean  @default(false)
+  canReview     Boolean  @default(false)
+  canSubmit     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  guild GuildSettings @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  form  FormDefinition @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@unique([formId, discordRoleId])
+  @@index([guildId, discordRoleId])
 }
