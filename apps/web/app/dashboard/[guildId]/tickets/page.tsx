@@ -445,6 +445,7 @@ export default function TicketConfigurationPage() {
         </div>
         <div className="actions">
           <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/forms`}>Form</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/system`}>Sistema</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/analytics`}>Analytics</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/security`}>Blacklist</a>
