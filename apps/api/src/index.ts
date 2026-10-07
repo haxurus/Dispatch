@@ -377,14 +377,22 @@ app.delete('/api/guilds/:guildId/access-bindings/:roleId', async (request, reply
 
 const internalId = z.string().regex(/^[a-z0-9]{20,32}$/i);
 
+const ticketOptionSchema = z.object({
+  label: z.string().trim().min(1).max(100),
+  value: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(100).nullable().default(null)
+});
+
 const formFieldSchema = z.object({
   id: z.string().regex(/^[a-z0-9_-]{1,40}$/i),
   label: z.string().trim().min(1).max(45),
   style: z.enum(['SHORT', 'PARAGRAPH']).default('SHORT'),
+  type: z.enum(['SHORT_TEXT', 'LONG_TEXT', 'SINGLE_SELECT']).default('SHORT_TEXT'),
   required: z.boolean().default(true),
   placeholder: z.string().trim().max(100).nullable().default(null),
   minLength: z.number().int().min(0).max(4000).nullable().default(null),
-  maxLength: z.number().int().min(1).max(4000).nullable().default(null)
+  maxLength: z.number().int().min(1).max(4000).nullable().default(null),
+  options: z.array(ticketOptionSchema).max(25).default([])
 }).superRefine((field, ctx) => {
   if (
     field.minLength !== null &&
@@ -396,6 +404,15 @@ const formFieldSchema = z.object({
       message: 'minLength cannot exceed maxLength',
       path: ['minLength']
     });
+  }
+  if (field.type === 'SINGLE_SELECT' && field.options.length < 1) {
+    ctx.addIssue({ code: 'custom', message: 'Select fields require options', path: ['options'] });
+  }
+  if (field.type !== 'SINGLE_SELECT' && field.options.length) {
+    ctx.addIssue({ code: 'custom', message: 'Options are only valid for select fields', path: ['options'] });
+  }
+  if (new Set(field.options.map((option) => option.value)).size !== field.options.length) {
+    ctx.addIssue({ code: 'custom', message: 'Option values must be unique', path: ['options'] });
   }
 });
 
