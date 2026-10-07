@@ -99,6 +99,7 @@ async function canSubmit(
     prisma.formSubmission.count({ where: { guildId, formId: form.id, userId } }),
     prisma.formSession.count({ where: {
       guildId, formId: form.id, userId,
+      ...(activeSessionId ? { id: { not: activeSessionId } } : {}),
       createdAt: { gte: new Date(Date.now() - form.submissionWindowMinutes * 60_000) }
     } }),
     prisma.formSubmission.findFirst({
