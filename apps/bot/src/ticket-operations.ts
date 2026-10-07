@@ -628,6 +628,7 @@ export async function reopenTicket(
     } });
     if (changed.count !== 1) throw new Error('REOPEN_STATE_CONFLICT');
     await tx.ticketFeedback.deleteMany({ where: { ticketId: ticket.id } });
+    await tx.transcript.deleteMany({ where: { ticketId: ticket.id } });
     await tx.ticketAudit.create({ data: {
       ticketId: ticket.id, guildId, actorId, action: 'ticket.reopen',
       details: { userWindowEnforced: enforceUserWindow }
