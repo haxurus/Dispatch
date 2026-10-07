@@ -56,25 +56,27 @@ La chiave privata `dispatch_deploy` andrà nel secret GitHub `VPS_DEPLOY_KEY`. L
 
 ### AllowUsers
 
-Se `sshd` usa `AllowUsers` (VPS01 ha `AllowUsers user007`), aggiungere l'utente di deploy **prima** dell'installer, che altrimenti si interrompe:
-
-```text
-AllowUsers user007 dispatch-deploy
-```
+Se `sshd` usa `AllowUsers`, aggiungere l'utente di deploy **prima** dell'installer, che altrimenti si interrompe. Su VPS01 la riga è in `/etc/ssh/sshd_config.d/00-hardening.conf` e contiene già `user007` e gli utenti di deploy degli altri progetti (es. `sentinel-deploy`, `muse-deploy`): **aggiungere** `dispatch-deploy` in fondo alla riga esistente, senza sostituirla.
 
 ```bash
-sudo sshd -t && sudo systemctl reload ssh
+sudo sshd -T | grep '^allowusers'
+sudoedit /etc/ssh/sshd_config.d/00-hardening.conf
+sudo sshd -t && sudo systemctl reload ssh && sudo sshd -T | grep '^allowusers'
 ```
 
 Prima di chiudere la sessione corrente, verificare da un secondo terminale che `user007` riesca ancora ad accedere.
 
 ### Installer
 
-Da un checkout del repository sulla VPS, con il tag o il commit da installare:
+Da un clone temporaneo del repository sulla VPS (come Sentinel), allineato a `main`:
 
 ```bash
-sudo sh ops/install-vps.sh /percorso/dispatch_deploy.pub
+git clone --branch main https://github.com/haxurus/Dispatch.git /tmp/Dispatch
+cd /tmp/Dispatch
+sudo ./ops/install-vps.sh ~/dispatch_deploy.pub
 ```
+
+Per aggiornare in seguito i file infrastrutturali: `cd /tmp/Dispatch && git pull --ff-only && sudo ./ops/install-vps.sh` (senza chiave resta quella installata).
 
 L'installer:
 
@@ -84,7 +86,7 @@ L'installer:
 - crea `/srv/docker/dispatch/` (root, 700) con `docker-compose.yml`, `runtime/nginx.conf`, `runtime/harden-users.sh`, `secrets/`, `backups/` e `.env`. `.env` viene creato dal template solo se manca;
 - genera i segreti mancanti e crea vuoti `discord_token` e `discord_client_secret`;
 - installa e abilita `dispatch-firewall.service`, che blocca dai bridge di egress di api e bot l'accesso all'host e alle reti private/LAN;
-- verifica che `proxy_net` esista.
+- verifica che `proxy_net` esista e che `flock` sia disponibile.
 
 Al primo install la chiave pubblica è obbligatoria; nelle esecuzioni successive si può omettere e resta quella installata.
 
@@ -172,7 +174,7 @@ Settings > Environments > `production`:
 
 ### Abilitazione
 
-Variable `ENABLE_VPS_DEPLOY=true`, da impostare **solo** dopo aver verificato SSH, segreti, `.env`, accesso GHCR e NPM.
+Variable **di repository** (non di environment: la condizione `if:` del job non vede le variabili di environment) `ENABLE_VPS_DEPLOY=true`, da impostare **solo** dopo aver verificato SSH, segreti, `.env`, accesso GHCR e NPM.
 
 Verifica dell'accesso ristretto dalla macchina con la chiave:
 
@@ -186,19 +188,20 @@ Il risultato atteso è `No release recorded yet.`. Qualsiasi altro comando viene
 
 Ogni push su `main` esegue:
 
-1. `Ticket protection tests`: PostgreSQL temporaneo, migration reali, policy dei privilegi DB, Discord simulato.
+1. `Ticket protection tests`: PostgreSQL temporaneo, migration reali, policy dei privilegi DB, Discord simulato; in parallelo `CI` (validazione compose, sintassi script, build).
 2. Build delle immagini `runtime` e `migrate`, con SBOM e provenance, push su GHCR ed esportazione dei digest.
 3. Solo se `ENABLE_VPS_DEPLOY == 'true'` e il ref è `main`: SSH verso `deploy <app@sha256> <migrate@sha256>`.
 
 Sulla VPS, `dispatch-deploy deploy`:
 
-1. valida i due riferimenti (`ghcr.io/haxurus/dispatch@sha256:<64 hex>`);
-2. se esiste una release corrente, fa il backup `pg_dump -Fc` in `backups/predeploy-<UTC>.dump` (600). Se il backup fallisce, il deploy si interrompe. I dump più vecchi di 14 giorni vengono rimossi solo dopo un backup riuscito;
-3. esegue il pull delle immagini per digest;
-4. esegue `docker compose up`. L'ordine è postgres → `migrate` (`prisma migrate deploy` come owner) → `secure-db` (utenti `dispatch_api`/`dispatch_bot` e grant) → api, bot e redis → web → edge;
-5. attende fino a 150 s che api, bot, web ed edge risultino healthy;
-6. se va a buon fine, aggiorna `.release` e `.previous-release` e rimuove i container one-shot;
-7. se fallisce, salva i log dei servizi in `/srv/docker/dispatch/logs/deploy-failed-<UTC>.log` (root, 700; mantenuti 30 giorni) e riavvia la release precedente. Nell'output SSH, e quindi nei log GitHub Actions di un repository pubblico, compare solo il percorso del file e mai il contenuto dei log.
+1. prende un lock (`/run/dispatch-deploy.lock`): un deploy manuale non può sovrapporsi a uno da GitHub;
+2. valida i due riferimenti (`ghcr.io/haxurus/dispatch@sha256:<64 hex>`) e controlla lo spazio su `/var/lib/docker`: sotto 5 GiB elimina le immagini Dispatch non più necessarie, sotto 3 GiB si ferma (un disco pieno ha già fermato PostgreSQL su VPS01);
+3. se esiste una release corrente, fa il backup `pg_dump -Fc` in `backups/predeploy-<UTC>.dump` (600). Se il backup fallisce, il deploy si interrompe. I dump più vecchi di 14 giorni vengono rimossi solo dopo un backup riuscito;
+4. esegue il pull delle immagini per digest;
+5. esegue `docker compose up`. L'ordine è postgres → `migrate` (`prisma migrate deploy` come owner) → `secure-db` (utenti `dispatch_api`/`dispatch_bot` e grant) → api, bot e redis → web → edge;
+6. attende fino a 150 s che api, bot, web ed edge risultino healthy;
+7. se va a buon fine, aggiorna `.release` e `.previous-release`, rimuove i container one-shot ed elimina le immagini Dispatch diverse dalla release corrente e precedente;
+8. se fallisce, salva i log dei servizi in `/srv/docker/dispatch/logs/deploy-failed-<UTC>.log` (root, 700; mantenuti 30 giorni) e riavvia la release precedente. Nell'output SSH, e quindi nei log GitHub Actions di un repository pubblico, compare solo il percorso del file e mai il contenuto dei log.
 
 Il primo deploy non ha una release precedente: niente backup e niente rollback automatico.
 
@@ -292,3 +295,101 @@ sudo systemctl status dispatch-firewall.service --no-pager
 sudo iptables -L DOCKER-USER -n -v --line-numbers
 sudo docker exec npm curl -sI http://dispatch-edge:8080/backend/health
 ```
+
+## 9. Sequenza completa dei comandi
+
+Riepilogo operativo nello stesso ordine usato per Sentinel. `<VPS_IP>` è l'IPv4 di VPS01; i comandi "locali" vanno eseguiti in Git Bash (o in un terminale con OpenSSH e `gh` autenticato come `haxurus`).
+
+### A. Prima di iniziare
+
+1. Unire su `main` le PR aperte, in ordine (prima quella delle funzioni, poi quelle basate su di essa), e attendere che **Build and deploy** sia verde: il job `deploy` risulterà *skipped* finché `ENABLE_VPS_DEPLOY` non è attivo, ma le immagini saranno già su GHCR.
+2. Discord Developer Portal: intents, redirect OAuth `https://dispatch.haxurus.com/backend/auth/discord/callback`, Application ID annotato (sezione 1).
+3. Cloudflare: record `A` `dispatch` → `<VPS_IP>`, Proxied.
+4. GHCR: rendere pubblico il package da `https://github.com/users/haxurus/packages/container/dispatch/settings` (oppure il `docker login` del punto C.6).
+
+### B. Macchina locale: chiave di deploy
+
+```bash
+ssh-keygen -t ed25519 -a 100 -f ~/.ssh/dispatch_deploy -C "dispatch-github-actions"
+scp ~/.ssh/dispatch_deploy.pub user007@<VPS_IP>:~/
+```
+
+### C. VPS (come `user007`)
+
+```bash
+# 1. AllowUsers: aggiungere dispatch-deploy in fondo alla riga esistente
+sudo sshd -T | grep '^allowusers'
+sudoedit /etc/ssh/sshd_config.d/00-hardening.conf
+sudo sshd -t && sudo systemctl reload ssh && sudo sshd -T | grep '^allowusers'
+# (verificare da un secondo terminale che user007 entri ancora)
+
+# 2. Installer da clone temporaneo
+git clone --branch main https://github.com/haxurus/Dispatch.git /tmp/Dispatch
+cd /tmp/Dispatch
+sudo ./ops/install-vps.sh ~/dispatch_deploy.pub
+
+# 3. Configurazione
+sudoedit /srv/docker/dispatch/.env
+sudoedit /srv/docker/dispatch/secrets/discord_token
+sudoedit /srv/docker/dispatch/secrets/discord_client_secret
+sudo find /srv/docker/dispatch/secrets -maxdepth 1 -type f -printf '%m %u:%g %p\n'
+
+# 4. Copia offline della chiave di cifratura (conservarla fuori dalla VPS)
+sudo cat /srv/docker/dispatch/secrets/data_encryption_key
+
+# 5. Firewall e host key (fingerprint da confrontare al punto D.3)
+sudo systemctl status dispatch-firewall.service --no-pager
+sudo iptables -L DOCKER-USER -n -v --line-numbers
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+printf '%s %s\n' "<VPS_IP>" "$(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"
+
+# 6. Solo se il package GHCR resta privato (token classic con il solo scope read:packages)
+sudo docker login ghcr.io -u haxurus
+```
+
+7. Nginx Proxy Manager (tunnel SSH verso `127.0.0.1:81`): Proxy Host `dispatch.haxurus.com` → `http` `dispatch-edge` `8080`, certificato Origin `*.haxurus.com`, Force SSL, HSTS.
+
+### D. GitHub (macchina locale)
+
+```bash
+# 1. Environment production limitato a main
+gh api -X PUT repos/haxurus/Dispatch/environments/production \
+  -F 'deployment_branch_policy[protected_branches]=false' \
+  -F 'deployment_branch_policy[custom_branch_policies]=true'
+gh api -X POST repos/haxurus/Dispatch/environments/production/deployment-branch-policies -f name=main
+
+# 2. Secrets dell'environment
+gh secret set VPS_DEPLOY_KEY --env production -R haxurus/Dispatch < ~/.ssh/dispatch_deploy
+gh secret set VPS_HOST --env production -R haxurus/Dispatch --body "<VPS_IP>"
+gh secret set VPS_PORT --env production -R haxurus/Dispatch --body 22
+
+# 3. known_hosts: incollare la riga stampata al punto C.5, dopo aver verificato che
+#    il fingerprint di `ssh-keyscan -t ed25519 <VPS_IP> | ssh-keygen -lf -` coincida
+gh secret set VPS_KNOWN_HOSTS --env production -R haxurus/Dispatch
+
+# 4. Verifica del percorso SSH ristretto (atteso: "No release recorded yet.")
+ssh -i ~/.ssh/dispatch_deploy -o IdentitiesOnly=yes dispatch-deploy@<VPS_IP> status
+
+# 5. Abilitazione (variabile di REPOSITORY) e primo deploy
+gh variable set ENABLE_VPS_DEPLOY --body true -R haxurus/Dispatch
+gh workflow run "Build and deploy" -R haxurus/Dispatch --ref main
+gh run watch -R haxurus/Dispatch
+```
+
+### E. Verifica
+
+```bash
+# VPS
+sudo /usr/local/sbin/dispatch-deploy status
+sudo docker exec npm curl -sI http://dispatch-edge:8080/backend/health
+# Locale
+curl -sI https://dispatch.haxurus.com/backend/health
+```
+
+Poi il collaudo della sezione 8, accedendo da `https://dispatch.haxurus.com/it`.
+
+### F. Operazioni successive
+
+- Nuova versione: merge su `main` → deploy automatico.
+- Rollback: `gh workflow run "Rollback production" -R haxurus/Dispatch --ref main` oppure `sudo /usr/local/sbin/dispatch-deploy rollback` (vedi sezione 6 per la semantica).
+- Modifiche a `deploy/`, `ops/` o `security/` (es. nuovi grant in `harden-users.sh`): `cd /tmp/Dispatch && git pull --ff-only && sudo ./ops/install-vps.sh` **prima** del merge che le usa.
