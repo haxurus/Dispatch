@@ -311,6 +311,8 @@ model TicketUserGuard {
   reservationSourceKey   String?
   reservationFormVersion String?
   reservationPhase       String?
+  reservationAnswersEncrypted String?
+  reservationQuestionIndex Int?
   lastViolationAt        DateTime?
   id           String   @id @default(cuid())
   guildId      String
