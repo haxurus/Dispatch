@@ -99,6 +99,7 @@ export default function GuildDashboardPage() {
         </div>
         <div className="actions">
           <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/forms`}>Form</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets`}>Configura ticket</a>
           <a className="button secondary" href="/dashboard">Torna ai server</a>
         </div>
