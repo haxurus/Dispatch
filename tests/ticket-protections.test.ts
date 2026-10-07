@@ -278,6 +278,9 @@ test('bot database role can use guards but cannot read dashboard sessions or sta
     await bot.ticketUserGuard.count();
     await bot.ticketOpenAttempt.count();
     await bot.guildBlacklist.count();
+    await bot.installBlock.count();
+    await assert.rejects(bot.superAdminAudit.count());
+    await assert.rejects(bot.installBlock.create({ data: { kind: 'USER', subjectId: '990000000000009001', createdByUserId: '990000000000009002' } }));
     await assert.rejects(bot.panelSession.count());
     await assert.rejects(bot.ticketNote.count());
     await assert.rejects(bot.$queryRaw`SELECT * FROM "_prisma_migrations"`);
