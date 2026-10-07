@@ -282,6 +282,8 @@ I backup restano sulla stessa VPS. Copiarli periodicamente fuori dall'host, cifr
 
 Login e logout, lista server, RBAC (incluso il rifiuto di `@everyone` come ruolo di accesso), pubblicazione del menu, apertura del ticket con modulo, permessi del canale (i thread sono disabilitati nei ticket), claim, unclaim, stati, priorità, chiusura con transcript, feedback, riapertura dentro e fuori finestra, anti-spam, blacklist, SLA/escalation e retention con valori brevi. Dettagli funzionali e note operative su prenotazioni `CREATING` e retention sono in [TICKET_PROTECTIONS.md](TICKET_PROTECTIONS.md).
 
+Super console (con `SUPER_ADMIN_USER_ID` impostato): il link "Super console" compare solo per quell'account; `/super` mostra metriche e server collegati; "Blocca ed espelli" fa uscire il bot e lo fa riuscire se viene riaggiunto; ogni azione compare nell'audit super-admin. Un account non autorizzato che apre `/backend/bot/invite` finisce su `/it/development`.
+
 Comandi utili:
 
 ```bash
