@@ -19,7 +19,8 @@ const deny = (code: string, seconds = 1): TicketOpenReservationResult => ({
 
 const cleared = {
   reservationToken: null, reservationCategoryId: null, reservationSourceKey: null,
-  reservationFormVersion: null, reservationPhase: null, pendingUntil: null
+  reservationFormVersion: null, reservationPhase: null, reservationAnswersEncrypted: null,
+  reservationQuestionIndex: null, pendingUntil: null
 };
 
 // An actual UPDATE obtains a PostgreSQL row lock until the transaction commits.
@@ -115,7 +116,8 @@ export async function reserveTicketOpen(
     await tx.ticketUserGuard.update({ where: { id: guard.id }, data: {
       reservationToken: token, reservationCategoryId: categoryId,
       reservationSourceKey: sourceKey, reservationFormVersion: version,
-      reservationPhase: 'FORM', pendingUntil: new Date(now.getTime() + FORM_TTL_MS)
+      reservationPhase: 'FORM', reservationAnswersEncrypted: null, reservationQuestionIndex: 0,
+      pendingUntil: new Date(now.getTime() + FORM_TTL_MS)
     } });
     return { ok: true, token };
   });
