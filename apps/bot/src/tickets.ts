@@ -100,7 +100,7 @@ function safeChannelPart(value: string) {
     .slice(0, 24) || 'user';
 }
 
-function ticketControls(ticketId: string) {
+export function ticketControls(ticketId: string) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${CLAIM_PREFIX}${ticketId}`)
