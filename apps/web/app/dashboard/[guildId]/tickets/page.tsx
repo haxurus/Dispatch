@@ -22,10 +22,12 @@ type FormField = {
   id: string;
   label: string;
   style: 'SHORT' | 'PARAGRAPH';
+  type: 'SHORT_TEXT' | 'LONG_TEXT' | 'SINGLE_SELECT';
   required: boolean;
   placeholder: string | null;
   minLength: number | null;
   maxLength: number | null;
+  options: Array<{ label: string; value: string; description?: string | null }>;
 };
 
 type Category = {
@@ -172,7 +174,11 @@ export default function TicketConfigurationPage() {
       openCooldownSeconds: category.openCooldownSeconds,
       antiSpamWindowMinutes: category.antiSpamWindowMinutes,
       antiSpamMaxAttempts: category.antiSpamMaxAttempts,
-      formFields: category.formFields ?? [],
+      formFields: (category.formFields ?? []).map((field) => ({
+        ...field,
+        type: field.type ?? (field.style === 'PARAGRAPH' ? 'LONG_TEXT' : 'SHORT_TEXT'),
+        options: field.options ?? []
+      })),
       slaFirstResponseMinutes: category.slaFirstResponseMinutes,
       slaResolutionMinutes: category.slaResolutionMinutes,
       inactivityCloseHours: category.inactivityCloseHours,
@@ -235,10 +241,12 @@ export default function TicketConfigurationPage() {
           id: `q${index}`,
           label: '',
           style: 'SHORT',
+          type: 'SHORT_TEXT',
           required: true,
           placeholder: null,
           minLength: null,
-          maxLength: 1000
+          maxLength: 1000,
+          options: []
         }
       ]
     });
@@ -584,11 +592,19 @@ export default function TicketConfigurationPage() {
                   <label>
                     Tipo
                     <select
-                      value={field.style}
-                      onChange={(event) => updateFormField(index, { style: event.target.value as 'SHORT' | 'PARAGRAPH' })}
+                      value={field.type}
+                      onChange={(event) => {
+                        const type = event.target.value as FormField['type'];
+                        updateFormField(index, {
+                          type,
+                          style: type === 'LONG_TEXT' ? 'PARAGRAPH' : 'SHORT',
+                          options: type === 'SINGLE_SELECT' ? field.options : []
+                        });
+                      }}
                     >
-                      <option value="SHORT">Risposta breve</option>
-                      <option value="PARAGRAPH">Paragrafo</option>
+                      <option value="SHORT_TEXT">Risposta breve</option>
+                      <option value="LONG_TEXT">Paragrafo</option>
+                      <option value="SINGLE_SELECT">Menu a scelta singola</option>
                     </select>
                   </label>
                   <label>
@@ -599,6 +615,20 @@ export default function TicketConfigurationPage() {
                       onChange={(event) => updateFormField(index, { placeholder: event.target.value || null })}
                     />
                   </label>
+                  {field.type === 'SINGLE_SELECT' && (
+                    <label>
+                      Opzioni, una per riga: Etichetta|valore
+                      <textarea
+                        value={field.options.map((option) => `${option.label}|${option.value}`).join('\n')}
+                        onChange={(event) => updateFormField(index, {
+                          options: event.target.value.split('\n').map((line) => {
+                            const [label, value] = line.split('|');
+                            return { label: (label ?? '').trim(), value: (value ?? label ?? '').trim(), description: null };
+                          }).filter((option) => option.label && option.value).slice(0, 25)
+                        })}
+                      />
+                    </label>
+                  )}
                   <label className="checkbox-row">
                     <input
                       type="checkbox"
