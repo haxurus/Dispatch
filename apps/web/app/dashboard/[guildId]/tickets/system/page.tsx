@@ -305,7 +305,9 @@ export default function TicketSystemPage() {
             </label>
 
             <p className="muted">
-              Il worker viene eseguito all’avvio del bot e poi ogni 6 ore. I ticket aperti non vengono eliminati.
+              La retention transcript riguarda soltanto le copie cifrate conservate lato Dispatch, non i file già
+              inviati in DM o nei canali Discord. Ogni copia nel database viene comunque eliminata insieme al ticket.
+              Il worker viene eseguito all’avvio del bot e poi ogni 6 ore.
             </p>
           </article>
         </section>
