@@ -72,7 +72,8 @@ async function canSubmit(
     submissionWindowMinutes: number;
     maxAttemptsPerWindow: number;
   },
-  client: Client
+  client: Client,
+  activeSessionId?: string
 ) {
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return { ok: false, message: 'Server non disponibile.' };
@@ -285,7 +286,7 @@ async function finalizeSubmission(interaction: FormInteraction, sessionToken: st
     return;
   }
 
-  const permission = await canSubmit(session.guildId, session.userId, session.form, interaction.client);
+  const permission = await canSubmit(session.guildId, session.userId, session.form, interaction.client, session.id);
   if (!permission.ok) {
     await prisma.formSession.update({ where: { id: session.id }, data: { state: 'CANCELLED' } });
     await sendPrivate(interaction, permission.message);
