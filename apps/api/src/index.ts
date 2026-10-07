@@ -2106,6 +2106,7 @@ app.get('/api/guilds/:guildId/tickets/:ticketId/transcript', async (request, rep
     where: { id: ticketId, guildId },
     select: {
       ticketNumber: true,
+      category: { select: { transcriptStoreTemporary: true } },
       transcript: { select: { contentEncrypted: true } }
     }
   });
@@ -2114,6 +2115,10 @@ app.get('/api/guilds/:guildId/tickets/:ticketId/transcript', async (request, rep
 
   const html = decryptText(ticket.transcript.contentEncrypted);
   if (!html) return reply.code(500).send({ error: 'TRANSCRIPT_DECRYPT_FAILED' });
+
+  if (!ticket.category.transcriptStoreTemporary) {
+    await prisma.transcript.deleteMany({ where: { ticketId } });
+  }
 
   reply.header('Content-Disposition', `attachment; filename="dispatch-ticket-${ticket.ticketNumber}.html"`);
   return reply.type('text/html; charset=utf-8').send(html);
