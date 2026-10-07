@@ -49,6 +49,10 @@ type Category = {
   escalationRoleIds: string[];
   reopenWindowHours: number | null;
   feedbackEnabled: boolean;
+  transcriptAutoGenerate: boolean;
+  transcriptSendToOpener: boolean;
+  transcriptChannelId: string | null;
+  transcriptStoreTemporary: boolean;
   enabled: boolean;
 };
 
@@ -87,6 +91,10 @@ const newCategory = () => ({
   escalationRoleIds: [] as string[],
   reopenWindowHours: 24 as number | null,
   feedbackEnabled: true,
+  transcriptAutoGenerate: false,
+  transcriptSendToOpener: false,
+  transcriptChannelId: '',
+  transcriptStoreTemporary: false,
   enabled: true
 });
 
@@ -187,6 +195,10 @@ export default function TicketConfigurationPage() {
       escalationRoleIds: category.escalationRoleIds ?? [],
       reopenWindowHours: category.reopenWindowHours,
       feedbackEnabled: category.feedbackEnabled,
+      transcriptAutoGenerate: category.transcriptAutoGenerate ?? false,
+      transcriptSendToOpener: category.transcriptSendToOpener ?? false,
+      transcriptChannelId: category.transcriptChannelId ?? '',
+      transcriptStoreTemporary: category.transcriptStoreTemporary ?? false,
       enabled: category.enabled
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -209,7 +221,8 @@ export default function TicketConfigurationPage() {
         body: JSON.stringify({
           ...categoryForm,
           description: categoryForm.description || null,
-          discordCategoryId: categoryForm.discordCategoryId || null
+          discordCategoryId: categoryForm.discordCategoryId || null,
+          transcriptChannelId: categoryForm.transcriptChannelId || null
         })
       });
 
@@ -785,6 +798,70 @@ export default function TicketConfigurationPage() {
             </label>
           </fieldset>
 
+          <fieldset>
+            <legend>Transcript</legend>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={categoryForm.transcriptAutoGenerate}
+                onChange={(event) => setCategoryForm({
+                  ...categoryForm,
+                  transcriptAutoGenerate: event.target.checked
+                })}
+              />
+              Genera automaticamente il transcript alla chiusura
+            </label>
+
+            {categoryForm.transcriptAutoGenerate && (
+              <div className="form">
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={categoryForm.transcriptSendToOpener}
+                    onChange={(event) => setCategoryForm({
+                      ...categoryForm,
+                      transcriptSendToOpener: event.target.checked
+                    })}
+                  />
+                  Invia il file HTML in DM all'utente che ha aperto il ticket
+                </label>
+
+                <label>
+                  Canale archivio transcript
+                  <select
+                    value={categoryForm.transcriptChannelId}
+                    onChange={(event) => setCategoryForm({
+                      ...categoryForm,
+                      transcriptChannelId: event.target.value
+                    })}
+                  >
+                    <option value="">Non inviare in un canale</option>
+                    {textChannels.map((channel) => (
+                      <option value={channel.id} key={channel.id}>#{channel.name}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={categoryForm.transcriptStoreTemporary}
+                    onChange={(event) => setCategoryForm({
+                      ...categoryForm,
+                      transcriptStoreTemporary: event.target.checked
+                    })}
+                  />
+                  Conserva anche una copia cifrata lato Dispatch fino alla retention/eliminazione del ticket
+                </label>
+
+                <p className="muted">
+                  Se la copia lato Dispatch è disattivata, il transcript automatico viene creato solo in memoria
+                  per l'invio e non viene salvato nel database.
+                </p>
+              </div>
+            )}
+          </fieldset>
+
           <button disabled={busy === 'category'} type="submit">
             {busy === 'category' ? 'Salvataggio...' : editingCategoryId ? 'Salva modifiche' : 'Crea categoria'}
           </button>
@@ -873,7 +950,7 @@ export default function TicketConfigurationPage() {
                 SLA risposta: {category.slaFirstResponseMinutes ?? 'off'} · SLA risoluzione: {category.slaResolutionMinutes ?? 'off'} · Auto-close: {category.inactivityCloseHours ? `${category.inactivityCloseHours}h` : 'off'}
               </p>
               <p className="muted">
-                Escalation: {category.escalationMinutes ? `${category.escalationMinutes} min` : 'off'} · Riapertura: {category.reopenWindowHours ? `${category.reopenWindowHours}h` : 'off'} · Feedback: {category.feedbackEnabled ? 'on' : 'off'}
+                Escalation: {category.escalationMinutes ? `${category.escalationMinutes} min` : 'off'} · Riapertura: {category.reopenWindowHours ? `${category.reopenWindowHours}h` : 'off'} · Feedback: {category.feedbackEnabled ? 'on' : 'off'} · Transcript: {category.transcriptAutoGenerate ? 'auto' : 'manuale'}
               </p>
               <div className="actions">
                 <button className="secondary" onClick={() => editCategory(category)}>Modifica</button>
