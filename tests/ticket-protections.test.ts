@@ -195,12 +195,14 @@ test('retention respects reopen window and cascades expired private data', async
   const purge = await ticket(cat);
   await prisma.ticketNote.create({ data: { ticketId: purge.id, guildId: G, authorId: OTHER, contentEncrypted: 'test fixture' } });
   await prisma.ticketFeedback.create({ data: { ticketId: purge.id, guildId: G, userId: U, rating: 5 } });
+  await prisma.transcript.create({ data: { ticketId: purge.id, contentEncrypted: 'test fixture' } });
   await prisma.guildSettings.update({ where: { guildId: G }, data: { transcriptRetentionDays: 1, closedTicketRetentionDays: 1 } });
   await runTicketRetention(client());
   assert.ok(await prisma.ticket.findUnique({ where: { id: keep.id } }));
   assert.equal(await prisma.ticket.findUnique({ where: { id: purge.id } }), null);
   assert.equal(await prisma.ticketNote.count({ where: { ticketId: purge.id } }), 0);
   assert.equal(await prisma.ticketFeedback.count({ where: { ticketId: purge.id } }), 0);
+  assert.equal(await prisma.transcript.count({ where: { ticketId: purge.id } }), 0);
 });
 
 test('Discord failures preserve the deletion marker and block reopening, retry can finish', async () => {
