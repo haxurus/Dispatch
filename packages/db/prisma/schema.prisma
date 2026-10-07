@@ -72,6 +72,10 @@ model TicketCategory {
   escalationRoleIds        String[] @default([])
   reopenWindowHours        Int?
   feedbackEnabled          Boolean  @default(true)
+  transcriptAutoGenerate   Boolean  @default(false)
+  transcriptSendToOpener   Boolean  @default(false)
+  transcriptChannelId      String?
+  transcriptStoreTemporary Boolean  @default(false)
   enabled                  Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
