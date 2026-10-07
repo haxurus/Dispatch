@@ -28,10 +28,12 @@ GRANT USAGE ON SCHEMA public TO dispatch_api, dispatch_bot;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM dispatch_api, dispatch_bot;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript",
-  "PanelSession", "PanelRoleBinding", "PanelAudit", "TicketNote", "ResponseTemplate", "TicketFeedback", "GuildBlacklist"
+  "PanelSession", "PanelRoleBinding", "PanelAudit", "TicketNote", "ResponseTemplate", "TicketFeedback", "GuildBlacklist",
+  "FormDefinition", "FormPanel", "FormSubmission", "FormSession", "FormPermissionBinding"
 TO dispatch_api;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
-  "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript", "TicketFeedback", "TicketOpenAttempt", "TicketUserGuard"
+  "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript", "TicketFeedback", "TicketOpenAttempt", "TicketUserGuard",
+  "FormDefinition", "FormPanel", "FormSubmission", "FormSession", "FormPermissionBinding"
 TO dispatch_bot;
 GRANT SELECT ON TABLE "GuildBlacklist" TO dispatch_bot;
 REVOKE ALL ON TABLE "PanelSession", "PanelRoleBinding", "PanelAudit" FROM dispatch_bot;
