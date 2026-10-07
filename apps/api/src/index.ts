@@ -588,8 +588,8 @@ const formDefinitionSchema = z.object({
   if (value.openAt && value.closeAt && value.openAt >= value.closeAt) {
     ctx.addIssue({ code: 'custom', message: 'openAt must be before closeAt', path: ['closeAt'] });
   }
-  if (value.createTicketOnSubmit && !value.ticketParentCategoryId) {
-    ctx.addIssue({ code: 'custom', message: 'Ticket category is required', path: ['ticketParentCategoryId'] });
+  if (value.createTicketOnSubmit && !value.ticketCategoryId) {
+    ctx.addIssue({ code: 'custom', message: 'Dispatch ticket category is required', path: ['ticketCategoryId'] });
   }
 });
 
