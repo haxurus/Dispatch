@@ -18,7 +18,8 @@ type Category = {
   transcriptAutoGenerate: boolean;
   transcriptSendToOpener: boolean;
   transcriptChannelId: string | null;
-  transcriptStoreTemporary: boolean;
+  transcriptRetain: boolean;
+  formFields?: Array<{ id: string; type?: string; options?: Array<{ label: string; value: string }> }>;
 };
 
 type TicketMember = {
@@ -46,8 +47,27 @@ type TicketNote = {
 type FormAnswer = {
   id: string;
   label: string;
-  value: string;
+  type?: string;
+  value: string | string[] | boolean | null;
 };
+
+// Local mirror of @dispatch/shared displayAnswer (the web app does not depend on it).
+function formatAnswer(
+  answer: FormAnswer,
+  field?: { type?: string; options?: Array<{ label: string; value: string }> }
+) {
+  const labels = new Map((field?.options ?? []).map((option) => [option.value, option.label]));
+  const value = answer.value;
+  if (Array.isArray(value)) {
+    return value.map((item) => labels.get(item) ?? item).join(', ') || 'Nessuna risposta';
+  }
+  if (typeof value === 'boolean') return value ? 'Sì' : 'No';
+  if ((answer.type ?? field?.type) === 'BOOLEAN') {
+    return value === 'true' ? 'Sì' : value === 'false' ? 'No' : 'Nessuna risposta';
+  }
+  if (!value) return 'Nessuna risposta';
+  return labels.get(value) ?? value;
+}
 
 type TicketDetail = {
   id: string;
@@ -165,6 +185,50 @@ export default function TicketDetailPage() {
       setNotice('Operazione completata.');
       await load();
       return true;
+    } finally {
+      setBusy('');
+    }
+  };
+
+  // POST, never a plain link: a non-retained transcript is consumed (deleted)
+  // by the download, which must not happen on GET/HEAD or link prefetch.
+  const downloadTranscript = async () => {
+    setBusy('transcript-download');
+    setError('');
+    setNotice('');
+
+    try {
+      const response = await fetch(
+        `/backend/api/guilds/${guildId}/tickets/${ticketId}/transcript/download`,
+        { method: 'POST' }
+      );
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        if (body.error === 'TRANSCRIPT_NOT_FOUND') {
+          setTicket((current) => current ? { ...current, transcript: null } : current);
+        }
+        setError(`Download fallito: ${body.error ?? response.status}`);
+        return;
+      }
+
+      const consumedHeader = response.headers.get('X-Transcript-Consumed');
+      const consumed = consumedHeader === null ? !ticket?.category.transcriptRetain : consumedHeader === '1';
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `dispatch-ticket-${ticket?.ticketNumber ?? ticketId}.html`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+
+      if (consumed) {
+        setTicket((current) => current ? { ...current, transcript: null } : current);
+        setNotice('Transcript scaricato e rimosso dal database (copia monouso).');
+      } else {
+        setNotice('Transcript scaricato.');
+      }
     } finally {
       setBusy('');
     }
@@ -432,7 +496,9 @@ export default function TicketDetailPage() {
               {ticket.formData.map((answer) => (
                 <div key={answer.id}>
                   <dt>{answer.label}</dt>
-                  <dd className="preserve">{answer.value || 'Nessuna risposta'}</dd>
+                  <dd className="preserve">
+                    {formatAnswer(answer, ticket.category.formFields?.find((field) => field.id === answer.id))}
+                  </dd>
                 </div>
               ))}
             </dl>
@@ -447,7 +513,9 @@ export default function TicketDetailPage() {
             {ticket.transcript
               ? `${ticket.transcript.messageCount} messaggi · ${new Date(ticket.transcript.createdAt).toLocaleString()}`
               : ticket.category.transcriptAutoGenerate
-                ? 'La consegna automatica avviene alla chiusura. Nessuna copia è conservata se non configurato.'
+                ? ticket.category.transcriptRetain
+                  ? 'La consegna automatica avviene alla chiusura; una copia cifrata viene conservata.'
+                  : 'La consegna automatica avviene alla chiusura. Nessuna copia viene conservata.'
                 : 'Non ancora generato'}
           </p>
           <div className="actions">
@@ -461,17 +529,18 @@ export default function TicketDetailPage() {
               Genera/Aggiorna
             </button>
             {ticket.transcript && (
-              <a
-                className="button secondary"
-                href={`/backend/api/guilds/${guildId}/tickets/${ticketId}/transcript`}
+              <button
+                className="secondary"
+                disabled={Boolean(busy)}
+                onClick={() => void downloadTranscript()}
               >
                 Scarica HTML
-              </a>
+              </button>
             )}
           </div>
-          {!ticket.category.transcriptStoreTemporary && ticket.transcript && (
+          {!ticket.category.transcriptRetain && ticket.transcript && (
             <p className="muted">
-              Questa copia è temporanea: dopo il download viene rimossa dal database. In ogni caso viene eliminata
+              Questa copia è monouso: al primo download viene rimossa dal database. In ogni caso viene eliminata
               insieme al ticket.
             </p>
           )}

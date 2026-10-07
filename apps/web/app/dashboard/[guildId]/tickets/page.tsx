@@ -52,7 +52,7 @@ type Category = {
   transcriptAutoGenerate: boolean;
   transcriptSendToOpener: boolean;
   transcriptChannelId: string | null;
-  transcriptStoreTemporary: boolean;
+  transcriptRetain: boolean;
   enabled: boolean;
 };
 
@@ -94,7 +94,7 @@ const newCategory = () => ({
   transcriptAutoGenerate: false,
   transcriptSendToOpener: false,
   transcriptChannelId: '',
-  transcriptStoreTemporary: false,
+  transcriptRetain: true,
   enabled: true
 });
 
@@ -111,6 +111,19 @@ function nullableNumber(value: string) {
   return value === '' ? null : Number(value);
 }
 
+function formatFieldOptions(options: FormField['options']) {
+  return options.map((option) => `${option.label}|${option.value}`).join('\n');
+}
+
+function parseFieldOptions(text: string): FormField['options'] {
+  return text.split('\n').map((line) => {
+    const separator = line.indexOf('|');
+    const label = (separator >= 0 ? line.slice(0, separator) : line).trim();
+    const value = (separator >= 0 ? line.slice(separator + 1) : line).trim() || label;
+    return { label, value, description: null };
+  }).filter((option) => option.label && option.value).slice(0, 25);
+}
+
 export default function TicketConfigurationPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
@@ -122,6 +135,9 @@ export default function TicketConfigurationPage() {
   const [panels, setPanels] = useState<Panel[]>([]);
   const [templates, setTemplates] = useState<ResponseTemplate[]>([]);
   const [categoryForm, setCategoryForm] = useState(newCategory);
+  // Raw option editor text per field ID: parsed on blur and before save, so
+  // typing "Etichetta|" is not normalised away mid-keystroke.
+  const [optionDrafts, setOptionDrafts] = useState<Record<string, string>>({});
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [panelForm, setPanelForm] = useState(emptyPanel);
   const [templateName, setTemplateName] = useState('');
@@ -168,11 +184,13 @@ export default function TicketConfigurationPage() {
 
   const resetCategory = () => {
     setCategoryForm(newCategory());
+    setOptionDrafts({});
     setEditingCategoryId(null);
   };
 
   const editCategory = (category: Category) => {
     setEditingCategoryId(category.id);
+    setOptionDrafts({});
     setCategoryForm({
       name: category.name,
       description: category.description ?? '',
@@ -198,7 +216,7 @@ export default function TicketConfigurationPage() {
       transcriptAutoGenerate: category.transcriptAutoGenerate ?? false,
       transcriptSendToOpener: category.transcriptSendToOpener ?? false,
       transcriptChannelId: category.transcriptChannelId ?? '',
-      transcriptStoreTemporary: category.transcriptStoreTemporary ?? false,
+      transcriptRetain: category.transcriptRetain ?? true,
       enabled: category.enabled
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -220,6 +238,11 @@ export default function TicketConfigurationPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...categoryForm,
+          formFields: categoryForm.formFields.map((field) =>
+            field.type === 'SINGLE_SELECT' && optionDrafts[field.id] !== undefined
+              ? { ...field, options: parseFieldOptions(optionDrafts[field.id]) }
+              : field
+          ),
           description: categoryForm.description || null,
           discordCategoryId: categoryForm.discordCategoryId || null,
           transcriptChannelId: categoryForm.transcriptChannelId || null
@@ -275,9 +298,28 @@ export default function TicketConfigurationPage() {
   };
 
   const removeFormField = (index: number) => {
+    const removedId = categoryForm.formFields[index]?.id;
     setCategoryForm({
       ...categoryForm,
       formFields: categoryForm.formFields.filter((_, current) => current !== index)
+    });
+    if (removedId) {
+      setOptionDrafts((current) => {
+        const next = { ...current };
+        delete next[removedId];
+        return next;
+      });
+    }
+  };
+
+  const commitOptionDraft = (index: number, fieldId: string) => {
+    const text = optionDrafts[fieldId];
+    if (text === undefined) return;
+    updateFormField(index, { options: parseFieldOptions(text) });
+    setOptionDrafts((current) => {
+      const next = { ...current };
+      delete next[fieldId];
+      return next;
     });
   };
 
@@ -295,7 +337,9 @@ export default function TicketConfigurationPage() {
         const body = await response.json().catch(() => ({}));
         setError(body.error === 'CATEGORY_IN_USE'
           ? 'La categoria contiene già ticket e non può essere eliminata.'
-          : `Eliminazione categoria fallita: ${body.error ?? response.status}`);
+          : body.error === 'CATEGORY_IN_USE_BY_FORM'
+            ? 'La categoria è usata da uno o più form per il ticket automatico: aggiorna i form prima di eliminarla, oppure disabilitala.'
+            : `Eliminazione categoria fallita: ${body.error ?? response.status}`);
         return;
       }
 
@@ -633,13 +677,12 @@ export default function TicketConfigurationPage() {
                     <label>
                       Opzioni, una per riga: Etichetta|valore
                       <textarea
-                        value={field.options.map((option) => `${option.label}|${option.value}`).join('\n')}
-                        onChange={(event) => updateFormField(index, {
-                          options: event.target.value.split('\n').map((line) => {
-                            const [label, value] = line.split('|');
-                            return { label: (label ?? '').trim(), value: (value ?? label ?? '').trim(), description: null };
-                          }).filter((option) => option.label && option.value).slice(0, 25)
-                        })}
+                        value={optionDrafts[field.id] ?? formatFieldOptions(field.options)}
+                        onChange={(event) => {
+                          const text = event.target.value;
+                          setOptionDrafts((current) => ({ ...current, [field.id]: text }));
+                        }}
+                        onBlur={() => commitOptionDraft(index, field.id)}
                       />
                     </label>
                   )}
@@ -842,24 +885,26 @@ export default function TicketConfigurationPage() {
                   </select>
                 </label>
 
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={categoryForm.transcriptStoreTemporary}
-                    onChange={(event) => setCategoryForm({
-                      ...categoryForm,
-                      transcriptStoreTemporary: event.target.checked
-                    })}
-                  />
-                  Conserva anche una copia cifrata lato Dispatch fino alla retention/eliminazione del ticket
-                </label>
-
-                <p className="muted">
-                  Se la copia lato Dispatch è disattivata, il transcript automatico viene creato solo in memoria
-                  per l'invio e non viene salvato nel database.
-                </p>
               </div>
             )}
+
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={categoryForm.transcriptRetain}
+                onChange={(event) => setCategoryForm({
+                  ...categoryForm,
+                  transcriptRetain: event.target.checked
+                })}
+              />
+              Conserva una copia cifrata lato Dispatch fino alla retention/eliminazione del ticket
+            </label>
+
+            <p className="muted">
+              Attivo: la copia resta disponibile e può essere scaricata più volte dalla dashboard.
+              Disattivo: il transcript generato dalla dashboard è monouso e viene eliminato dal database al primo
+              download; il transcript automatico viene creato solo in memoria per l'invio e non viene salvato.
+            </p>
           </fieldset>
 
           <button disabled={busy === 'category'} type="submit">

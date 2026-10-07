@@ -32,7 +32,7 @@ Alla chiusura è possibile scegliere, anche contemporaneamente, di:
 
 Se la copia lato Dispatch non è abilitata, il transcript automatico viene costruito esclusivamente in memoria, inviato alle destinazioni configurate e poi scartato. Non viene scritto su filesystem.
 
-La generazione manuale dalla dashboard usa una copia cifrata temporanea per consentire il download. Se la categoria non prevede conservazione lato Dispatch, la copia viene eliminata dal database dopo il download. In ogni caso la relazione `Transcript -> Ticket` usa cancellazione a cascata: eliminando il ticket viene eliminata anche qualsiasi copia transcript ancora presente.
+La generazione manuale dalla dashboard salva una copia cifrata per consentire il download. Se la categoria non prevede conservazione lato Dispatch (`transcriptRetain` disattivo; predefinito attivo), la copia è monouso: il download avviene con `POST .../transcript/download`, che la elimina in modo atomico; `GET`/`HEAD` non eliminano mai nulla. In ogni caso la relazione `Transcript -> Ticket` usa cancellazione a cascata: eliminando il ticket viene eliminata anche qualsiasi copia transcript ancora presente.
 
 La consegna DM o nel canale archivio non blocca la chiusura del ticket in caso di errore Discord; l'esito viene registrato nell'audit. Una riapertura e una successiva nuova chiusura generano un transcript aggiornato.
 

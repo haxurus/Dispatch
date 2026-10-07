@@ -115,21 +115,39 @@ export function normalizeQuestions(value: unknown, maxQuestions = 25): FormQuest
   });
 }
 
+/**
+ * Effective MULTI_SELECT bounds, clamped to the option count:
+ * max = min(maxSelections ?? options, options); min = min(minSelections ?? (required ? 1 : 0), max).
+ */
+export function selectionBounds(question: FormQuestion) {
+  const optionCount = (question.options ?? []).length;
+  const max = Math.max(0, Math.min(question.maxSelections ?? optionCount, optionCount));
+  const min = Math.max(0, Math.min(question.minSelections ?? (question.required ? 1 : 0), max));
+  return { min, max };
+}
+
 export type QuestionValidation =
   | { ok: true; value: string | string[] }
   | { ok: false; message: string };
 
 export function validateQuestionAnswer(question: FormQuestion, raw: unknown): QuestionValidation {
   if (question.type === 'MULTI_SELECT') {
-    const values = Array.isArray(raw)
-      ? raw.filter((value): value is string => typeof value === 'string')
-      : [];
+    // Accepts string[] or a single string (wrapped); '' / [] mean "no selection".
+    const list: unknown[] = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
+    const values = list
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter(Boolean);
     const clean = [...new Set(values)];
-    if (!clean.length && question.required) return { ok: false, message: 'Questa risposta è obbligatoria.' };
+    if (!clean.length) {
+      return question.required
+        ? { ok: false, message: 'Questa risposta è obbligatoria.' }
+        : { ok: true, value: [] };
+    }
     const allowed = new Set((question.options ?? []).map((option) => option.value));
     if (clean.some((value) => !allowed.has(value))) return { ok: false, message: 'Selezione non valida.' };
-    const min = question.minSelections ?? (question.required ? 1 : 0);
-    const max = question.maxSelections ?? Math.max(1, Math.min(25, allowed.size || 25));
+    // Same bounds as the Discord select menu built by the bot.
+    const { min, max } = selectionBounds(question);
     if (clean.length < min || clean.length > max) {
       return { ok: false, message: `Seleziona da ${min} a ${max} opzioni.` };
     }
