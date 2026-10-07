@@ -24,6 +24,7 @@ import {
   type FormQuestion
 } from '@dispatch/shared';
 import { decryptText, encryptText } from './security.js';
+import { ticketControls } from './tickets.js';
 
 const START = 'dispatch:form:start:';
 const TEXT = 'dispatch:form:text:';
@@ -329,32 +330,73 @@ async function finalizeSubmission(interaction: FormInteraction, sessionToken: st
     }
   }
 
-  if (session.form.createTicketOnSubmit) {
-    const participant = [
-      PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
-      PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks
-    ];
-    const channel = await guild.channels.create({
-      name: `${safeChannelPart(session.form.ticketPrefix)}-${safeChannelPart(interaction.user.username)}-${submission.id.slice(-5)}`,
-      type: ChannelType.GuildText,
-      parent: session.form.ticketParentCategoryId ?? undefined,
-      topic: `Dispatch form submission ${submission.id} - ${session.userId}`.slice(0, 1024),
-      permissionOverwrites: [
-        { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-        { id: interaction.client.user!.id, type: 1, allow: [...participant, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
-        { id: session.userId, type: 1, allow: participant },
-        ...session.form.ticketStaffRoleIds.map((id) => ({
-          id, type: 0 as const, allow: [...participant, PermissionFlagsBits.ManageMessages]
-        }))
-      ]
-    }).catch(() => null);
-    if (channel) {
-      ticketChannelId = channel.id;
-      await channel.send({
-        content: session.form.ticketStaffRoleIds.map((id) => `<@&${id}>`).join(' ') || undefined,
-        embeds,
-        allowedMentions: { parse: [], roles: session.form.ticketStaffRoleIds, users: [] }
+  if (session.form.createTicketOnSubmit && session.form.ticketCategoryId) {
+    const category = await prisma.ticketCategory.findFirst({
+      where: { id: session.form.ticketCategoryId, guildId: session.guildId, enabled: true }
+    });
+    if (category) {
+      const staffRoleIds = session.form.ticketStaffRoleIds.length
+        ? session.form.ticketStaffRoleIds
+        : category.staffRoleIds;
+      const participant = [
+        PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks
+      ];
+      const counter = await prisma.guildSettings.update({
+        where: { guildId: session.guildId },
+        data: { ticketCounter: { increment: 1 } },
+        select: { ticketCounter: true }
+      });
+      const number = counter.ticketCounter;
+      const channel = await guild.channels.create({
+        name: `ticket-${String(number).padStart(4, '0')}-${safeChannelPart(interaction.user.username)}`,
+        type: ChannelType.GuildText,
+        parent: session.form.ticketParentCategoryId ?? category.discordCategoryId ?? undefined,
+        topic: `Dispatch ticket #${number} - ${session.userId} - form ${session.form.name}`.slice(0, 1024),
+        permissionOverwrites: [
+          { id: guild.id, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.CreatePublicThreads,
+            PermissionFlagsBits.CreatePrivateThreads, PermissionFlagsBits.SendMessagesInThreads] },
+          { id: interaction.client.user!.id, type: 1, allow: [...participant, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
+          { id: session.userId, type: 1, allow: participant },
+          ...staffRoleIds.map((id) => ({
+            id, type: 0 as const, allow: [...participant, PermissionFlagsBits.ManageMessages]
+          }))
+        ]
       }).catch(() => null);
+
+      if (channel) {
+        try {
+          const ticket = await prisma.ticket.create({
+            data: {
+              guildId: session.guildId,
+              categoryId: category.id,
+              ticketNumber: number,
+              openerId: session.userId,
+              channelId: channel.id,
+              status: 'OPEN',
+              formDataEncrypted: encryptText(JSON.stringify(answers)),
+              lastActivityAt: new Date(),
+              members: { create: { userId: session.userId, access: 'OPENER' } },
+              audit: { create: {
+                guildId: session.guildId,
+                actorId: session.userId,
+                action: 'ticket.open.from_form',
+                details: { formId: session.form.id, submissionId: submission.id }
+              } }
+            }
+          });
+          ticketChannelId = channel.id;
+          await channel.send({
+            content: staffRoleIds.map((id) => `<@&${id}>`).join(' ') || undefined,
+            embeds,
+            components: [ticketControls(ticket.id)],
+            allowedMentions: { parse: [], roles: staffRoleIds, users: [] }
+          }).catch(() => null);
+        } catch (error) {
+          await channel.delete('Dispatch: failed form ticket persistence').catch(() => null);
+          throw error;
+        }
+      }
     }
   }
 
