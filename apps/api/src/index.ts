@@ -439,6 +439,10 @@ const categorySchema = z.object({
   ),
   reopenWindowHours: z.number().int().min(1).max(720).nullable().default(null),
   feedbackEnabled: z.boolean().default(true),
+  transcriptAutoGenerate: z.boolean().default(false),
+  transcriptSendToOpener: z.boolean().default(false),
+  transcriptChannelId: snowflake.nullable().default(null),
+  transcriptStoreTemporary: z.boolean().default(false),
   enabled: z.boolean().default(true)
 }).superRefine((value, ctx) => {
   if (value.inactivityWarningMinutes !== null && value.inactivityCloseHours === null) {
@@ -458,6 +462,18 @@ const categorySchema = z.object({
       code: 'custom',
       message: 'Warning must occur before automatic close',
       path: ['inactivityWarningMinutes']
+    });
+  }
+  if (
+    value.transcriptAutoGenerate &&
+    !value.transcriptSendToOpener &&
+    !value.transcriptChannelId &&
+    !value.transcriptStoreTemporary
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Automatic transcript requires at least one destination',
+      path: ['transcriptAutoGenerate']
     });
   }
 });
@@ -675,6 +691,12 @@ async function validateCategoryResources(
   }
   if (data.escalationRoleIds.some((roleId) => roleId === guildId || !roleIds.has(roleId))) {
     return 'ESCALATION_ROLE_NOT_FOUND';
+  }
+  if (
+    data.transcriptChannelId &&
+    !resources.channels.some((channel) => channel.id === data.transcriptChannelId && [0, 5].includes(channel.type))
+  ) {
+    return 'TRANSCRIPT_CHANNEL_NOT_FOUND';
   }
 
   return null;
