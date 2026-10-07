@@ -15,6 +15,10 @@ type Category = {
   escalationRoleIds: string[];
   reopenWindowHours: number | null;
   feedbackEnabled: boolean;
+  transcriptAutoGenerate: boolean;
+  transcriptSendToOpener: boolean;
+  transcriptChannelId: string | null;
+  transcriptStoreTemporary: boolean;
 };
 
 type TicketMember = {
@@ -442,7 +446,9 @@ export default function TicketDetailPage() {
           <p className="muted">
             {ticket.transcript
               ? `${ticket.transcript.messageCount} messaggi · ${new Date(ticket.transcript.createdAt).toLocaleString()}`
-              : 'Non ancora generato'}
+              : ticket.category.transcriptAutoGenerate
+                ? 'La consegna automatica avviene alla chiusura. Nessuna copia è conservata se non configurato.'
+                : 'Non ancora generato'}
           </p>
           <div className="actions">
             <button
@@ -462,6 +468,13 @@ export default function TicketDetailPage() {
                 Scarica HTML
               </a>
             )}
+          </div>
+          {!ticket.category.transcriptStoreTemporary && ticket.transcript && (
+            <p className="muted">
+              Questa copia è temporanea: dopo il download viene rimossa dal database. In ogni caso viene eliminata
+              insieme al ticket.
+            </p>
+          )}
           </div>
         </article>
       </section>
