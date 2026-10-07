@@ -16,7 +16,7 @@ import {
   type StringSelectMenuInteraction
 } from 'discord.js';
 import { prisma } from '@dispatch/db';
-import { encryptText } from './security.js';
+import { decryptText, encryptText } from './security.js';
 import { closeTicket, reopenTicket, setTicketStatus, unclaimTicket } from './ticket-operations.js';
 import { reserveTicketOpen, getTicketOpenReservation, consumeTicketOpenReservation,
   commitTicketOpen, releaseTicketOpenReservation, ticketOpenReservationMessage,
@@ -27,6 +27,7 @@ const PANEL_SELECT_PREFIX = 'dispatch:open:';
 const MAIN_MENU_BUTTON_PREFIX = 'dispatch:main-menu:';
 const MAIN_MENU_SELECT_PREFIX = 'dispatch:main-menu-select:';
 const OPEN_MODAL_PREFIX = 'dispatch:open-modal:';
+const OPEN_SELECT_PREFIX = 'dispatch:open-select:';
 const CLAIM_PREFIX = 'dispatch:claim:';
 const UNCLAIM_PREFIX = 'dispatch:unclaim:';
 const WAITING_PREFIX = 'dispatch:waiting:';
@@ -41,10 +42,12 @@ type FormField = {
   id: string;
   label: string;
   style: 'SHORT' | 'PARAGRAPH';
+  type: 'SHORT_TEXT' | 'LONG_TEXT' | 'SINGLE_SELECT';
   required: boolean;
   placeholder?: string | null;
   minLength?: number | null;
   maxLength?: number | null;
+  options: Array<{ label: string; value: string; description?: string | null }>;
 };
 
 function parseFormFields(value: unknown): FormField[] {
@@ -68,11 +71,22 @@ function parseFormFields(value: unknown): FormField[] {
         ? row.id
         : `field_${index + 1}`,
       label,
-      style: row.style === 'PARAGRAPH' ? 'PARAGRAPH' : 'SHORT',
+      style: row.type === 'LONG_TEXT' || row.style === 'PARAGRAPH' ? 'PARAGRAPH' : 'SHORT',
+      type: row.type === 'SINGLE_SELECT' ? 'SINGLE_SELECT'
+        : row.type === 'LONG_TEXT' || row.style === 'PARAGRAPH' ? 'LONG_TEXT' : 'SHORT_TEXT',
       required: row.required !== false,
       placeholder: typeof row.placeholder === 'string' ? row.placeholder.slice(0, 100) : null,
       minLength,
-      maxLength
+      maxLength,
+      options: Array.isArray(row.options) ? row.options.slice(0, 25).flatMap((option) => {
+        if (!option || typeof option !== 'object' || Array.isArray(option)) return [];
+        const entry = option as Record<string, unknown>;
+        const optionLabel = typeof entry.label === 'string' ? entry.label.trim().slice(0, 100) : '';
+        const optionValue = typeof entry.value === 'string' ? entry.value.trim().slice(0, 100) : '';
+        if (!optionLabel || !optionValue) return [];
+        return [{ label: optionLabel, value: optionValue,
+          description: typeof entry.description === 'string' ? entry.description.trim().slice(0, 100) || null : null }];
+      }) : []
     } satisfies FormField];
   });
 }
