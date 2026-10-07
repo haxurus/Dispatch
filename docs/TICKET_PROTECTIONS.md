@@ -20,6 +20,22 @@ Ogni apertura ha una prenotazione casuale monouso, persistita in PostgreSQL e le
 
 Un modulo abbandonato scade dopo 10 minuti. Una mutazione Discord dall'esito incerto NON viene sbloccata automaticamente: lo stato CREATING resta persistito per evitare doppi canali. L'operatore deve verificare eventuali canali creati prima di correggere la prenotazione. Non cancellare alla cieca le righe TicketUserGuard. Un errore nella risposta privata all'utente non elimina un ticket gia salvato.
 
+## Transcript
+
+La generazione automatica è configurabile per singola categoria ticket ed è disattivata per impostazione predefinita.
+
+Alla chiusura è possibile scegliere, anche contemporaneamente, di:
+
+- inviare il transcript HTML in DM all'utente che ha aperto il ticket;
+- inviarlo come file in un canale Discord dedicato;
+- mantenere una copia cifrata nel database Dispatch.
+
+Se la copia lato Dispatch non è abilitata, il transcript automatico viene costruito esclusivamente in memoria, inviato alle destinazioni configurate e poi scartato. Non viene scritto su filesystem.
+
+La generazione manuale dalla dashboard usa una copia cifrata temporanea per consentire il download. Se la categoria non prevede conservazione lato Dispatch, la copia viene eliminata dal database dopo il download. In ogni caso la relazione `Transcript -> Ticket` usa cancellazione a cascata: eliminando il ticket viene eliminata anche qualsiasi copia transcript ancora presente.
+
+La consegna DM o nel canale archivio non blocca la chiusura del ticket in caso di errore Discord; l'esito viene registrato nell'audit. Una riapertura e una successiva nuova chiusura generano un transcript aggiornato.
+
 ## Retention
 
 Le nuove installazioni non cancellano nulla finche non viene impostata una durata. I valori gia salvati vengono mantenuti durante l'aggiornamento. Sono separati:
