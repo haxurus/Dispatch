@@ -38,7 +38,7 @@ const emptyQuestion = (index: number): Question => ({
 
 const emptyForm = () => ({
   name: '', description: '', questions: [emptyQuestion(1)], enabled: true,
-  openAt: '', closeAt: '', deliveryMode: 'EPHEMERAL' as const, resultChannelId: '',
+  openAt: '', closeAt: '', deliveryMode: 'EPHEMERAL' as 'EPHEMERAL' | 'DM', resultChannelId: '',
   resultRoleIds: [] as string[], allowedRoleIds: [] as string[], deniedRoleIds: [] as string[],
   maxSubmissionsPerUser: 1, cooldownSeconds: 300, submissionWindowMinutes: 60, maxAttemptsPerWindow: 5,
   createTicketOnSubmit: false, ticketCategoryId: '', ticketParentCategoryId: '',
