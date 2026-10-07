@@ -54,6 +54,7 @@ export default function FormsPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [forms, setForms] = useState<FormDef[]>([]);
+  const [ticketCategories, setTicketCategories] = useState<Array<{ id: string; name: string }>>([]);
   const [panels, setPanels] = useState<Panel[]>([]);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -69,17 +70,18 @@ export default function FormsPage() {
 
   const load = async () => {
     setError('');
-    const [a, r, f, p] = await Promise.all([
+    const [a, r, f, p, tc] = await Promise.all([
       fetch(`/backend/api/guilds/${guildId}/access`),
       fetch(`/backend/api/guilds/${guildId}/resources`),
       fetch(`/backend/api/guilds/${guildId}/forms`),
-      fetch(`/backend/api/guilds/${guildId}/form-panels`)
+      fetch(`/backend/api/guilds/${guildId}/form-panels`),
+      fetch(`/backend/api/guilds/${guildId}/categories`)
     ]);
     if (a.status === 401) {
       window.location.href = '/backend/auth/discord';
       return;
     }
-    if (![a, r, f, p].every((response) => response.ok)) {
+    if (![a, r, f, p, tc].every((response) => response.ok)) {
       setError('Impossibile caricare la configurazione dei form.');
       return;
     }
@@ -90,6 +92,7 @@ export default function FormsPage() {
     setRoles(resources.roles);
     setForms(await f.json());
     setPanels(await p.json());
+    setTicketCategories(await tc.json());
   };
 
   useEffect(() => { void load(); }, [guildId]);
@@ -228,10 +231,6 @@ export default function FormsPage() {
     else setError('Aggiornamento permessi fallito.');
   };
 
-  if (access && access !== 'ADMIN' && access !== 'OWNER') {
-    return <main className="shell"><section className="card"><h1>Form</h1><p>La creazione globale richiede Admin/Owner. I singoli form possono comunque delegare gestione e revisione per ruolo.</p><a className="button secondary" href={`/dashboard/${guildId}`}>Torna indietro</a></section></main>;
-  }
-
   return (
     <main className="shell">
       <div className="row">
@@ -287,13 +286,16 @@ export default function FormsPage() {
           <fieldset><legend>Ticket automatico dopo invio</legend>
             <label className="checkbox-row"><input type="checkbox" checked={form.createTicketOnSubmit} onChange={(e) => setForm({ ...form, createTicketOnSubmit: e.target.checked })}/>Crea canale privato con report, compilatore e staff</label>
             {form.createTicketOnSubmit && <>
-              <label>Categoria Discord<select required value={form.ticketParentCategoryId} onChange={(e) => setForm({ ...form, ticketParentCategoryId: e.target.value })}><option value="">Seleziona...</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+              <label>Categoria ticket Dispatch<select required value={form.ticketCategoryId} onChange={(e) => setForm({ ...form, ticketCategoryId: e.target.value })}><option value="">Seleziona...</option>{ticketCategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+              <label>Categoria Discord override<select value={form.ticketParentCategoryId} onChange={(e) => setForm({ ...form, ticketParentCategoryId: e.target.value })}><option value="">Usa quella della categoria ticket</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
               <label>Ruoli staff<select multiple value={form.ticketStaffRoleIds} onChange={(e) => setForm({ ...form, ticketStaffRoleIds: [...e.target.selectedOptions].map((o) => o.value) })}>{roles.filter((r) => r.id !== guildId).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
               <label>Prefisso canale<input value={form.ticketPrefix} onChange={(e) => setForm({ ...form, ticketPrefix: e.target.value })}/></label>
             </>}
           </fieldset>
           <label className="checkbox-row"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })}/>Form abilitato</label>
-          <button disabled={busy === 'form'} type="submit">{editingId ? 'Salva modifiche' : 'Crea form'}</button>
+          <button disabled={busy === 'form' || (!editingId && access !== 'ADMIN' && access !== 'OWNER')} type="submit">
+            {editingId ? 'Salva modifiche' : access === 'ADMIN' || access === 'OWNER' ? 'Crea form' : 'Solo Admin/Owner può creare nuovi form'}
+          </button>
         </form>
 
         <form className="card form" onSubmit={createPanel}>
