@@ -20,7 +20,9 @@ import {
   assignTicket,
   closeTicket,
   generateTranscript,
+  getGuildAccessSnapshot,
   getGuildResources,
+  publishFormPanel,
   publishMainMenu,
   publishPanel,
   removeTicketMember,
@@ -496,6 +498,146 @@ const panelSchema = z.object({
   categoryIds: z.array(internalId).min(1).max(25).refine((items) => new Set(items).size === items.length),
   enabled: z.boolean().default(true)
 });
+
+const formQuestionType = z.enum([
+  'SHORT_TEXT', 'LONG_TEXT', 'INTEGER', 'NUMBER', 'EMAIL', 'URL', 'DATE',
+  'BOOLEAN', 'SINGLE_SELECT', 'MULTI_SELECT', 'DISCORD_ID'
+]);
+
+const formOptionSchema = z.object({
+  label: z.string().trim().min(1).max(100),
+  value: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(100).nullable().default(null)
+});
+
+const formQuestionSchema = z.object({
+  id: z.string().regex(/^[a-z0-9_-]{1,40}$/i),
+  label: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(500).nullable().default(null),
+  type: formQuestionType,
+  required: z.boolean().default(true),
+  placeholder: z.string().max(100).nullable().default(null),
+  minLength: z.number().int().min(0).max(4000).nullable().default(null),
+  maxLength: z.number().int().min(1).max(4000).nullable().default(null),
+  minValue: z.number().finite().nullable().default(null),
+  maxValue: z.number().finite().nullable().default(null),
+  minSelections: z.number().int().min(0).max(25).nullable().default(null),
+  maxSelections: z.number().int().min(1).max(25).nullable().default(null),
+  options: z.array(formOptionSchema).max(25).default([])
+}).superRefine((question, ctx) => {
+  if (question.minLength !== null && question.maxLength !== null && question.minLength > question.maxLength) {
+    ctx.addIssue({ code: 'custom', message: 'minLength cannot exceed maxLength', path: ['minLength'] });
+  }
+  if (question.minValue !== null && question.maxValue !== null && question.minValue > question.maxValue) {
+    ctx.addIssue({ code: 'custom', message: 'minValue cannot exceed maxValue', path: ['minValue'] });
+  }
+  const select = question.type === 'SINGLE_SELECT' || question.type === 'MULTI_SELECT';
+  if (select && question.options.length < 1) {
+    ctx.addIssue({ code: 'custom', message: 'Select questions require options', path: ['options'] });
+  }
+  if (!select && question.options.length) {
+    ctx.addIssue({ code: 'custom', message: 'Options are only valid for select questions', path: ['options'] });
+  }
+  if (new Set(question.options.map((option) => option.value)).size !== question.options.length) {
+    ctx.addIssue({ code: 'custom', message: 'Option values must be unique', path: ['options'] });
+  }
+});
+
+const formDefinitionSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(2000).nullable().default(null),
+  questions: z.array(formQuestionSchema).min(1).max(25).refine(
+    (items) => new Set(items.map((item) => item.id)).size === items.length,
+    { message: 'Question IDs must be unique' }
+  ),
+  enabled: z.boolean().default(true),
+  openAt: z.coerce.date().nullable().default(null),
+  closeAt: z.coerce.date().nullable().default(null),
+  deliveryMode: z.enum(['EPHEMERAL', 'DM']).default('EPHEMERAL'),
+  resultChannelId: snowflake.nullable().default(null),
+  resultRoleIds: z.array(snowflake).max(20).default([]),
+  allowedRoleIds: z.array(snowflake).max(20).default([]),
+  deniedRoleIds: z.array(snowflake).max(20).default([]),
+  maxSubmissionsPerUser: z.number().int().min(0).max(1000).default(1),
+  cooldownSeconds: z.number().int().min(0).max(2592000).default(300),
+  submissionWindowMinutes: z.number().int().min(1).max(10080).default(60),
+  maxAttemptsPerWindow: z.number().int().min(1).max(100).default(5),
+  createTicketOnSubmit: z.boolean().default(false),
+  ticketCategoryId: internalId.nullable().default(null),
+  ticketParentCategoryId: snowflake.nullable().default(null),
+  ticketStaffRoleIds: z.array(snowflake).max(20).default([]),
+  ticketPrefix: z.string().trim().regex(/^[a-z0-9-]{1,24}$/i).default('form')
+}).superRefine((value, ctx) => {
+  if (value.openAt && value.closeAt && value.openAt >= value.closeAt) {
+    ctx.addIssue({ code: 'custom', message: 'openAt must be before closeAt', path: ['closeAt'] });
+  }
+  if (value.createTicketOnSubmit && !value.ticketParentCategoryId) {
+    ctx.addIssue({ code: 'custom', message: 'Ticket category is required', path: ['ticketParentCategoryId'] });
+  }
+});
+
+const formPanelSchema = z.object({
+  formId: internalId,
+  channelId: snowflake,
+  title: z.string().trim().min(1).max(256),
+  description: z.string().trim().max(2000).nullable().default(null),
+  buttonLabel: z.string().trim().min(1).max(80).default('Compila'),
+  enabled: z.boolean().default(true)
+});
+
+const formPermissionSchema = z.object({
+  canManage: z.boolean().default(false),
+  canView: z.boolean().default(false),
+  canReview: z.boolean().default(false),
+  canSubmit: z.boolean().default(false)
+});
+
+async function requireFormPermission(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  guildId: string,
+  formId: string,
+  permission: 'canManage' | 'canView' | 'canReview'
+) {
+  const session = await requireGuild(request, reply, guildId);
+  if (!session) return null;
+  const form = await prisma.formDefinition.findFirst({ where: { id: formId, guildId }, select: { id: true } });
+  if (!form) {
+    reply.code(404).send({ error: 'FORM_NOT_FOUND' });
+    return null;
+  }
+  if (session.access === 'OWNER' || session.access === 'ADMIN') return session;
+  const snapshot = await getGuildAccessSnapshot(guildId, session.userId).catch(() => null);
+  if (!snapshot) {
+    reply.code(403).send({ error: 'FORBIDDEN' });
+    return null;
+  }
+  const binding = await prisma.formPermissionBinding.findFirst({
+    where: { guildId, formId, discordRoleId: { in: snapshot.roles }, [permission]: true }
+  });
+  if (!binding) {
+    reply.code(403).send({ error: 'FORBIDDEN' });
+    return null;
+  }
+  return session;
+}
+
+async function validateFormResources(guildId: string, data: z.infer<typeof formDefinitionSchema>) {
+  const resources = await getGuildResources(guildId);
+  const channelIds = new Set(resources.channels.map((channel) => channel.id));
+  const categoryIds = new Set(resources.channels.filter((channel) => channel.type === 4).map((channel) => channel.id));
+  const roleIds = new Set(resources.roles.map((role) => role.id));
+  if (data.resultChannelId && !channelIds.has(data.resultChannelId)) return 'RESULT_CHANNEL_NOT_FOUND';
+  if (data.ticketParentCategoryId && !categoryIds.has(data.ticketParentCategoryId)) return 'TICKET_PARENT_NOT_FOUND';
+  for (const roleId of [...data.resultRoleIds, ...data.allowedRoleIds, ...data.deniedRoleIds, ...data.ticketStaffRoleIds]) {
+    if (roleId === guildId || !roleIds.has(roleId)) return 'FORM_ROLE_NOT_FOUND';
+  }
+  if (data.ticketCategoryId) {
+    const ticketCategory = await prisma.ticketCategory.findFirst({ where: { id: data.ticketCategoryId, guildId } });
+    if (!ticketCategory) return 'TICKET_CATEGORY_NOT_FOUND';
+  }
+  return null;
+}
 
 async function validateCategoryResources(
   guildId: string,
