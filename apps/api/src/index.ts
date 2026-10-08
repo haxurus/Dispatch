@@ -103,11 +103,15 @@ app.addHook('preValidation', async (request, reply) => {
   }
 });
 
-app.setErrorHandler((error, request, reply) => {
+app.setErrorHandler((error: unknown, request, reply) => {
   request.log.error({ err: error }, 'Request failed');
   if (reply.sent) return;
-  const status = error.statusCode && error.statusCode >= 400 && error.statusCode < 500
-    ? error.statusCode
+  // Fastify >= 5.12 types handler errors as unknown: anything can be thrown.
+  const statusCode = typeof error === 'object' && error !== null
+    ? (error as { statusCode?: unknown }).statusCode
+    : undefined;
+  const status = typeof statusCode === 'number' && statusCode >= 400 && statusCode < 500
+    ? statusCode
     : 500;
   return reply.code(status).send({
     error: status === 500 ? 'INTERNAL_ERROR' : 'REQUEST_FAILED'
