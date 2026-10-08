@@ -10,6 +10,7 @@ import {
   runTicketAutomations
 } from './ticket-operations.js';
 import { runTicketRetention } from './retention.js';
+import { checkInstall, isGuildInstallBlocked } from './install-guard.js';
 
 const log = pino({ level: config.logLevel });
 
@@ -53,6 +54,14 @@ client.once(Events.ClientReady, async (ready) => {
 
   // A transient DB error on one guild must not leave the bot without its RPC API.
   for (const guild of ready.guilds.cache.values()) {
+    // Guilds blocked while the bot was offline are left at startup.
+    const blocked = await isGuildInstallBlocked(guild.id).catch(() => false);
+    if (blocked) {
+      await guild.leave()
+        .then(() => log.warn({ guildId: guild.id }, 'Left blocked guild at startup'))
+        .catch((error) => log.error({ err: error, guildId: guild.id }, 'Unable to leave blocked guild'));
+      continue;
+    }
     await ensureGuild(guild).catch((error) => log.error({ err: error, guildId: guild.id }, 'Guild sync failed'));
   }
 
@@ -61,6 +70,18 @@ client.once(Events.ClientReady, async (ready) => {
 });
 
 client.on(Events.GuildCreate, async (guild) => {
+  // Installation blacklist (super console): leave before creating any state.
+  try {
+    const verdict = await checkInstall(guild, client.user?.id ?? null);
+    if (verdict !== 'allowed') {
+      await guild.leave();
+      log.warn({ guildId: guild.id, reason: verdict }, 'Left guild: installation blocked');
+      return;
+    }
+  } catch (error) {
+    log.error({ err: error, guildId: guild.id }, 'Install block check failed');
+  }
+
   await ensureGuild(guild).catch((error) => log.error({ err: error, guildId: guild.id }, 'Guild sync failed'));
   log.info({ guildId: guild.id, guildName: guild.name }, 'Dispatch joined guild');
 });

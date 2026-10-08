@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
+import { Icon, type IconName } from '../../_components/Brand';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
 
@@ -9,6 +10,7 @@ type Role = {
   id: string;
   name: string;
   position: number;
+  color?: number;
 };
 
 type Binding = {
@@ -16,6 +18,25 @@ type Binding = {
   discordRoleId: string;
   accessLevel: AccessLevel;
 };
+
+const accessText: Record<AccessLevel, string> = {
+  VIEWER: 'Viewer',
+  MODERATOR: 'Moderator',
+  ADMIN: 'Admin',
+  OWNER: 'Owner'
+};
+
+const sections = (guildId: string): Array<{ href: string; icon: IconName; title: string; text: string }> => [
+  { href: `/dashboard/${guildId}/tickets/manage`, icon: 'inbox', title: 'Ticket', text: 'Coda dei ticket, filtri per stato, dettaglio, note e azioni dello staff.' },
+  { href: `/dashboard/${guildId}/tickets`, icon: 'ticket', title: 'Configurazione ticket', text: 'Categorie, ruoli staff, questionari, SLA, automazioni, pannelli e risposte rapide.' },
+  { href: `/dashboard/${guildId}/tickets/system`, icon: 'sliders', title: 'Sistema e menu', text: 'Anti-spam globale, retention di transcript e canali, menu principale.' },
+  { href: `/dashboard/${guildId}/forms`, icon: 'clipboard', title: 'Form', text: 'Candidature e questionari con domande validate, pannelli e permessi per ruolo.' },
+  { href: `/dashboard/${guildId}/tickets/analytics`, icon: 'chart', title: 'Analytics', text: 'Volumi, tempi medi, violazioni SLA, feedback e attività dello staff.' },
+  { href: `/dashboard/${guildId}/tickets/security`, icon: 'ban', title: 'Blacklist', text: 'Utenti esclusi dall’apertura di nuovi ticket, con scadenza e motivo.' }
+];
+
+const roleColor = (color: number | undefined) =>
+  color ? `#${color.toString(16).padStart(6, '0')}` : undefined;
 
 export default function GuildDashboardPage() {
   const params = useParams<{ guildId: string }>();
@@ -89,69 +110,88 @@ export default function GuildDashboardPage() {
     }
   };
 
+  const canAdmin = access === 'ADMIN' || access === 'OWNER';
+  const assignableRoles = roles.filter((role) => role.id !== guildId);
+
   return (
-    <main className="shell">
-      <div className="row">
+    <>
+      <header className="workspace-head">
         <div>
-          <p className="eyebrow">Configurazione server</p>
-          <h1>Permessi dashboard</h1>
-          <p className="muted">Il tuo livello attuale: {access ?? '...'}</p>
+          <span className="kicker">Server</span>
+          <h1>Panoramica</h1>
+          <p>Scorciatoie alle sezioni del server e permessi di accesso alla dashboard.</p>
         </div>
-        <div className="actions">
-          <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
-          <a className="button secondary" href={`/dashboard/${guildId}/forms`}>Form</a>
-          <a className="button secondary" href={`/dashboard/${guildId}/tickets`}>Configura ticket</a>
-          <a className="button secondary" href="/dashboard">Torna ai server</a>
+        <div className="live-pill"><i />Accesso {access ? accessText[access] : '…'}</div>
+      </header>
+
+      <section className="content">
+        {error && <div className="notice notice-error" role="alert">{error}</div>}
+
+        <div className="quick-grid">
+          {sections(guildId).map((section) => (
+            <a className="quick-card" href={section.href} key={section.href}>
+              <span className="feature-icon"><Icon name={section.icon} size={18} /></span>
+              <strong>{section.title}</strong>
+              <span>{section.text}</span>
+            </a>
+          ))}
         </div>
-      </div>
 
-      {error && <p className="error">{error}</p>}
+        {canAdmin ? (
+          <div className="panel">
+            <div className="panel-title">
+              <div>
+                <p className="eyebrow">Accessi</p>
+                <h2>Permessi dashboard per ruolo</h2>
+              </div>
+              <span className="tag">{bindings.length} assegnati</span>
+            </div>
+            <p>
+              Owner, Administrator e Manage Server ottengono accesso automaticamente. Qui puoi assegnare accesso agli altri ruoli.
+            </p>
 
-      {(access === 'ADMIN' || access === 'OWNER') ? (
-        <section className="card">
-          <h2>Ruoli Discord</h2>
-          <p className="muted">
-            Owner, Administrator e Manage Server ottengono accesso automaticamente. Qui puoi assegnare accesso agli altri ruoli.
-          </p>
+            <div className="binding-list">
+              {assignableRoles.map((role) => {
+                const current = bindingMap.get(role.id) ?? '';
+                return (
+                  <div className="binding-row" key={role.id}>
+                    <div>
+                      <strong><i className="role-dot" style={{ background: roleColor(role.color) }} />{role.name}</strong>
+                      <span className="mono">{role.id}</span>
+                    </div>
 
-          {roles
-            .filter((role) => role.id !== guildId)
-            .map((role) => {
-              const current = bindingMap.get(role.id) ?? '';
-              return (
-                <div className="role" key={role.id}>
-                  <div>
-                    <strong>{role.name}</strong>
-                    <div className="muted">{role.id}</div>
+                    <select
+                      aria-label={`Accesso per ${role.name}`}
+                      value={current}
+                      disabled={saving === role.id}
+                      onChange={(event) => {
+                        void saveBinding(
+                          role.id,
+                          event.target.value as 'VIEWER' | 'MODERATOR' | 'ADMIN' | ''
+                        );
+                      }}
+                    >
+                      <option value="">Nessun accesso</option>
+                      <option value="VIEWER">Viewer</option>
+                      <option value="MODERATOR">Moderator</option>
+                      <option value="ADMIN">Admin</option>
+                    </select>
+
+                    <em>{saving === role.id ? 'Salvataggio…' : ''}</em>
                   </div>
-
-                  <select
-                    value={current}
-                    disabled={saving === role.id}
-                    onChange={(event) => {
-                      void saveBinding(
-                        role.id,
-                        event.target.value as 'VIEWER' | 'MODERATOR' | 'ADMIN' | ''
-                      );
-                    }}
-                  >
-                    <option value="">Nessun accesso</option>
-                    <option value="VIEWER">Viewer</option>
-                    <option value="MODERATOR">Moderator</option>
-                    <option value="ADMIN">Admin</option>
-                  </select>
-
-                  <span className="muted">{saving === role.id ? 'Salvataggio...' : ''}</span>
-                </div>
-              );
-            })}
-        </section>
-      ) : (
-        <section className="card">
-          <h2>Accesso limitato</h2>
-          <p>La gestione dei permessi richiede il livello Admin o Owner.</p>
-        </section>
-      )}
-    </main>
+                );
+              })}
+              {assignableRoles.length === 0 && !error && <div className="empty">Caricamento ruoli…</div>}
+            </div>
+          </div>
+        ) : (
+          access && (
+            <div className="notice">
+              Accesso al pannello: <strong>{accessText[access]}</strong>. La gestione dei permessi richiede il livello Admin o Owner.
+            </div>
+          )
+        )}
+      </section>
+    </>
   );
 }

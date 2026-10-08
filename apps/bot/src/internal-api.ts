@@ -72,7 +72,51 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
     try {
       const url = new URL(req.url ?? '/', 'http://internal');
 
-      let match = url.pathname.match(/^\/guilds\/(\d{17,20})\/resources$/);
+      // Super console: bot readiness for the overview.
+      if (req.method === 'GET' && url.pathname === '/status') {
+        const ready = client.isReady();
+        const user = client.user;
+        res.end(JSON.stringify({
+          ready,
+          uptimeMs: client.uptime ?? null,
+          readyAt: client.readyAt?.toISOString() ?? null,
+          guildCount: client.guilds.cache.size,
+          pingMs: ready && client.ws.ping >= 0 ? Math.round(client.ws.ping) : null,
+          user: user ? { id: user.id, username: user.username, avatarUrl: user.displayAvatarURL({ size: 64 }) } : null
+        }));
+        return;
+      }
+
+      // Super console: live list of the guilds the bot is connected to.
+      if (req.method === 'GET' && url.pathname === '/guilds') {
+        const guilds = [...client.guilds.cache.values()]
+          .map((guild) => ({
+            id: guild.id,
+            name: guild.name,
+            iconUrl: guild.iconURL({ size: 128 }),
+            memberCount: guild.memberCount,
+            ownerId: guild.ownerId,
+            joinedAt: guild.joinedAt?.toISOString() ?? null
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        res.end(JSON.stringify(guilds));
+        return;
+      }
+
+      let match = url.pathname.match(/^\/guilds\/(\d{17,20})\/leave$/);
+      if (req.method === 'POST' && match) {
+        const guildId = match[1]!;
+        if (!SNOWFLAKE.test(guildId)) throw new Error('INVALID_ID');
+
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) throw new Error('GUILD_NOT_FOUND');
+
+        await guild.leave();
+        res.end(JSON.stringify({ ok: true, guildId }));
+        return;
+      }
+
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/resources$/);
       if (req.method === 'GET' && match) {
         const guildId = match[1]!;
         const guild = client.guilds.cache.get(guildId);

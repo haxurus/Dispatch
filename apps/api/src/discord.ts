@@ -57,6 +57,36 @@ function cuid(value: string) {
   return value;
 }
 
+export type BotGuild = {
+  id: string;
+  name: string;
+  iconUrl: string | null;
+  memberCount: number;
+  ownerId: string;
+  joinedAt: string | null;
+};
+
+export type BotStatus = {
+  ready: boolean;
+  uptimeMs: number | null;
+  readyAt: string | null;
+  guildCount: number;
+  pingMs: number | null;
+  user: { id: string; username: string; avatarUrl: string | null } | null;
+};
+
+export async function getBotGuilds() {
+  return api<BotGuild[]>('/guilds');
+}
+
+export async function getBotStatus() {
+  return api<BotStatus>('/status');
+}
+
+export async function leaveBotGuild(guildId: string) {
+  return api<{ ok: true; guildId: string }>(`/guilds/${id(guildId)}/leave`, 'POST');
+}
+
 export async function getGuildResources(guildId: string) {
   return api<{
     channels: Array<{ id: string; name: string; type: number; parentId: string | null; position: number }>;

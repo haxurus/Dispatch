@@ -454,3 +454,34 @@ model FormPermissionBinding {
   @@unique([formId, discordRoleId])
   @@index([guildId, discordRoleId])
 }
+
+// Instance-wide installation blacklist managed from the super console.
+// kind: USER (installer) | GUILD. Read by the bot on GuildCreate.
+model InstallBlock {
+  id              String   @id @default(cuid())
+  kind            String
+  subjectId       String
+  reason          String?
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([kind, subjectId])
+  @@index([kind, createdAt(sort: Desc)])
+}
+
+// Audit trail of super-console mutations. details is protectJson-encrypted.
+model SuperAdminAudit {
+  id          String   @id @default(cuid())
+  userId      String
+  username    String
+  action      String
+  subjectType String?
+  subjectId   String?
+  details     Json
+  ipHash      String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([subjectType, subjectId, createdAt(sort: Desc)])
+}

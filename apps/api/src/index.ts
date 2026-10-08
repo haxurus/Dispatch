@@ -35,6 +35,7 @@ import {
 } from './discord.js';
 import { panelAudit } from './audit.js';
 import { decryptText, encryptText, unprotectJson } from './security.js';
+import { isSuperAdminUserId, registerSuperRoutes } from './super.js';
 
 const prismaErrorCode = (error: unknown) =>
   typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
@@ -260,9 +261,13 @@ app.get('/api/me', async (request, reply) => {
   return {
     userId: session.userId,
     username: session.username,
-    avatarUrl: session.avatarUrl
+    avatarUrl: session.avatarUrl,
+    superAdmin: isSuperAdminUserId(session.userId)
   };
 });
+
+// Super console API and gated bot invite (apps/api/src/super.ts).
+registerSuperRoutes(app);
 
 app.get('/api/guilds', async (request, reply) => {
   const session = await requireSession(request, reply);
