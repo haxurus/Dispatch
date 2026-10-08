@@ -4,6 +4,7 @@ import { prisma } from '@dispatch/db';
 import { config } from './config.js';
 import { startInternalApi } from './internal-api.js';
 import { handleTicketInteraction } from './tickets.js';
+import { handleFormInteraction, isFormInteraction } from './forms.js';
 import {
   recordTicketMessage,
   runTicketAutomations
@@ -72,11 +73,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isStringSelectMenu() && !interaction.isButton() && !interaction.isModalSubmit()) return;
 
   try {
-    await handleTicketInteraction(interaction);
+    if (isFormInteraction(interaction.customId)) await handleFormInteraction(interaction);
+    else await handleTicketInteraction(interaction);
   } catch (error) {
     log.error({ errorType: error instanceof Error ? error.name : 'UnknownError' }, 'Ticket interaction failed');
 
-    const message = 'Si è verificato un errore durante la gestione del ticket.';
+    const message = 'Si è verificato un errore durante la gestione della richiesta.';
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(message).catch(() => null);
     } else {

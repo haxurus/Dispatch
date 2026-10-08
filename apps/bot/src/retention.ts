@@ -136,5 +136,21 @@ export async function runTicketRetention(client: Client) {
       { OR: [{ lastOpenedAt: null }, { lastOpenedAt: { lte: cutoff } }] }
     ]
   } });
+  // Form sessions hold encrypted partial answers. Finished, cancelled and
+  // abandoned ones lose their answers after one day and the row itself after
+  // the longest configurable attempt window (7 days), which counts sessions.
+  // SUBMITTING rows are left alone while a submission is in flight.
+  const finished = ['COMPLETED', 'CANCELLED', 'EXPIRED'];
+  await prisma.formSession.updateMany({
+    where: { state: 'ACTIVE', expiresAt: { lte: now } },
+    data: { state: 'EXPIRED' }
+  });
+  await prisma.formSession.updateMany({
+    where: { state: { in: finished }, updatedAt: { lt: new Date(Date.now() - DAY) }, answersEncrypted: { not: null } },
+    data: { answersEncrypted: null }
+  });
+  await prisma.formSession.deleteMany({ where: {
+    state: { in: finished }, createdAt: { lt: new Date(Date.now() - 7 * DAY) }
+  } });
   return totals;
 }

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import type { Client } from 'discord.js';
 import { publishMainMenu, publishTicketPanel } from './tickets.js';
+import { publishFormPanel } from './forms.js';
 import {
   addTicketMember,
   assignTicket,
@@ -141,6 +142,18 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
         if (!SNOWFLAKE.test(guildId) || !CUID.test(panelId)) throw new Error('INVALID_ID');
 
         const result = await publishTicketPanel(client, guildId, panelId);
+        res.end(JSON.stringify(result));
+        return;
+      }
+
+
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/form-panels\/([a-z0-9]{20,32})\/publish$/i);
+      if (req.method === 'POST' && match) {
+        const guildId = match[1]!;
+        const panelId = match[2]!;
+        if (!SNOWFLAKE.test(guildId) || !CUID.test(panelId)) throw new Error('INVALID_ID');
+
+        const result = await publishFormPanel(client, guildId, panelId);
         res.end(JSON.stringify(result));
         return;
       }

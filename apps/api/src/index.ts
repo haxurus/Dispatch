@@ -4,7 +4,7 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
-import { prisma } from '@dispatch/db';
+import { prisma, type Prisma } from '@dispatch/db';
 import { config } from './config.js';
 import {
   createSession,
@@ -20,7 +20,9 @@ import {
   assignTicket,
   closeTicket,
   generateTranscript,
+  getGuildAccessSnapshot,
   getGuildResources,
+  publishFormPanel,
   publishMainMenu,
   publishPanel,
   removeTicketMember,
@@ -34,8 +36,11 @@ import {
 import { panelAudit } from './audit.js';
 import { decryptText, encryptText, unprotectJson } from './security.js';
 
-const isUniqueViolation = (error: unknown) =>
-  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
+const prismaErrorCode = (error: unknown) =>
+  typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+const isUniqueViolation = (error: unknown) => prismaErrorCode(error) === 'P2002';
+const isRecordNotFound = (error: unknown) => prismaErrorCode(error) === 'P2025';
+const isForeignKeyViolation = (error: unknown) => prismaErrorCode(error) === 'P2003';
 
 const app = Fastify({
   // edge -> web -> api are private hops; request.ip is the first public
@@ -375,14 +380,22 @@ app.delete('/api/guilds/:guildId/access-bindings/:roleId', async (request, reply
 
 const internalId = z.string().regex(/^[a-z0-9]{20,32}$/i);
 
+const ticketOptionSchema = z.object({
+  label: z.string().trim().min(1).max(100),
+  value: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(100).nullable().default(null)
+});
+
 const formFieldSchema = z.object({
   id: z.string().regex(/^[a-z0-9_-]{1,40}$/i),
   label: z.string().trim().min(1).max(45),
   style: z.enum(['SHORT', 'PARAGRAPH']).default('SHORT'),
+  type: z.enum(['SHORT_TEXT', 'LONG_TEXT', 'SINGLE_SELECT']).default('SHORT_TEXT'),
   required: z.boolean().default(true),
   placeholder: z.string().trim().max(100).nullable().default(null),
   minLength: z.number().int().min(0).max(4000).nullable().default(null),
-  maxLength: z.number().int().min(1).max(4000).nullable().default(null)
+  maxLength: z.number().int().min(1).max(4000).nullable().default(null),
+  options: z.array(ticketOptionSchema).max(25).default([])
 }).superRefine((field, ctx) => {
   if (
     field.minLength !== null &&
@@ -394,6 +407,15 @@ const formFieldSchema = z.object({
       message: 'minLength cannot exceed maxLength',
       path: ['minLength']
     });
+  }
+  if (field.type === 'SINGLE_SELECT' && field.options.length < 1) {
+    ctx.addIssue({ code: 'custom', message: 'Select fields require options', path: ['options'] });
+  }
+  if (field.type !== 'SINGLE_SELECT' && field.options.length) {
+    ctx.addIssue({ code: 'custom', message: 'Options are only valid for select fields', path: ['options'] });
+  }
+  if (new Set(field.options.map((option) => option.value)).size !== field.options.length) {
+    ctx.addIssue({ code: 'custom', message: 'Option values must be unique', path: ['options'] });
   }
 });
 
@@ -420,6 +442,10 @@ const categorySchema = z.object({
   ),
   reopenWindowHours: z.number().int().min(1).max(720).nullable().default(null),
   feedbackEnabled: z.boolean().default(true),
+  transcriptAutoGenerate: z.boolean().default(false),
+  transcriptSendToOpener: z.boolean().default(false),
+  transcriptChannelId: snowflake.nullable().default(null),
+  transcriptRetain: z.boolean().default(true),
   enabled: z.boolean().default(true)
 }).superRefine((value, ctx) => {
   if (value.inactivityWarningMinutes !== null && value.inactivityCloseHours === null) {
@@ -439,6 +465,18 @@ const categorySchema = z.object({
       code: 'custom',
       message: 'Warning must occur before automatic close',
       path: ['inactivityWarningMinutes']
+    });
+  }
+  if (
+    value.transcriptAutoGenerate &&
+    !value.transcriptSendToOpener &&
+    !value.transcriptChannelId &&
+    !value.transcriptRetain
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'Automatic transcript requires at least one destination',
+      path: ['transcriptAutoGenerate']
     });
   }
 });
@@ -497,6 +535,237 @@ const panelSchema = z.object({
   enabled: z.boolean().default(true)
 });
 
+const formQuestionType = z.enum([
+  'SHORT_TEXT', 'LONG_TEXT', 'INTEGER', 'NUMBER', 'EMAIL', 'URL', 'DATE',
+  'BOOLEAN', 'SINGLE_SELECT', 'MULTI_SELECT', 'DISCORD_ID'
+]);
+
+const formOptionSchema = z.object({
+  label: z.string().trim().min(1).max(100),
+  value: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(100).nullable().default(null)
+});
+
+const formQuestionSchema = z.object({
+  id: z.string().regex(/^[a-z0-9_-]{1,40}$/i),
+  label: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(500).nullable().default(null),
+  type: formQuestionType,
+  required: z.boolean().default(true),
+  placeholder: z.string().max(100).nullable().default(null),
+  minLength: z.number().int().min(0).max(4000).nullable().default(null),
+  maxLength: z.number().int().min(1).max(4000).nullable().default(null),
+  minValue: z.number().finite().nullable().default(null),
+  maxValue: z.number().finite().nullable().default(null),
+  minSelections: z.number().int().min(0).max(25).nullable().default(null),
+  maxSelections: z.number().int().min(1).max(25).nullable().default(null),
+  options: z.array(formOptionSchema).max(25).default([])
+}).superRefine((question, ctx) => {
+  if (question.minLength !== null && question.maxLength !== null && question.minLength > question.maxLength) {
+    ctx.addIssue({ code: 'custom', message: 'minLength cannot exceed maxLength', path: ['minLength'] });
+  }
+  if (question.minValue !== null && question.maxValue !== null && question.minValue > question.maxValue) {
+    ctx.addIssue({ code: 'custom', message: 'minValue cannot exceed maxValue', path: ['minValue'] });
+  }
+  const select = question.type === 'SINGLE_SELECT' || question.type === 'MULTI_SELECT';
+  if (select && question.options.length < 1) {
+    ctx.addIssue({ code: 'custom', message: 'Select questions require options', path: ['options'] });
+  }
+  if (!select && question.options.length) {
+    ctx.addIssue({ code: 'custom', message: 'Options are only valid for select questions', path: ['options'] });
+  }
+  if (new Set(question.options.map((option) => option.value)).size !== question.options.length) {
+    ctx.addIssue({ code: 'custom', message: 'Option values must be unique', path: ['options'] });
+  }
+
+  const textual = ['SHORT_TEXT', 'LONG_TEXT', 'EMAIL', 'URL'].includes(question.type);
+  if (!textual && (question.minLength !== null || question.maxLength !== null)) {
+    ctx.addIssue({ code: 'custom', message: 'Length limits are only valid for text questions', path: ['minLength'] });
+  }
+  const numeric = question.type === 'INTEGER' || question.type === 'NUMBER';
+  if (!numeric && (question.minValue !== null || question.maxValue !== null)) {
+    ctx.addIssue({ code: 'custom', message: 'Value limits are only valid for numeric questions', path: ['minValue'] });
+  }
+
+  if (question.type !== 'MULTI_SELECT') {
+    if (question.minSelections !== null || question.maxSelections !== null) {
+      ctx.addIssue({ code: 'custom', message: 'Selection limits are only valid for multi-select questions', path: ['minSelections'] });
+    }
+    return;
+  }
+  const optionCount = question.options.length;
+  const { minSelections, maxSelections } = question;
+  if (maxSelections !== null && maxSelections > optionCount) {
+    ctx.addIssue({ code: 'custom', message: 'maxSelections cannot exceed the number of options', path: ['maxSelections'] });
+  }
+  if (minSelections !== null && minSelections > optionCount) {
+    ctx.addIssue({ code: 'custom', message: 'minSelections cannot exceed the number of options', path: ['minSelections'] });
+  }
+  if (minSelections !== null && maxSelections !== null && minSelections > maxSelections) {
+    ctx.addIssue({ code: 'custom', message: 'minSelections cannot exceed maxSelections', path: ['minSelections'] });
+  }
+  if (question.required && minSelections === 0) {
+    ctx.addIssue({ code: 'custom', message: 'Required multi-select questions need at least one selection', path: ['minSelections'] });
+  }
+});
+
+const formDefinitionSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(2000).nullable().default(null),
+  questions: z.array(formQuestionSchema).min(1).max(25).refine(
+    (items) => new Set(items.map((item) => item.id)).size === items.length,
+    { message: 'Question IDs must be unique' }
+  ),
+  enabled: z.boolean().default(true),
+  openAt: z.coerce.date().nullable().default(null),
+  closeAt: z.coerce.date().nullable().default(null),
+  deliveryMode: z.enum(['EPHEMERAL', 'DM']).default('EPHEMERAL'),
+  resultChannelId: snowflake.nullable().default(null),
+  resultRoleIds: z.array(snowflake).max(20).default([]),
+  allowedRoleIds: z.array(snowflake).max(20).default([]),
+  deniedRoleIds: z.array(snowflake).max(20).default([]),
+  maxSubmissionsPerUser: z.number().int().min(0).max(1000).default(1),
+  cooldownSeconds: z.number().int().min(0).max(2592000).default(300),
+  submissionWindowMinutes: z.number().int().min(1).max(10080).default(60),
+  maxAttemptsPerWindow: z.number().int().min(1).max(100).default(5),
+  createTicketOnSubmit: z.boolean().default(false),
+  ticketCategoryId: internalId.nullable().default(null),
+  ticketParentCategoryId: snowflake.nullable().default(null),
+  ticketStaffRoleIds: z.array(snowflake).max(20).default([]),
+  ticketPrefix: z.string().trim().regex(/^[a-z0-9-]{1,24}$/i).default('form')
+}).superRefine((value, ctx) => {
+  if (value.openAt && value.closeAt && value.openAt >= value.closeAt) {
+    ctx.addIssue({ code: 'custom', message: 'openAt must be before closeAt', path: ['closeAt'] });
+  }
+  if (value.createTicketOnSubmit && !value.ticketCategoryId) {
+    ctx.addIssue({ code: 'custom', message: 'Dispatch ticket category is required', path: ['ticketCategoryId'] });
+  }
+});
+
+const formPanelSchema = z.object({
+  formId: internalId,
+  channelId: snowflake,
+  title: z.string().trim().min(1).max(256),
+  description: z.string().trim().max(2000).nullable().default(null),
+  buttonLabel: z.string().trim().min(1).max(80).default('Compila'),
+  enabled: z.boolean().default(true)
+});
+
+const formPermissionSchema = z.object({
+  canManage: z.boolean().default(false),
+  canView: z.boolean().default(false),
+  canReview: z.boolean().default(false),
+  canSubmit: z.boolean().default(false)
+});
+
+type FormCapability = 'canManage' | 'canView' | 'canReview';
+
+const isGuildAdmin = (access: string) => access === 'OWNER' || access === 'ADMIN';
+
+// canView is implied by any delegated form permission that exposes the form.
+function formCapabilityWhere(permission: FormCapability): Prisma.FormPermissionBindingWhereInput {
+  if (permission === 'canView') return { OR: [{ canView: true }, { canManage: true }, { canReview: true }] };
+  if (permission === 'canManage') return { canManage: true };
+  return { canReview: true };
+}
+
+// Always the member's current Discord roles (fresh snapshot, not the session).
+async function currentMemberRoles(guildId: string, userId: string) {
+  const snapshot = await getGuildAccessSnapshot(guildId, userId).catch(() => null);
+  return snapshot ? snapshot.roles : null;
+}
+
+// null = every form of the guild (Owner/Admin).
+async function visibleFormIds(guildId: string, session: { userId: string; access: string }) {
+  if (isGuildAdmin(session.access)) return null;
+  const roles = await currentMemberRoles(guildId, session.userId);
+  if (!roles?.length) return [];
+  const bindings = await prisma.formPermissionBinding.findMany({
+    where: { guildId, discordRoleId: { in: roles }, ...formCapabilityWhere('canView') },
+    select: { formId: true }
+  });
+  return [...new Set(bindings.map((binding) => binding.formId))];
+}
+
+async function requireFormPermission(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  guildId: string,
+  formId: string,
+  permission: FormCapability | 'admin'
+) {
+  const session = await requireGuild(request, reply, guildId);
+  if (!session) return null;
+  const form = await prisma.formDefinition.findFirst({ where: { id: formId, guildId }, select: { id: true } });
+  if (!form) {
+    reply.code(404).send({ error: 'FORM_NOT_FOUND' });
+    return null;
+  }
+  if (isGuildAdmin(session.access)) return session;
+  if (permission === 'admin') {
+    reply.code(403).send({ error: 'FORBIDDEN', required: 'ADMIN' });
+    return null;
+  }
+  const roles = await currentMemberRoles(guildId, session.userId);
+  if (!roles?.length) {
+    reply.code(403).send({ error: 'FORBIDDEN' });
+    return null;
+  }
+  const binding = await prisma.formPermissionBinding.findFirst({
+    where: { guildId, formId, discordRoleId: { in: roles }, ...formCapabilityWhere(permission) },
+    select: { id: true }
+  });
+  if (!binding) {
+    reply.code(403).send({ error: 'FORBIDDEN' });
+    return null;
+  }
+  return session;
+}
+
+const sameSet = (a: readonly string[], b: readonly string[]) => {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every((item) => right.has(item));
+};
+
+// Delivery and ticket wiring of a form are guild-level decisions: only
+// Owner/Admin may change them. Delegated managers edit content and limits.
+function changesAdminOnlyFormFields(
+  existing: {
+    resultChannelId: string | null;
+    resultRoleIds: string[];
+    createTicketOnSubmit: boolean;
+    ticketCategoryId: string | null;
+    ticketStaffRoleIds: string[];
+    ticketParentCategoryId: string | null;
+  },
+  next: z.infer<typeof formDefinitionSchema>
+) {
+  return existing.resultChannelId !== next.resultChannelId ||
+    !sameSet(existing.resultRoleIds, next.resultRoleIds) ||
+    existing.createTicketOnSubmit !== next.createTicketOnSubmit ||
+    existing.ticketCategoryId !== next.ticketCategoryId ||
+    !sameSet(existing.ticketStaffRoleIds, next.ticketStaffRoleIds) ||
+    existing.ticketParentCategoryId !== next.ticketParentCategoryId;
+}
+
+async function validateFormResources(guildId: string, data: z.infer<typeof formDefinitionSchema>) {
+  const resources = await getGuildResources(guildId);
+  const channelIds = new Set(resources.channels.map((channel) => channel.id));
+  const categoryIds = new Set(resources.channels.filter((channel) => channel.type === 4).map((channel) => channel.id));
+  const roleIds = new Set(resources.roles.map((role) => role.id));
+  if (data.resultChannelId && !channelIds.has(data.resultChannelId)) return 'RESULT_CHANNEL_NOT_FOUND';
+  if (data.ticketParentCategoryId && !categoryIds.has(data.ticketParentCategoryId)) return 'TICKET_PARENT_NOT_FOUND';
+  for (const roleId of [...data.resultRoleIds, ...data.allowedRoleIds, ...data.deniedRoleIds, ...data.ticketStaffRoleIds]) {
+    if (roleId === guildId || !roleIds.has(roleId)) return 'FORM_ROLE_NOT_FOUND';
+  }
+  if (data.ticketCategoryId) {
+    const ticketCategory = await prisma.ticketCategory.findFirst({ where: { id: data.ticketCategoryId, guildId } });
+    if (!ticketCategory) return 'TICKET_CATEGORY_NOT_FOUND';
+  }
+  return null;
+}
+
 async function validateCategoryResources(
   guildId: string,
   data: z.infer<typeof categorySchema>
@@ -516,6 +785,12 @@ async function validateCategoryResources(
   }
   if (data.escalationRoleIds.some((roleId) => roleId === guildId || !roleIds.has(roleId))) {
     return 'ESCALATION_ROLE_NOT_FOUND';
+  }
+  if (
+    data.transcriptChannelId &&
+    !resources.channels.some((channel) => channel.id === data.transcriptChannelId && [0, 5].includes(channel.type))
+  ) {
+    return 'TRANSCRIPT_CHANNEL_NOT_FOUND';
   }
 
   return null;
@@ -764,6 +1039,12 @@ app.delete('/api/guilds/:guildId/categories/:categoryId', async (request, reply)
     return reply.code(409).send({ error: 'CATEGORY_IN_USE', tickets: ticketCount });
   }
 
+  // FormDefinition.ticketCategoryId has no FK: refuse instead of dangling.
+  const formCount = await prisma.formDefinition.count({ where: { guildId, ticketCategoryId: categoryId } });
+  if (formCount > 0) {
+    return reply.code(409).send({ error: 'CATEGORY_IN_USE_BY_FORM', forms: formCount });
+  }
+
   const [panels, settings] = await Promise.all([
     prisma.ticketPanel.findMany({
       where: { guildId, categoryIds: { has: categoryId } }
@@ -906,6 +1187,258 @@ app.post('/api/guilds/:guildId/panels/:panelId/publish', async (request, reply) 
   } catch (error) {
     request.log.error({ err: error, guildId, panelId }, 'Panel publish failed');
     return reply.code(502).send({ error: 'PANEL_PUBLISH_FAILED' });
+  }
+});
+
+
+app.get('/api/guilds/:guildId/forms', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId);
+  if (!session) return;
+  const visible = await visibleFormIds(guildId, session);
+  if (visible && !visible.length) return [];
+  return prisma.formDefinition.findMany({
+    where: { guildId, ...(visible ? { id: { in: visible } } : {}) },
+    orderBy: { createdAt: 'asc' }
+  });
+});
+
+app.post('/api/guilds/:guildId/forms', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+  const parsed = formDefinitionSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  const resourceError = await validateFormResources(guildId, parsed.data);
+  if (resourceError) return reply.code(400).send({ error: resourceError });
+  const { questions, ...rest } = parsed.data;
+  const form = await prisma.formDefinition.create({
+    data: { guildId, ...rest, questions: JSON.parse(JSON.stringify(questions)) }
+  });
+  await panelAudit(request, session, guildId, 'form.create', { formId: form.id, name: form.name });
+  return reply.code(201).send(form);
+});
+
+app.put('/api/guilds/:guildId/forms/:formId', async (request, reply) => {
+  const { guildId, formId } = request.params as { guildId: string; formId: string };
+  if (!internalId.safeParse(formId).success) return reply.code(400).send({ error: 'INVALID_FORM_ID' });
+  const session = await requireFormPermission(request, reply, guildId, formId, 'canManage');
+  if (!session) return;
+  const parsed = formDefinitionSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  if (!isGuildAdmin(session.access)) {
+    const existing = await prisma.formDefinition.findFirst({
+      where: { id: formId, guildId },
+      select: {
+        resultChannelId: true,
+        resultRoleIds: true,
+        createTicketOnSubmit: true,
+        ticketCategoryId: true,
+        ticketStaffRoleIds: true,
+        ticketParentCategoryId: true
+      }
+    });
+    if (!existing) return reply.code(404).send({ error: 'FORM_NOT_FOUND' });
+    if (changesAdminOnlyFormFields(existing, parsed.data)) {
+      return reply.code(403).send({ error: 'FORM_FIELD_ADMIN_ONLY' });
+    }
+  }
+  const resourceError = await validateFormResources(guildId, parsed.data);
+  if (resourceError) return reply.code(400).send({ error: resourceError });
+  const { questions, ...rest } = parsed.data;
+  const form = await prisma.formDefinition.update({
+    where: { id: formId },
+    data: { ...rest, questions: JSON.parse(JSON.stringify(questions)) }
+  });
+  await prisma.formSession.updateMany({
+    where: { formId, state: 'ACTIVE' },
+    data: { state: 'CANCELLED' }
+  });
+  await panelAudit(request, session, guildId, 'form.update', { formId, name: form.name });
+  return form;
+});
+
+app.delete('/api/guilds/:guildId/forms/:formId', async (request, reply) => {
+  const { guildId, formId } = request.params as { guildId: string; formId: string };
+  if (!internalId.safeParse(formId).success) return reply.code(400).send({ error: 'INVALID_FORM_ID' });
+  // Deleting a form also removes its panels and bindings: Owner/Admin only.
+  const session = await requireFormPermission(request, reply, guildId, formId, 'admin');
+  if (!session) return;
+  const submissions = await prisma.formSubmission.count({ where: { formId } });
+  if (submissions) return reply.code(409).send({ error: 'FORM_IN_USE', submissions });
+  const form = await prisma.formDefinition.findUnique({ where: { id: formId } });
+  try {
+    await prisma.formDefinition.delete({ where: { id: formId } });
+  } catch (error) {
+    // A submission landed between the count and the delete (FK Restrict).
+    if (isForeignKeyViolation(error)) return reply.code(409).send({ error: 'FORM_IN_USE' });
+    if (isRecordNotFound(error)) return reply.code(404).send({ error: 'FORM_NOT_FOUND' });
+    throw error;
+  }
+  await panelAudit(request, session, guildId, 'form.delete', { formId, name: form?.name ?? null });
+  return { ok: true };
+});
+
+app.get('/api/guilds/:guildId/forms/:formId/permissions', async (request, reply) => {
+  const { guildId, formId } = request.params as { guildId: string; formId: string };
+  if (!internalId.safeParse(formId).success) return reply.code(400).send({ error: 'INVALID_FORM_ID' });
+  const session = await requireFormPermission(request, reply, guildId, formId, 'canManage');
+  if (!session) return;
+  return prisma.formPermissionBinding.findMany({ where: { guildId, formId }, orderBy: { createdAt: 'asc' } });
+});
+
+app.put('/api/guilds/:guildId/forms/:formId/permissions/:roleId', async (request, reply) => {
+  const { guildId, formId, roleId } = request.params as { guildId: string; formId: string; roleId: string };
+  if (!internalId.safeParse(formId).success || !snowflake.safeParse(roleId).success) {
+    return reply.code(400).send({ error: 'INVALID_ID' });
+  }
+  if (roleId === guildId) return reply.code(400).send({ error: 'EVERYONE_ROLE_NOT_ALLOWED' });
+  // Bindings delegate access: a delegated manager must not grant itself more.
+  const session = await requireFormPermission(request, reply, guildId, formId, 'admin');
+  if (!session) return;
+  const parsed = formPermissionSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  const resources = await getGuildResources(guildId);
+  if (!resources.roles.some((role) => role.id === roleId)) return reply.code(404).send({ error: 'ROLE_NOT_FOUND' });
+  const binding = await prisma.formPermissionBinding.upsert({
+    where: { formId_discordRoleId: { formId, discordRoleId: roleId } },
+    create: { guildId, formId, discordRoleId: roleId, ...parsed.data },
+    update: parsed.data
+  });
+  await panelAudit(request, session, guildId, 'form.permission.update', { formId, roleId, ...parsed.data });
+  return binding;
+});
+
+app.delete('/api/guilds/:guildId/forms/:formId/permissions/:roleId', async (request, reply) => {
+  const { guildId, formId, roleId } = request.params as { guildId: string; formId: string; roleId: string };
+  if (!internalId.safeParse(formId).success || !snowflake.safeParse(roleId).success) {
+    return reply.code(400).send({ error: 'INVALID_ID' });
+  }
+  const session = await requireFormPermission(request, reply, guildId, formId, 'admin');
+  if (!session) return;
+  await prisma.formPermissionBinding.deleteMany({ where: { guildId, formId, discordRoleId: roleId } });
+  await panelAudit(request, session, guildId, 'form.permission.delete', { formId, roleId });
+  return { ok: true };
+});
+
+app.get('/api/guilds/:guildId/forms/:formId/submissions', async (request, reply) => {
+  const { guildId, formId } = request.params as { guildId: string; formId: string };
+  if (!internalId.safeParse(formId).success) return reply.code(400).send({ error: 'INVALID_FORM_ID' });
+  const session = await requireFormPermission(request, reply, guildId, formId, 'canReview');
+  if (!session) return;
+  const rows = await prisma.formSubmission.findMany({
+    where: { guildId, formId },
+    orderBy: { createdAt: 'desc' },
+    take: 200
+  });
+  return rows.map(({ answersEncrypted, ...row }) => {
+    // One corrupt/undecryptable row must not hide every other submission.
+    try {
+      const decrypted = decryptText(answersEncrypted);
+      if (decrypted === null) throw new Error('UNREADABLE');
+      const answers: unknown = JSON.parse(decrypted);
+      if (!Array.isArray(answers)) throw new Error('UNREADABLE');
+      return { ...row, answers, unreadable: false };
+    } catch {
+      request.log.warn({ guildId, formId, submissionId: row.id }, 'Form submission unreadable');
+      return { ...row, answers: [], unreadable: true };
+    }
+  });
+});
+
+app.delete('/api/guilds/:guildId/forms/:formId/submissions/:submissionId', async (request, reply) => {
+  const { guildId, formId, submissionId } = request.params as { guildId: string; formId: string; submissionId: string };
+  if (!internalId.safeParse(formId).success || !internalId.safeParse(submissionId).success) {
+    return reply.code(400).send({ error: 'INVALID_ID' });
+  }
+  const session = await requireFormPermission(request, reply, guildId, formId, 'admin');
+  if (!session) return;
+  const result = await prisma.formSubmission.deleteMany({ where: { id: submissionId, guildId, formId } });
+  if (!result.count) return reply.code(404).send({ error: 'SUBMISSION_NOT_FOUND' });
+  await panelAudit(request, session, guildId, 'form.submission.delete', { formId, submissionId });
+  return { ok: true };
+});
+
+app.get('/api/guilds/:guildId/form-panels', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId);
+  if (!session) return;
+  const visible = await visibleFormIds(guildId, session);
+  if (visible && !visible.length) return [];
+  return prisma.formPanel.findMany({
+    where: { guildId, ...(visible ? { formId: { in: visible } } : {}) },
+    include: { form: { select: { name: true } } },
+    orderBy: { createdAt: 'asc' }
+  });
+});
+
+app.post('/api/guilds/:guildId/form-panels', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const parsed = formPanelSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  const session = await requireFormPermission(request, reply, guildId, parsed.data.formId, 'admin');
+  if (!session) return;
+  const resources = await getGuildResources(guildId);
+  if (!resources.channels.some((channel) => channel.id === parsed.data.channelId && (channel.type === 0 || channel.type === 5))) {
+    return reply.code(400).send({ error: 'FORM_PANEL_CHANNEL_NOT_FOUND' });
+  }
+  const panel = await prisma.formPanel.create({ data: { guildId, ...parsed.data } });
+  await panelAudit(request, session, guildId, 'form_panel.create', { panelId: panel.id, formId: panel.formId });
+  return reply.code(201).send(panel);
+});
+
+app.put('/api/guilds/:guildId/form-panels/:panelId', async (request, reply) => {
+  const { guildId, panelId } = request.params as { guildId: string; panelId: string };
+  if (!internalId.safeParse(panelId).success) return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  const existing = await prisma.formPanel.findFirst({ where: { id: panelId, guildId } });
+  if (!existing) return reply.code(404).send({ error: 'FORM_PANEL_NOT_FOUND' });
+  const session = await requireFormPermission(request, reply, guildId, existing.formId, 'canManage');
+  if (!session) return;
+  const parsed = formPanelSchema.safeParse(request.body);
+  if (!parsed.success || parsed.data.formId !== existing.formId) {
+    return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.success ? undefined : parsed.error.flatten() });
+  }
+  if (parsed.data.channelId !== existing.channelId && !isGuildAdmin(session.access)) {
+    return reply.code(403).send({ error: 'FORM_PANEL_CHANNEL_ADMIN_ONLY' });
+  }
+  const resources = await getGuildResources(guildId);
+  if (!resources.channels.some((channel) => channel.id === parsed.data.channelId && (channel.type === 0 || channel.type === 5))) {
+    return reply.code(400).send({ error: 'FORM_PANEL_CHANNEL_NOT_FOUND' });
+  }
+  const panel = await prisma.formPanel.update({
+    where: { id: panelId },
+    data: { ...parsed.data, ...(parsed.data.channelId !== existing.channelId ? { messageId: null } : {}) }
+  });
+  await panelAudit(request, session, guildId, 'form_panel.update', { panelId });
+  return panel;
+});
+
+app.delete('/api/guilds/:guildId/form-panels/:panelId', async (request, reply) => {
+  const { guildId, panelId } = request.params as { guildId: string; panelId: string };
+  if (!internalId.safeParse(panelId).success) return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  const panel = await prisma.formPanel.findFirst({ where: { id: panelId, guildId } });
+  if (!panel) return reply.code(404).send({ error: 'FORM_PANEL_NOT_FOUND' });
+  const session = await requireFormPermission(request, reply, guildId, panel.formId, 'admin');
+  if (!session) return;
+  await prisma.formPanel.delete({ where: { id: panelId } });
+  await panelAudit(request, session, guildId, 'form_panel.delete', { panelId, formId: panel.formId });
+  return { ok: true };
+});
+
+app.post('/api/guilds/:guildId/form-panels/:panelId/publish', async (request, reply) => {
+  const { guildId, panelId } = request.params as { guildId: string; panelId: string };
+  if (!internalId.safeParse(panelId).success) return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  const panel = await prisma.formPanel.findFirst({ where: { id: panelId, guildId } });
+  if (!panel) return reply.code(404).send({ error: 'FORM_PANEL_NOT_FOUND' });
+  const session = await requireFormPermission(request, reply, guildId, panel.formId, 'admin');
+  if (!session) return;
+  try {
+    const result = await publishFormPanel(guildId, panelId);
+    await panelAudit(request, session, guildId, 'form_panel.publish', { panelId, messageId: result.messageId });
+    return result;
+  } catch (error) {
+    request.log.error({ err: error, guildId, panelId }, 'Form panel publish failed');
+    return reply.code(502).send({ error: 'FORM_PANEL_PUBLISH_FAILED' });
   }
 });
 
@@ -1730,20 +2263,72 @@ app.get('/api/guilds/:guildId/tickets/:ticketId/transcript', async (request, rep
   if (!session) return;
   if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
 
+  // Safe method (also served for HEAD): never mutates. One-shot transcripts
+  // can only be fetched through the consuming POST below.
   const ticket = await prisma.ticket.findFirst({
     where: { id: ticketId, guildId },
     select: {
       ticketNumber: true,
+      category: { select: { transcriptRetain: true } },
       transcript: { select: { contentEncrypted: true } }
     }
   });
   if (!ticket) return reply.code(404).send({ error: 'TICKET_NOT_FOUND' });
   if (!ticket.transcript) return reply.code(404).send({ error: 'TRANSCRIPT_NOT_FOUND' });
+  if (!ticket.category.transcriptRetain) return reply.code(409).send({ error: 'TRANSCRIPT_ONE_SHOT' });
 
   const html = decryptText(ticket.transcript.contentEncrypted);
   if (!html) return reply.code(500).send({ error: 'TRANSCRIPT_DECRYPT_FAILED' });
 
   reply.header('Content-Disposition', `attachment; filename="dispatch-ticket-${ticket.ticketNumber}.html"`);
+  return reply.type('text/html; charset=utf-8').send(html);
+});
+
+app.post('/api/guilds/:guildId/tickets/:ticketId/transcript/download', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId },
+    select: {
+      id: true,
+      ticketNumber: true,
+      category: { select: { transcriptRetain: true } },
+      transcript: { select: { contentEncrypted: true } }
+    }
+  });
+  if (!ticket) return reply.code(404).send({ error: 'TICKET_NOT_FOUND' });
+
+  let contentEncrypted: string;
+  const consumed = !ticket.category.transcriptRetain;
+  if (consumed) {
+    // Atomic consume: only the request whose DELETE succeeds gets the content.
+    try {
+      const deleted = await prisma.transcript.delete({
+        where: { ticketId: ticket.id },
+        select: { contentEncrypted: true }
+      });
+      contentEncrypted = deleted.contentEncrypted;
+    } catch (error) {
+      if (isRecordNotFound(error)) return reply.code(404).send({ error: 'TRANSCRIPT_NOT_FOUND' });
+      throw error;
+    }
+  } else {
+    if (!ticket.transcript) return reply.code(404).send({ error: 'TRANSCRIPT_NOT_FOUND' });
+    contentEncrypted = ticket.transcript.contentEncrypted;
+  }
+
+  const html = decryptText(contentEncrypted);
+  if (!html) return reply.code(500).send({ error: 'TRANSCRIPT_DECRYPT_FAILED' });
+
+  if (consumed) {
+    await panelAudit(request, session, guildId, 'ticket.transcript.consume', { ticketId: ticket.id });
+  }
+
+  reply.header('Content-Disposition', `attachment; filename="dispatch-ticket-${ticket.ticketNumber}.html"`);
+  reply.header('X-Transcript-Consumed', consumed ? '1' : '0');
   return reply.type('text/html; charset=utf-8').send(html);
 });
 

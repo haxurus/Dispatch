@@ -16,7 +16,7 @@ import {
   type StringSelectMenuInteraction
 } from 'discord.js';
 import { prisma } from '@dispatch/db';
-import { encryptText } from './security.js';
+import { decryptText, encryptText } from './security.js';
 import { closeTicket, reopenTicket, setTicketStatus, unclaimTicket } from './ticket-operations.js';
 import { reserveTicketOpen, getTicketOpenReservation, consumeTicketOpenReservation,
   commitTicketOpen, releaseTicketOpenReservation, ticketOpenReservationMessage,
@@ -27,6 +27,7 @@ const PANEL_SELECT_PREFIX = 'dispatch:open:';
 const MAIN_MENU_BUTTON_PREFIX = 'dispatch:main-menu:';
 const MAIN_MENU_SELECT_PREFIX = 'dispatch:main-menu-select:';
 const OPEN_MODAL_PREFIX = 'dispatch:open-modal:';
+const OPEN_SELECT_PREFIX = 'dispatch:open-select:';
 const CLAIM_PREFIX = 'dispatch:claim:';
 const UNCLAIM_PREFIX = 'dispatch:unclaim:';
 const WAITING_PREFIX = 'dispatch:waiting:';
@@ -41,10 +42,12 @@ type FormField = {
   id: string;
   label: string;
   style: 'SHORT' | 'PARAGRAPH';
+  type: 'SHORT_TEXT' | 'LONG_TEXT' | 'SINGLE_SELECT';
   required: boolean;
   placeholder?: string | null;
   minLength?: number | null;
   maxLength?: number | null;
+  options: Array<{ label: string; value: string; description?: string | null }>;
 };
 
 function parseFormFields(value: unknown): FormField[] {
@@ -68,11 +71,22 @@ function parseFormFields(value: unknown): FormField[] {
         ? row.id
         : `field_${index + 1}`,
       label,
-      style: row.style === 'PARAGRAPH' ? 'PARAGRAPH' : 'SHORT',
+      style: row.type === 'LONG_TEXT' || row.style === 'PARAGRAPH' ? 'PARAGRAPH' : 'SHORT',
+      type: row.type === 'SINGLE_SELECT' ? 'SINGLE_SELECT'
+        : row.type === 'LONG_TEXT' || row.style === 'PARAGRAPH' ? 'LONG_TEXT' : 'SHORT_TEXT',
       required: row.required !== false,
       placeholder: typeof row.placeholder === 'string' ? row.placeholder.slice(0, 100) : null,
       minLength,
-      maxLength
+      maxLength,
+      options: Array.isArray(row.options) ? row.options.slice(0, 25).flatMap((option) => {
+        if (!option || typeof option !== 'object' || Array.isArray(option)) return [];
+        const entry = option as Record<string, unknown>;
+        const optionLabel = typeof entry.label === 'string' ? entry.label.trim().slice(0, 100) : '';
+        const optionValue = typeof entry.value === 'string' ? entry.value.trim().slice(0, 100) : '';
+        if (!optionLabel || !optionValue) return [];
+        return [{ label: optionLabel, value: optionValue,
+          description: typeof entry.description === 'string' ? entry.description.trim().slice(0, 100) || null : null }];
+      }) : []
     } satisfies FormField];
   });
 }
@@ -86,7 +100,7 @@ function safeChannelPart(value: string) {
     .slice(0, 24) || 'user';
 }
 
-function ticketControls(ticketId: string) {
+export function ticketControls(ticketId: string) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${CLAIM_PREFIX}${ticketId}`)
@@ -413,6 +427,45 @@ async function createTicket(
   }
 }
 
+function storedTicketAnswers(value: string | null | undefined) {
+  if (!value) return [] as Array<{ id: string; label: string; value: string }>;
+  try {
+    const parsed = JSON.parse(decryptText(value) ?? '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function ticketSelectRow(token: string, field: FormField) {
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(OPEN_SELECT_PREFIX + token)
+      .setPlaceholder(field.label.slice(0, 100))
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(field.options.map((option) => ({
+        label: option.label,
+        value: option.value,
+        description: option.description || undefined
+      })))
+  );
+}
+
+function ticketTextModal(token: string, categoryName: string, fields: FormField[]) {
+  const modal = new ModalBuilder().setCustomId(OPEN_MODAL_PREFIX + token)
+    .setTitle(('Apri ticket - ' + categoryName).slice(0, 45));
+  for (const [index, field] of fields.entries()) {
+    const input = new TextInputBuilder().setCustomId('field_' + (index + 1)).setLabel(field.label)
+      .setStyle(field.style === 'PARAGRAPH' ? TextInputStyle.Paragraph : TextInputStyle.Short)
+      .setRequired(field.required).setMaxLength(field.maxLength ?? 4000);
+    if (field.placeholder) input.setPlaceholder(field.placeholder);
+    if (field.minLength != null) input.setMinLength(field.minLength);
+    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+  }
+  return modal;
+}
+
 async function beginTicketOpen(interaction: StringSelectMenuInteraction, sourceKey: string, categoryId: string) {
   if (!interaction.guildId) return;
   const source = await resolveOpenSource(interaction.guildId, sourceKey, categoryId);
@@ -435,21 +488,100 @@ async function beginTicketOpen(interaction: StringSelectMenuInteraction, sourceK
     await createTicket(interaction, sourceKey, categoryId, [], reservation.token);
     return;
   }
-  const modal = new ModalBuilder().setCustomId(OPEN_MODAL_PREFIX + reservation.token)
-    .setTitle(('Apri ticket - ' + category.name).slice(0, 45));
-  for (const [index, field] of fields.entries()) {
-    const input = new TextInputBuilder().setCustomId('field_' + (index + 1)).setLabel(field.label)
-      .setStyle(field.style === 'PARAGRAPH' ? TextInputStyle.Paragraph : TextInputStyle.Short)
-      .setRequired(field.required).setMaxLength(field.maxLength ?? 4000);
-    if (field.placeholder) input.setPlaceholder(field.placeholder);
-    if (field.minLength != null) input.setMinLength(field.minLength);
-    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+  const selects = fields.filter((field) => field.type === 'SINGLE_SELECT');
+  if (selects.length) {
+    await interaction.reply({
+      content: '**1/' + selects.length + ' - ' + selects[0]!.label + '**',
+      components: [ticketSelectRow(reservation.token, selects[0]!)],
+      allowedMentions: { parse: [] },
+      ephemeral: true
+    });
+    return;
   }
-  try { await interaction.showModal(modal); }
+  try { await interaction.showModal(ticketTextModal(reservation.token, category.name, fields)); }
   catch (error) {
     await releaseTicketOpenReservation(interaction.guildId, interaction.user.id, reservation.token);
     throw error;
   }
+}
+
+async function submitOpenTicketSelect(interaction: StringSelectMenuInteraction) {
+  if (!interaction.guildId) return;
+  const token = interaction.customId.slice(OPEN_SELECT_PREFIX.length);
+  const reservation = await getTicketOpenReservation(interaction.guildId, interaction.user.id, token);
+  if (!reservation?.reservationCategoryId || !reservation.reservationSourceKey) {
+    await interaction.reply({ content: 'Questa richiesta è scaduta.', ephemeral: true });
+    return;
+  }
+  const category = await prisma.ticketCategory.findFirst({ where: {
+    id: reservation.reservationCategoryId, guildId: interaction.guildId, enabled: true
+  } });
+  if (!category || formVersion(category.formFields) !== reservation.reservationFormVersion) {
+    await releaseTicketOpenReservation(interaction.guildId, interaction.user.id, token);
+    await interaction.reply({ content: 'Il modulo è stato modificato. Riapri la richiesta.', ephemeral: true });
+    return;
+  }
+  const fields = parseFormFields(category.formFields);
+  const selects = fields.filter((field) => field.type === 'SINGLE_SELECT');
+  const texts = fields.filter((item) => item.type !== 'SINGLE_SELECT');
+  const index = reservation.reservationQuestionIndex ?? 0;
+  const guildId = interaction.guildId;
+  const categoryName = category.name;
+  const showTextModal = async () => {
+    try { await interaction.showModal(ticketTextModal(token, categoryName, texts)); }
+    catch (error) {
+      await releaseTicketOpenReservation(guildId, interaction.user.id, token);
+      throw error;
+    }
+  };
+  // Every select is answered but the user dismissed the modal: offer it again
+  // instead of trapping the reservation until it expires.
+  if (index >= selects.length) {
+    if (texts.length) await showTextModal();
+    else await interaction.reply({ content: 'Questa richiesta è scaduta.', ephemeral: true });
+    return;
+  }
+  const field = selects[index];
+  const value = interaction.values[0];
+  if (!field || !value || !field.options.some((option) => option.value === value)) {
+    await interaction.reply({ content: 'Selezione non valida.', ephemeral: true });
+    return;
+  }
+  const answers = storedTicketAnswers(reservation.reservationAnswersEncrypted);
+  answers.push({ id: field.id, label: field.label, value });
+  // Conditional write: a stale or concurrent select for the same step loses
+  // instead of appending a duplicate answer and skipping a question.
+  const advanced = await prisma.ticketUserGuard.updateMany({
+    where: {
+      id: reservation.id, reservationToken: token, reservationPhase: 'FORM',
+      reservationQuestionIndex: index, pendingUntil: { gt: new Date() }
+    },
+    data: {
+      reservationAnswersEncrypted: encryptText(JSON.stringify(answers)),
+      reservationQuestionIndex: index + 1
+    }
+  });
+  if (advanced.count !== 1) {
+    await interaction.reply({ content: 'Questa selezione non è più valida.', ephemeral: true });
+    return;
+  }
+  const next = selects[index + 1];
+  if (next) {
+    await interaction.update({
+      content: '**' + (index + 2) + '/' + selects.length + ' - ' + next.label + '**',
+      components: [ticketSelectRow(token, next)],
+      allowedMentions: { parse: [] }
+    });
+    return;
+  }
+  if (texts.length) {
+    await showTextModal();
+    return;
+  }
+  await interaction.deferReply({ ephemeral: true });
+  const ordered = fields.map((item) => answers.find((answer) => answer.id === item.id)!)
+    .filter(Boolean);
+  await createTicket(interaction, reservation.reservationSourceKey, category.id, ordered, token);
 }
 
 async function openTicket(interaction: StringSelectMenuInteraction) {
@@ -573,17 +705,24 @@ async function submitOpenTicket(interaction: ModalSubmitInteraction) {
     return;
   }
   const fields = parseFormFields(category.formFields);
-  let answers: Array<{ id: string; label: string; value: string }>;
+  const textFields = fields.filter((field) => field.type !== 'SINGLE_SELECT');
+  const answers = storedTicketAnswers(reservation.reservationAnswersEncrypted);
   try {
-    answers = fields.map((field, index) => ({
-      id: field.id, label: field.label, value: interaction.fields.getTextInputValue('field_' + (index + 1))
-    }));
+    textFields.forEach((field, index) => {
+      answers.push({
+        id: field.id,
+        label: field.label,
+        value: interaction.fields.getTextInputValue('field_' + (index + 1))
+      });
+    });
   } catch {
     await releaseTicketOpenReservation(interaction.guildId, interaction.user.id, token);
     await interaction.editReply('Modulo non valido. Apri nuovamente la richiesta.');
     return;
   }
-  await createTicket(interaction, reservation.reservationSourceKey, category.id, answers, token);
+  const ordered = fields.map((field) => answers.find((answer) => answer.id === field.id)!)
+    .filter(Boolean);
+  await createTicket(interaction, reservation.reservationSourceKey, category.id, ordered, token);
 }
 
 async function claimTicket(interaction: ButtonInteraction) {
@@ -937,7 +1076,7 @@ async function submitCloseTicket(interaction: ModalSubmitInteraction) {
 export async function handleTicketInteraction(
   interaction: StringSelectMenuInteraction | ButtonInteraction | ModalSubmitInteraction
 ) {
-  const opening = [PANEL_SELECT_PREFIX, MAIN_MENU_BUTTON_PREFIX, MAIN_MENU_SELECT_PREFIX, OPEN_MODAL_PREFIX]
+  const opening = [PANEL_SELECT_PREFIX, MAIN_MENU_BUTTON_PREFIX, MAIN_MENU_SELECT_PREFIX, OPEN_MODAL_PREFIX, OPEN_SELECT_PREFIX]
     .some((prefix) => interaction.customId.startsWith(prefix));
   if (opening && interaction.guildId && !allowOpeningInteraction(interaction.guildId, interaction.user.id)) {
     await interaction.reply({ content: 'Stai usando il menu troppo rapidamente. Riprova tra pochi secondi.', ephemeral: true });
@@ -965,6 +1104,14 @@ export async function handleTicketInteraction(
     interaction.customId.startsWith(MAIN_MENU_BUTTON_PREFIX)
   ) {
     await openMainMenu(interaction);
+    return true;
+  }
+
+  if (
+    interaction.isStringSelectMenu() &&
+    interaction.customId.startsWith(OPEN_SELECT_PREFIX)
+  ) {
+    await submitOpenTicketSelect(interaction);
     return true;
   }
 

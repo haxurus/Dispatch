@@ -153,3 +153,11 @@ export const sendTicketReply = (
   content,
   templateId: templateId ?? null
 });
+
+
+export async function publishFormPanel(guildId: string, panelId: string) {
+  return api<{ ok: true; messageId: string }>(
+    `/guilds/${id(guildId)}/form-panels/${cuid(panelId)}/publish`,
+    'POST'
+  );
+}

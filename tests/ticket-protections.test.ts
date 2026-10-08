@@ -1,4 +1,5 @@
 import { test, beforeEach, after } from 'node:test';
+import { randomBytes } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { prisma, PrismaClient } from '@dispatch/db';
 import { ChannelType, type Client } from 'discord.js';
@@ -195,12 +196,14 @@ test('retention respects reopen window and cascades expired private data', async
   const purge = await ticket(cat);
   await prisma.ticketNote.create({ data: { ticketId: purge.id, guildId: G, authorId: OTHER, contentEncrypted: 'test fixture' } });
   await prisma.ticketFeedback.create({ data: { ticketId: purge.id, guildId: G, userId: U, rating: 5 } });
+  await prisma.transcript.create({ data: { ticketId: purge.id, contentEncrypted: 'test fixture' } });
   await prisma.guildSettings.update({ where: { guildId: G }, data: { transcriptRetentionDays: 1, closedTicketRetentionDays: 1 } });
   await runTicketRetention(client());
   assert.ok(await prisma.ticket.findUnique({ where: { id: keep.id } }));
   assert.equal(await prisma.ticket.findUnique({ where: { id: purge.id } }), null);
   assert.equal(await prisma.ticketNote.count({ where: { ticketId: purge.id } }), 0);
   assert.equal(await prisma.ticketFeedback.count({ where: { ticketId: purge.id } }), 0);
+  assert.equal(await prisma.transcript.count({ where: { ticketId: purge.id } }), 0);
 });
 
 test('Discord failures preserve the deletion marker and block reopening, retry can finish', async () => {
@@ -278,5 +281,82 @@ test('bot database role can use guards but cannot read dashboard sessions or sta
     await assert.rejects(bot.panelSession.count());
     await assert.rejects(bot.ticketNote.count());
     await assert.rejects(bot.$queryRaw`SELECT * FROM "_prisma_migrations"`);
+  } finally { await bot.$disconnect(); }
+});
+
+async function form() {
+  return prisma.formDefinition.create({ data: { guildId: G, name: 'Test form', questions: [] } });
+}
+function formSession(formId: string, extra: Record<string, unknown> = {}) {
+  return prisma.formSession.create({ data: {
+    guildId: G, formId, userId: U, token: randomBytes(18).toString('base64url'), source: 'test',
+    expiresAt: new Date(Date.now() + 60_000), ...extra
+  } });
+}
+
+test('form submissions open tickets through the same guard: blacklist and open limit apply', async () => {
+  const cat = await category({ maxOpenPerUser: 1 });
+  const definition = await form();
+  const key = 'f_' + definition.id;
+  const first = await reserveTicketOpen(G, U, cat.id, key, formVersion(cat.formFields));
+  assert.equal(first.ok, true);
+  if (!first.ok) throw new Error(first.code);
+  assert.equal((await getTicketOpenReservation(G, U, first.token))?.reservationSourceKey, key);
+  await releaseTicketOpenReservation(G, U, first.token);
+  const invalid = await reserveTicketOpen(G, U, cat.id, 'x_' + definition.id, formVersion(cat.formFields));
+  assert.equal(invalid.ok, false);
+  if (!invalid.ok) assert.equal(invalid.code, 'INVALID_OPEN_REQUEST');
+  await ticket(cat, { status: 'OPEN', closedAt: null });
+  const limited = await reserveTicketOpen(G, U, cat.id, key, formVersion(cat.formFields));
+  assert.equal(limited.ok, false);
+  if (!limited.ok) assert.equal(limited.code, 'MAX_OPEN_TICKETS');
+  await prisma.guildBlacklist.create({ data: { guildId: G, userId: U, createdById: OTHER } });
+  const other = await category();
+  const blocked = await reserveTicketOpen(G, U, other.id, key, formVersion(other.formFields));
+  assert.equal(blocked.ok, false);
+  if (!blocked.ok) assert.equal(blocked.code, 'BLACKLISTED');
+});
+
+test('PostgreSQL allows only one active form session per user and form', async () => {
+  const definition = await form();
+  await formSession(definition.id);
+  await assert.rejects(formSession(definition.id), { code: 'P2002' });
+  await formSession(definition.id, { state: 'CANCELLED' });
+  await formSession(definition.id, { state: 'EXPIRED' });
+  await formSession(definition.id, { userId: OTHER });
+  assert.equal(await prisma.formSession.count({ where: { formId: definition.id, state: 'ACTIVE' } }), 2);
+});
+
+test('retention expires abandoned form sessions and purges old finished ones', async () => {
+  const definition = await form();
+  const stale = await formSession(definition.id, { expiresAt: new Date(Date.now() - 1000) });
+  const old = await formSession(definition.id, { state: 'CANCELLED', createdAt: new Date(Date.now() - 8 * DAY) });
+  const recent = await formSession(definition.id, { state: 'COMPLETED' });
+  await runTicketRetention(client());
+  assert.equal((await prisma.formSession.findUniqueOrThrow({ where: { id: stale.id } })).state, 'EXPIRED');
+  assert.equal(await prisma.formSession.findUnique({ where: { id: old.id } }), null);
+  assert.ok(await prisma.formSession.findUnique({ where: { id: recent.id } }));
+});
+
+test('bot database role has only the form privileges the runtime needs', async () => {
+  const definition = await form();
+  const connection = new URL(db);
+  connection.username = 'dispatch_bot'; connection.password = 'dispatch_bot_test';
+  const bot = new PrismaClient({ datasources: { db: { url: connection.toString() } } });
+  try {
+    await bot.formDefinition.count();
+    await bot.formPermissionBinding.count();
+    await bot.formPanel.count();
+    await bot.formSubmission.count();
+    await bot.formSession.count();
+    await bot.formSession.deleteMany({ where: { formId: definition.id, state: 'EXPIRED' } });
+    await assert.rejects(bot.formPermissionBinding.create({ data: {
+      guildId: G, formId: definition.id, discordRoleId: OTHER, canSubmit: true
+    } }));
+    await assert.rejects(bot.formDefinition.updateMany({ where: { id: definition.id }, data: { name: 'Changed' } }));
+    await assert.rejects(bot.formDefinition.deleteMany({ where: { id: definition.id } }));
+    await assert.rejects(bot.formPanel.deleteMany({ where: { formId: definition.id } }));
+    await assert.rejects(bot.formSubmission.deleteMany({ where: { formId: definition.id } }));
+    assert.ok(await prisma.formDefinition.findUnique({ where: { id: definition.id } }));
   } finally { await bot.$disconnect(); }
 });

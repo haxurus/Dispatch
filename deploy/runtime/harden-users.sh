@@ -28,12 +28,19 @@ GRANT USAGE ON SCHEMA public TO dispatch_api, dispatch_bot;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM dispatch_api, dispatch_bot;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript",
-  "PanelSession", "PanelRoleBinding", "PanelAudit", "TicketNote", "ResponseTemplate", "TicketFeedback", "GuildBlacklist"
+  "PanelSession", "PanelRoleBinding", "PanelAudit", "TicketNote", "ResponseTemplate", "TicketFeedback", "GuildBlacklist",
+  "FormDefinition", "FormPanel", "FormSubmission", "FormSession", "FormPermissionBinding"
 TO dispatch_api;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript", "TicketFeedback", "TicketOpenAttempt", "TicketUserGuard"
 TO dispatch_bot;
 GRANT SELECT ON TABLE "GuildBlacklist" TO dispatch_bot;
+-- Forms: the bot reads definitions/bindings, stamps panel message ids, writes
+-- submissions and drives sessions. Definitions and bindings are dashboard-only.
+GRANT SELECT ON TABLE "FormDefinition", "FormPermissionBinding" TO dispatch_bot;
+GRANT SELECT, UPDATE ON TABLE "FormPanel" TO dispatch_bot;
+GRANT SELECT, INSERT, UPDATE ON TABLE "FormSubmission" TO dispatch_bot;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "FormSession" TO dispatch_bot;
 REVOKE ALL ON TABLE "PanelSession", "PanelRoleBinding", "PanelAudit" FROM dispatch_bot;
 ALTER ROLE dispatch_api NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
 ALTER ROLE dispatch_bot NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;

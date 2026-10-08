@@ -10,6 +10,7 @@ PREVIOUS_FILE="$STATE_DIR/.previous-release"
 BACKUP_DIR="$STATE_DIR/backups"
 LOG_DIR="$STATE_DIR/logs"
 PROJECT=dispatch
+LOCK_FILE=/run/dispatch-deploy.lock
 
 log() { printf '[dispatch-deploy] %s\n' "$*"; }
 die() { printf '[dispatch-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -76,6 +77,47 @@ backup_database() {
   fi
 }
 
+# Image references of the current and previous release: the only ones a
+# rollback can need. Everything else from the Dispatch repository is garbage.
+keep_refs() {
+  for file in "$CURRENT_FILE" "$PREVIOUS_FILE"; do
+    if read_release "$file"; then
+      printf '%s\n%s\n' "$APP_IMAGE" "$MIGRATE_IMAGE"
+    fi
+  done
+  for ref in "$@"; do printf '%s\n' "$ref"; done
+}
+
+# Each deploy pulls 1-2 GB of immutable images. On VPS01 old Sentinel images
+# filled the disk on 2026-10-06 and took PostgreSQL down: keep only what a
+# rollback can use.
+prune_images() {
+  keep="$(keep_refs "$@")"
+  docker image ls --no-trunc --format '{{.Repository}}@{{.Digest}}' ghcr.io/haxurus/dispatch 2>/dev/null |
+    while IFS= read -r ref; do
+      case "$ref" in *@sha256:*) ;; *) continue ;; esac
+      printf '%s\n' "$keep" | grep -Fxq "$ref" && continue
+      docker image rm "$ref" >/dev/null 2>&1 || true
+    done
+  docker image prune -f >/dev/null 2>&1 || true
+}
+
+free_kb() {
+  df -Pk /var/lib/docker 2>/dev/null | awk 'NR == 2 { print $4 }'
+}
+
+# Refuse to start a release (and its pre-deploy backup) on a nearly full disk.
+ensure_disk_space() {
+  min_kb=$((5 * 1024 * 1024))
+  available="$(free_kb)"
+  [ -n "$available" ] || return 0
+  [ "$available" -ge "$min_kb" ] && return 0
+  log "low disk space ($((available / 1024)) MiB free): pruning old Dispatch images"
+  prune_images "$@"
+  available="$(free_kb)"
+  [ "$available" -ge "$((3 * 1024 * 1024))" ] || die "less than 3 GiB free on /var/lib/docker; free space before deploying"
+}
+
 wait_healthy() {
   app="$1"; migrate="$2"
   deadline=$(( $(date +%s) + 150 ))
@@ -98,6 +140,7 @@ deploy_release() {
   new_app="$1"; new_migrate="$2"
   valid_ref "$new_app" || die 'invalid app image reference'
   valid_ref "$new_migrate" || die 'invalid migrate image reference'
+  ensure_disk_space "$new_app" "$new_migrate"
 
   old_app=''; old_migrate=''
   if read_release "$CURRENT_FILE"; then
@@ -116,6 +159,7 @@ deploy_release() {
     fi
     write_release "$CURRENT_FILE" "$new_app" "$new_migrate"
     compose "$new_app" "$new_migrate" rm -f migrate secure-db >/dev/null 2>&1 || true
+    prune_images
     log "deployment healthy"
     compose "$new_app" "$new_migrate" ps
     return 0
@@ -152,6 +196,7 @@ rollback_release() {
     if [ -n "$current_app" ] && [ -n "$current_migrate" ]; then
       write_release "$PREVIOUS_FILE" "$current_app" "$current_migrate"
     fi
+    prune_images
     log "rollback healthy"
     compose "$prev_app" "$prev_migrate" ps
     return 0
@@ -167,6 +212,10 @@ status_release() {
     printf 'No release recorded yet.\n'
   fi
 }
+
+# One operation at a time: a manual run must not interleave with a GitHub deploy.
+exec 9>"$LOCK_FILE"
+flock -n 9 || die "another dispatch-deploy operation is running (lock: $LOCK_FILE)"
 
 case "${1:-}" in
   deploy)

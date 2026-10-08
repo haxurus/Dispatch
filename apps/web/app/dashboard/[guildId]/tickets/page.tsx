@@ -22,10 +22,12 @@ type FormField = {
   id: string;
   label: string;
   style: 'SHORT' | 'PARAGRAPH';
+  type: 'SHORT_TEXT' | 'LONG_TEXT' | 'SINGLE_SELECT';
   required: boolean;
   placeholder: string | null;
   minLength: number | null;
   maxLength: number | null;
+  options: Array<{ label: string; value: string; description?: string | null }>;
 };
 
 type Category = {
@@ -47,6 +49,10 @@ type Category = {
   escalationRoleIds: string[];
   reopenWindowHours: number | null;
   feedbackEnabled: boolean;
+  transcriptAutoGenerate: boolean;
+  transcriptSendToOpener: boolean;
+  transcriptChannelId: string | null;
+  transcriptRetain: boolean;
   enabled: boolean;
 };
 
@@ -85,6 +91,10 @@ const newCategory = () => ({
   escalationRoleIds: [] as string[],
   reopenWindowHours: 24 as number | null,
   feedbackEnabled: true,
+  transcriptAutoGenerate: false,
+  transcriptSendToOpener: false,
+  transcriptChannelId: '',
+  transcriptRetain: true,
   enabled: true
 });
 
@@ -101,6 +111,19 @@ function nullableNumber(value: string) {
   return value === '' ? null : Number(value);
 }
 
+function formatFieldOptions(options: FormField['options']) {
+  return options.map((option) => `${option.label}|${option.value}`).join('\n');
+}
+
+function parseFieldOptions(text: string): FormField['options'] {
+  return text.split('\n').map((line) => {
+    const separator = line.indexOf('|');
+    const label = (separator >= 0 ? line.slice(0, separator) : line).trim();
+    const value = (separator >= 0 ? line.slice(separator + 1) : line).trim() || label;
+    return { label, value, description: null };
+  }).filter((option) => option.label && option.value).slice(0, 25);
+}
+
 export default function TicketConfigurationPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
@@ -112,6 +135,9 @@ export default function TicketConfigurationPage() {
   const [panels, setPanels] = useState<Panel[]>([]);
   const [templates, setTemplates] = useState<ResponseTemplate[]>([]);
   const [categoryForm, setCategoryForm] = useState(newCategory);
+  // Raw option editor text per field ID: parsed on blur and before save, so
+  // typing "Etichetta|" is not normalised away mid-keystroke.
+  const [optionDrafts, setOptionDrafts] = useState<Record<string, string>>({});
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [panelForm, setPanelForm] = useState(emptyPanel);
   const [templateName, setTemplateName] = useState('');
@@ -158,11 +184,13 @@ export default function TicketConfigurationPage() {
 
   const resetCategory = () => {
     setCategoryForm(newCategory());
+    setOptionDrafts({});
     setEditingCategoryId(null);
   };
 
   const editCategory = (category: Category) => {
     setEditingCategoryId(category.id);
+    setOptionDrafts({});
     setCategoryForm({
       name: category.name,
       description: category.description ?? '',
@@ -172,7 +200,11 @@ export default function TicketConfigurationPage() {
       openCooldownSeconds: category.openCooldownSeconds,
       antiSpamWindowMinutes: category.antiSpamWindowMinutes,
       antiSpamMaxAttempts: category.antiSpamMaxAttempts,
-      formFields: category.formFields ?? [],
+      formFields: (category.formFields ?? []).map((field) => ({
+        ...field,
+        type: field.type ?? (field.style === 'PARAGRAPH' ? 'LONG_TEXT' : 'SHORT_TEXT'),
+        options: field.options ?? []
+      })),
       slaFirstResponseMinutes: category.slaFirstResponseMinutes,
       slaResolutionMinutes: category.slaResolutionMinutes,
       inactivityCloseHours: category.inactivityCloseHours,
@@ -181,6 +213,10 @@ export default function TicketConfigurationPage() {
       escalationRoleIds: category.escalationRoleIds ?? [],
       reopenWindowHours: category.reopenWindowHours,
       feedbackEnabled: category.feedbackEnabled,
+      transcriptAutoGenerate: category.transcriptAutoGenerate ?? false,
+      transcriptSendToOpener: category.transcriptSendToOpener ?? false,
+      transcriptChannelId: category.transcriptChannelId ?? '',
+      transcriptRetain: category.transcriptRetain ?? true,
       enabled: category.enabled
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -202,8 +238,14 @@ export default function TicketConfigurationPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...categoryForm,
+          formFields: categoryForm.formFields.map((field) =>
+            field.type === 'SINGLE_SELECT' && optionDrafts[field.id] !== undefined
+              ? { ...field, options: parseFieldOptions(optionDrafts[field.id]) }
+              : field
+          ),
           description: categoryForm.description || null,
-          discordCategoryId: categoryForm.discordCategoryId || null
+          discordCategoryId: categoryForm.discordCategoryId || null,
+          transcriptChannelId: categoryForm.transcriptChannelId || null
         })
       });
 
@@ -235,10 +277,12 @@ export default function TicketConfigurationPage() {
           id: `q${index}`,
           label: '',
           style: 'SHORT',
+          type: 'SHORT_TEXT',
           required: true,
           placeholder: null,
           minLength: null,
-          maxLength: 1000
+          maxLength: 1000,
+          options: []
         }
       ]
     });
@@ -254,9 +298,28 @@ export default function TicketConfigurationPage() {
   };
 
   const removeFormField = (index: number) => {
+    const removedId = categoryForm.formFields[index]?.id;
     setCategoryForm({
       ...categoryForm,
       formFields: categoryForm.formFields.filter((_, current) => current !== index)
+    });
+    if (removedId) {
+      setOptionDrafts((current) => {
+        const next = { ...current };
+        delete next[removedId];
+        return next;
+      });
+    }
+  };
+
+  const commitOptionDraft = (index: number, fieldId: string) => {
+    const text = optionDrafts[fieldId];
+    if (text === undefined) return;
+    updateFormField(index, { options: parseFieldOptions(text) });
+    setOptionDrafts((current) => {
+      const next = { ...current };
+      delete next[fieldId];
+      return next;
     });
   };
 
@@ -274,7 +337,9 @@ export default function TicketConfigurationPage() {
         const body = await response.json().catch(() => ({}));
         setError(body.error === 'CATEGORY_IN_USE'
           ? 'La categoria contiene già ticket e non può essere eliminata.'
-          : `Eliminazione categoria fallita: ${body.error ?? response.status}`);
+          : body.error === 'CATEGORY_IN_USE_BY_FORM'
+            ? 'La categoria è usata da uno o più form per il ticket automatico: aggiorna i form prima di eliminarla, oppure disabilitala.'
+            : `Eliminazione categoria fallita: ${body.error ?? response.status}`);
         return;
       }
 
@@ -437,6 +502,7 @@ export default function TicketConfigurationPage() {
         </div>
         <div className="actions">
           <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/forms`}>Form</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/system`}>Sistema</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/analytics`}>Analytics</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/security`}>Blacklist</a>
@@ -584,11 +650,19 @@ export default function TicketConfigurationPage() {
                   <label>
                     Tipo
                     <select
-                      value={field.style}
-                      onChange={(event) => updateFormField(index, { style: event.target.value as 'SHORT' | 'PARAGRAPH' })}
+                      value={field.type}
+                      onChange={(event) => {
+                        const type = event.target.value as FormField['type'];
+                        updateFormField(index, {
+                          type,
+                          style: type === 'LONG_TEXT' ? 'PARAGRAPH' : 'SHORT',
+                          options: type === 'SINGLE_SELECT' ? field.options : []
+                        });
+                      }}
                     >
-                      <option value="SHORT">Risposta breve</option>
-                      <option value="PARAGRAPH">Paragrafo</option>
+                      <option value="SHORT_TEXT">Risposta breve</option>
+                      <option value="LONG_TEXT">Paragrafo</option>
+                      <option value="SINGLE_SELECT">Menu a scelta singola</option>
                     </select>
                   </label>
                   <label>
@@ -599,6 +673,19 @@ export default function TicketConfigurationPage() {
                       onChange={(event) => updateFormField(index, { placeholder: event.target.value || null })}
                     />
                   </label>
+                  {field.type === 'SINGLE_SELECT' && (
+                    <label>
+                      Opzioni, una per riga: Etichetta|valore
+                      <textarea
+                        value={optionDrafts[field.id] ?? formatFieldOptions(field.options)}
+                        onChange={(event) => {
+                          const text = event.target.value;
+                          setOptionDrafts((current) => ({ ...current, [field.id]: text }));
+                        }}
+                        onBlur={() => commitOptionDraft(index, field.id)}
+                      />
+                    </label>
+                  )}
                   <label className="checkbox-row">
                     <input
                       type="checkbox"
@@ -754,6 +841,72 @@ export default function TicketConfigurationPage() {
             </label>
           </fieldset>
 
+          <fieldset>
+            <legend>Transcript</legend>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={categoryForm.transcriptAutoGenerate}
+                onChange={(event) => setCategoryForm({
+                  ...categoryForm,
+                  transcriptAutoGenerate: event.target.checked
+                })}
+              />
+              Genera automaticamente il transcript alla chiusura
+            </label>
+
+            {categoryForm.transcriptAutoGenerate && (
+              <div className="form">
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={categoryForm.transcriptSendToOpener}
+                    onChange={(event) => setCategoryForm({
+                      ...categoryForm,
+                      transcriptSendToOpener: event.target.checked
+                    })}
+                  />
+                  Invia il file HTML in DM all'utente che ha aperto il ticket
+                </label>
+
+                <label>
+                  Canale archivio transcript
+                  <select
+                    value={categoryForm.transcriptChannelId}
+                    onChange={(event) => setCategoryForm({
+                      ...categoryForm,
+                      transcriptChannelId: event.target.value
+                    })}
+                  >
+                    <option value="">Non inviare in un canale</option>
+                    {textChannels.map((channel) => (
+                      <option value={channel.id} key={channel.id}>#{channel.name}</option>
+                    ))}
+                  </select>
+                </label>
+
+              </div>
+            )}
+
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={categoryForm.transcriptRetain}
+                onChange={(event) => setCategoryForm({
+                  ...categoryForm,
+                  transcriptRetain: event.target.checked
+                })}
+              />
+              Conserva una copia cifrata lato Dispatch fino alla retention/eliminazione del ticket
+            </label>
+
+            <p className="muted">
+              Attivo: la copia resta disponibile e può essere scaricata più volte dalla dashboard.
+              Disattivo: il transcript generato dalla dashboard è monouso e viene eliminato dal database al primo
+              download; il transcript automatico viene creato solo in memoria per l'invio e non viene salvato.
+            </p>
+          </fieldset>
+
           <button disabled={busy === 'category'} type="submit">
             {busy === 'category' ? 'Salvataggio...' : editingCategoryId ? 'Salva modifiche' : 'Crea categoria'}
           </button>
@@ -842,7 +995,7 @@ export default function TicketConfigurationPage() {
                 SLA risposta: {category.slaFirstResponseMinutes ?? 'off'} · SLA risoluzione: {category.slaResolutionMinutes ?? 'off'} · Auto-close: {category.inactivityCloseHours ? `${category.inactivityCloseHours}h` : 'off'}
               </p>
               <p className="muted">
-                Escalation: {category.escalationMinutes ? `${category.escalationMinutes} min` : 'off'} · Riapertura: {category.reopenWindowHours ? `${category.reopenWindowHours}h` : 'off'} · Feedback: {category.feedbackEnabled ? 'on' : 'off'}
+                Escalation: {category.escalationMinutes ? `${category.escalationMinutes} min` : 'off'} · Riapertura: {category.reopenWindowHours ? `${category.reopenWindowHours}h` : 'off'} · Feedback: {category.feedbackEnabled ? 'on' : 'off'} · Transcript: {category.transcriptAutoGenerate ? 'auto' : 'manuale'}
               </p>
               <div className="actions">
                 <button className="secondary" onClick={() => editCategory(category)}>Modifica</button>

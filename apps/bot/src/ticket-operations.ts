@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -310,7 +311,14 @@ export async function removeTicketMember(client: Client, guildId: string, ticket
   return { ok: true, userId };
 }
 
-export async function generateTranscript(client: Client, guildId: string, ticketId: string, actorId?: string) {
+type TranscriptBuild = {
+  html: string;
+  messageCount: number;
+  fileName: string;
+  ticket: Awaited<ReturnType<typeof getTicket>>;
+};
+
+async function buildTranscript(client: Client, guildId: string, ticketId: string): Promise<TranscriptBuild> {
   const ticket = await getTicket(guildId, ticketId);
   await assertTranscriptRetention(ticket);
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
@@ -367,25 +375,137 @@ ${rows}
 </body>
 </html>`;
 
-  await prisma.transcript.upsert({
-    where: { ticketId: ticket.id },
-    update: {
-      contentEncrypted: encryptText(html)!,
-      messageCount: messages.length,
-      createdAt: new Date()
-    },
-    create: {
-      ticketId: ticket.id,
-      contentEncrypted: encryptText(html)!,
-      messageCount: messages.length
+  return {
+    html,
+    messageCount: messages.length,
+    fileName: `dispatch-ticket-${ticket.ticketNumber}.html`,
+    ticket
+  };
+}
+
+// Building a transcript is slow (Discord pagination). A reopen that commits in
+// the meantime deletes stored transcripts, so the write happens under the same
+// ticket lock reopen uses and only if the lifecycle state is still the one the
+// transcript was built for. Returns false when the snapshot is stale.
+async function persistTranscript(build: TranscriptBuild) {
+  const contentEncrypted = encryptText(build.html)!;
+  return prisma.$transaction(async (tx) => {
+    await lockTicket(tx, build.ticket.id);
+    const current = await tx.ticket.findUnique({
+      where: { id: build.ticket.id },
+      select: { status: true, closedAt: true, retentionPendingAt: true }
+    });
+    if (!current || current.retentionPendingAt) return false;
+    const builtClosed = build.ticket.status === 'CLOSED';
+    const unchanged = builtClosed
+      ? current.status === 'CLOSED' && current.closedAt?.getTime() === build.ticket.closedAt?.getTime()
+      : current.status !== 'CLOSED' && current.status !== 'REOPENING' && current.closedAt === null;
+    if (!unchanged) return false;
+    await tx.transcript.upsert({
+      where: { ticketId: build.ticket.id },
+      update: { contentEncrypted, messageCount: build.messageCount, createdAt: new Date() },
+      create: { ticketId: build.ticket.id, contentEncrypted, messageCount: build.messageCount }
+    });
+    return true;
+  });
+}
+
+function transcriptAttachment(build: TranscriptBuild) {
+  return new AttachmentBuilder(Buffer.from(build.html, 'utf8'), { name: build.fileName });
+}
+
+export async function generateTranscript(client: Client, guildId: string, ticketId: string, actorId?: string) {
+  const build = await buildTranscript(client, guildId, ticketId);
+  if (!(await persistTranscript(build))) throw new Error('TRANSCRIPT_STATE_CHANGED');
+
+  if (actorId) {
+    await audit(build.ticket.id, guildId, actorId, 'ticket.transcript.generate', {
+      messageCount: build.messageCount,
+      temporary: !build.ticket.category.transcriptRetain
+    });
+  }
+
+  return { ok: true, messageCount: build.messageCount };
+}
+
+async function generateAndDeliverAutomaticTranscript(client: Client, guildId: string, ticketId: string) {
+  const build = await buildTranscript(client, guildId, ticketId);
+  const category = build.ticket.category;
+
+  if (!category.transcriptAutoGenerate) return { ok: true, skipped: true };
+
+  let openerDelivered = false;
+  let channelDelivered = false;
+  let openerFailed = false;
+  let channelFailed = false;
+
+  if (category.transcriptRetain) {
+    // Reopened (or retention-claimed) while building: the snapshot no longer
+    // describes a closed ticket, so it is neither stored nor delivered.
+    if (!(await persistTranscript(build))) return { ok: true, skipped: true };
+  } else {
+    const current = await prisma.ticket.findUnique({
+      where: { id: build.ticket.id }, select: { status: true, closedAt: true }
+    });
+    if (current?.status !== 'CLOSED' || current.closedAt?.getTime() !== build.ticket.closedAt?.getTime()) {
+      return { ok: true, skipped: true };
+    }
+  }
+
+  if (category.transcriptSendToOpener) {
+    try {
+      const user = await client.users.fetch(build.ticket.openerId);
+      await user.send({
+        content: `Transcript del ticket #${build.ticket.ticketNumber}.`,
+        files: [transcriptAttachment(build)]
+      });
+      openerDelivered = true;
+    } catch {
+      openerFailed = true;
+    }
+  }
+
+  if (category.transcriptChannelId) {
+    try {
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) throw new Error('GUILD_NOT_FOUND');
+      const channel = await guild.channels.fetch(category.transcriptChannelId);
+      if (!channel?.isTextBased() || !('send' in channel)) throw new Error('TRANSCRIPT_CHANNEL_INVALID');
+      await channel.send({
+        content: `Transcript ticket #${build.ticket.ticketNumber} · <@${build.ticket.openerId}>`,
+        files: [transcriptAttachment(build)],
+        allowedMentions: { parse: [], users: [] }
+      });
+      channelDelivered = true;
+    } catch {
+      channelFailed = true;
+    }
+  }
+
+  await prisma.ticketAudit.create({
+    data: {
+      ticketId: build.ticket.id,
+      guildId,
+      actorId: null,
+      action: 'ticket.transcript.auto',
+      details: {
+        messageCount: build.messageCount,
+        storedTemporary: category.transcriptRetain,
+        openerDelivered,
+        channelDelivered,
+        openerFailed,
+        channelFailed
+      }
     }
   });
 
-  if (actorId) {
-    await audit(ticket.id, guildId, actorId, 'ticket.transcript.generate', { messageCount: messages.length });
-  }
-
-  return { ok: true, messageCount: messages.length };
+  return {
+    ok: true,
+    skipped: false,
+    messageCount: build.messageCount,
+    openerDelivered,
+    channelDelivered
+  };
 }
 
 export async function closeTicket(
@@ -461,7 +581,19 @@ export async function closeTicket(
     }
   }
 
-  await generateTranscript(client, guildId, ticket.id).catch(() => null);
+  if (ticket.category.transcriptAutoGenerate) {
+    await generateAndDeliverAutomaticTranscript(client, guildId, ticket.id).catch(async () => {
+      await prisma.ticketAudit.create({
+        data: {
+          ticketId: ticket.id,
+          guildId,
+          actorId: null,
+          action: 'ticket.transcript.auto.failed',
+          details: {}
+        }
+      }).catch(() => null);
+    });
+  }
 
   return { ok: true, status: 'CLOSED' };
 }
@@ -516,6 +648,7 @@ export async function reopenTicket(
     } });
     if (changed.count !== 1) throw new Error('REOPEN_STATE_CONFLICT');
     await tx.ticketFeedback.deleteMany({ where: { ticketId: ticket.id } });
+    await tx.transcript.deleteMany({ where: { ticketId: ticket.id } });
     await tx.ticketAudit.create({ data: {
       ticketId: ticket.id, guildId, actorId, action: 'ticket.reopen',
       details: { userWindowEnforced: enforceUserWindow }

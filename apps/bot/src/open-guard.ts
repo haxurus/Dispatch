@@ -19,7 +19,8 @@ const deny = (code: string, seconds = 1): TicketOpenReservationResult => ({
 
 const cleared = {
   reservationToken: null, reservationCategoryId: null, reservationSourceKey: null,
-  reservationFormVersion: null, reservationPhase: null, pendingUntil: null
+  reservationFormVersion: null, reservationPhase: null, reservationAnswersEncrypted: null,
+  reservationQuestionIndex: null, pendingUntil: null
 };
 
 // An actual UPDATE obtains a PostgreSQL row lock until the transaction commits.
@@ -55,7 +56,7 @@ export async function reserveTicketOpen(
   version: string
 ): Promise<TicketOpenReservationResult> {
   if (!/^\d{17,20}$/.test(guildId) || !/^\d{17,20}$/.test(userId) ||
-      !/^[a-z0-9]{20,32}$/i.test(categoryId) || !/^(p_|m_|r_)[a-z0-9]{17,32}$/i.test(sourceKey)) {
+      !/^[a-z0-9]{20,32}$/i.test(categoryId) || !/^(p_|m_|r_|f_)[a-z0-9]{17,32}$/i.test(sourceKey)) {
     return deny('INVALID_OPEN_REQUEST');
   }
   return transaction(async (tx) => {
@@ -115,7 +116,8 @@ export async function reserveTicketOpen(
     await tx.ticketUserGuard.update({ where: { id: guard.id }, data: {
       reservationToken: token, reservationCategoryId: categoryId,
       reservationSourceKey: sourceKey, reservationFormVersion: version,
-      reservationPhase: 'FORM', pendingUntil: new Date(now.getTime() + FORM_TTL_MS)
+      reservationPhase: 'FORM', reservationAnswersEncrypted: null, reservationQuestionIndex: 0,
+      pendingUntil: new Date(now.getTime() + FORM_TTL_MS)
     } });
     return { ok: true, token };
   });
