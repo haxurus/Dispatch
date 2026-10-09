@@ -222,23 +222,28 @@ services:
     cpus: 0.25
 
 networks:
-  frontend: { internal: true }
-  backend: { internal: true }
-  api_db: { internal: true }
-  bot_db: { internal: true }
-  migrate_db: { internal: true }
-  bot_queue: { internal: true }
-  bot_rpc: { internal: true }
+  # Fixed /28 subnets in 10.251.0.0/24, outside Docker's default address pools:
+  # on VPS01 the default pools are exhausted by the other stacks, and network
+  # creation fails with "all predefined address pools have been fully subnetted".
+  frontend: { internal: true, ipam: { config: [{ subnet: 10.251.0.0/28 }] } }
+  backend: { internal: true, ipam: { config: [{ subnet: 10.251.0.16/28 }] } }
+  api_db: { internal: true, ipam: { config: [{ subnet: 10.251.0.32/28 }] } }
+  bot_db: { internal: true, ipam: { config: [{ subnet: 10.251.0.48/28 }] } }
+  migrate_db: { internal: true, ipam: { config: [{ subnet: 10.251.0.64/28 }] } }
+  bot_queue: { internal: true, ipam: { config: [{ subnet: 10.251.0.80/28 }] } }
+  bot_rpc: { internal: true, ipam: { config: [{ subnet: 10.251.0.96/28 }] } }
   api_egress:
     driver: bridge
     driver_opts:
       com.docker.network.bridge.name: dispatch-api-eg
       com.docker.network.bridge.enable_icc: "false"
+    ipam: { config: [{ subnet: 10.251.0.112/28 }] }
   bot_egress:
     driver: bridge
     driver_opts:
       com.docker.network.bridge.name: dispatch-bot-eg
       com.docker.network.bridge.enable_icc: "false"
+    ipam: { config: [{ subnet: 10.251.0.128/28 }] }
   proxy_net: { external: true }
 
 volumes:
