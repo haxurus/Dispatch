@@ -275,6 +275,7 @@ I backup restano sulla stessa VPS. Copiarli periodicamente fuori dall'host, cifr
 | edge (nginx, uid 101) | frontend, proxy_net | nessuno |
 
 - Tutte le reti tranne `api_egress`, `bot_egress` e `proxy_net` sono `internal`. Nessuna porta è pubblicata sull'host.
+- Le reti Dispatch usano sottoreti fisse `/28` in `10.251.0.0/24`, fuori dai pool predefiniti di Docker (su VPS01 esauriti dagli altri stack). Se quell'intervallo entrasse in conflitto con un'altra rete dell'host, cambiarlo in `deploy/docker-compose.prod.yml`, rieseguire l'installer e rimuovere le reti `dispatch_*` vuote prima del deploy.
 - Il token Discord è presente solo nel bot. L'API parla col bot tramite RPC autenticata su `bot_rpc`.
 - I container applicativi sono read-only, non-root, con `cap_drop: ALL`, `no-new-privileges` e limiti di pid e memoria. Nessun container monta `docker.sock`.
 - `dispatch_bot` non può leggere `PanelSession`, `TicketNote` e `_prisma_migrations`.
