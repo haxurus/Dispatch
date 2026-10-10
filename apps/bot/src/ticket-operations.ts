@@ -388,6 +388,19 @@ export async function transferTicketCategory(client: Client, guildId: string, ti
     content: `Ticket trasferito alla categoria **${category.name}** da <@${actorId}>.`,
     allowedMentions: { users: [actorId] }
   }).catch(() => null);
+  if (ticket.staffThreadId) {
+    // The new category's moderators join the staff thread automatically.
+    const thread = await fetchStaffThread(guild, channel, ticket.staffThreadId).catch(() => null);
+    if (thread) {
+      const added = await addStaffRoleMembers(guild, thread, category.staffRoleIds, ticket.openerId).catch(() => []);
+      if (added.length) {
+        await thread.send({
+          content: `Ticket trasferito a **${category.name}**: ` + added.map((id) => `<@${id}>`).join(' '),
+          allowedMentions: { parse: [], users: added }
+        }).catch(() => null);
+      }
+    }
+  }
   await logTicketEvent(client, guildId, 'TICKET_UPDATE', {
     title: 'Categoria trasferita',
     ticket,
@@ -1275,7 +1288,8 @@ export async function recordTicketMessage(message: Message) {
 // Private staff threads
 //
 // One private, non-invitable thread per ticket channel (Ticket.staffThreadId),
-// created and joined through the staff-only "Thread staff" button. The opener
+// created through the staff-only "Thread staff" button, which also adds every
+// member of the category staff roles (and, on transfer, the new category's). The opener
 // and the participants are never added and keep the thread denies; the thread
 // is neither ticket activity nor part of the user transcript. On close (and
 // before a staff channel deletion) an HTML copy goes only to a server channel:
@@ -1325,6 +1339,46 @@ async function ensureStaffThreadOverwrites(channel: TextChannel, botId: string, 
   }
 }
 
+const STAFF_THREAD_MAX_MEMBERS = 200;
+
+/**
+ * Adds every current member of the staff roles to the private thread, so no
+ * moderator has to remember to join. The opener and bots are never added, even
+ * when they hold a staff role. Returns the ids actually added.
+ */
+async function addStaffRoleMembers(
+  guild: Guild,
+  thread: ThreadChannel,
+  staffRoleIds: string[],
+  openerId: string
+): Promise<string[]> {
+  if (!staffRoleIds.length) return [];
+  // Requires the Server Members intent (already used for staff checks).
+  await guild.members.fetch().catch(() => null);
+  const ids = new Set<string>();
+  for (const roleId of staffRoleIds) {
+    const role = guild.roles.cache.get(roleId);
+    if (!role) continue;
+    for (const member of role.members.values()) {
+      if (member.user.bot || member.id === openerId) continue;
+      ids.add(member.id);
+      if (ids.size >= STAFF_THREAD_MAX_MEMBERS) break;
+    }
+  }
+  const already = await thread.members.fetch().catch(() => null);
+  const added: string[] = [];
+  for (const id of ids) {
+    if (already?.has(id)) continue;
+    try {
+      await thread.members.add(id);
+      added.push(id);
+    } catch {
+      // A single member (left the server, blocked) must not stop the others.
+    }
+  }
+  return added;
+}
+
 /**
  * "Thread staff" button. Staff of the ticket category only (never the opener)
  * and active tickets only. Adds the member to the live staff thread or
@@ -1352,6 +1406,8 @@ export async function openStaffThread(
       // Auto-archived after a week of silence, or left locked by a failed reopen.
       if (existing.archived || existing.locked) await existing.edit({ archived: false, locked: false });
       await existing.members.add(userId);
+      // Staff added to the roles after creation join here too.
+      await addStaffRoleMembers(guild, existing, ticket.category.staffRoleIds, ticket.openerId).catch(() => []);
       await audit(ticket.id, guildId, userId, 'ticket.staff_thread.join', { threadId: existing.id });
       return { ok: true, threadId: existing.id, created: false };
     }
@@ -1399,12 +1455,20 @@ export async function openStaffThread(
     }
 
     await thread.members.add(userId);
-    await thread.send({
-      content: `Thread privato dello staff per il ticket #${ticket.ticketNumber}. ` +
-        'Chi ha aperto il ticket non può vederlo; i messaggi non contano come risposta al ticket. ' +
-        'Gli altri membri dello staff possono unirsi con il pulsante “Thread staff”.',
-      allowedMentions: { parse: [] }
-    }).catch(() => null);
+    const added = await addStaffRoleMembers(guild, thread, ticket.category.staffRoleIds, ticket.openerId)
+      .catch(() => [] as string[]);
+    // Mention every added moderator (pings them) so nobody misses the thread.
+    const mentioned = [...new Set([userId, ...added])];
+    const intro = `Thread privato dello staff per il ticket #${ticket.ticketNumber}. ` +
+      'Chi ha aperto il ticket non può vederlo; i messaggi non contano come risposta al ticket.';
+    const mentions = mentioned.map((id) => `<@${id}>`);
+    // 80 mentions per message keeps each one well under Discord's 2000 chars.
+    for (let index = 0; index < mentions.length; index += 80) {
+      await thread.send({
+        content: (index === 0 ? intro + '\n' : '') + mentions.slice(index, index + 80).join(' '),
+        allowedMentions: { parse: [], users: mentioned.slice(index, index + 80) }
+      }).catch(() => null);
+    }
     await logTicketEvent(client, guildId, 'TICKET_STAFF_THREAD', {
       title: 'Thread staff creato',
       ticket,
