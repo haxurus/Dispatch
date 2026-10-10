@@ -334,7 +334,7 @@ export function rankLeaderboard(
   }
   for (const userId of activity.claims) if (valid(userId)) row(userId).claims += 1;
 
-  const entries = [...rows.values()].map((current) => {
+  const entries: LeaderboardEntry[] = [...rows.values()].map((current): LeaderboardEntry => {
     const count = current.ratings.length;
     const qualified = count > 0 && count >= minRatings;
     return {
@@ -346,7 +346,7 @@ export function rankLeaderboard(
       firstResponses: current.responses.length,
       medianFirstResponseMinutes: median(current.responses),
       claims: current.claims
-    } satisfies LeaderboardEntry;
+    };
   });
 
   const tied = (a: LeaderboardEntry, b: LeaderboardEntry) =>
