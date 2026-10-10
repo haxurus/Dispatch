@@ -10,6 +10,8 @@ import {
   PANEL_DEFAULT_FOOTER,
   PANEL_LIMITS,
   PANEL_STYLES,
+  TICKET_LOG_EVENTS,
+  TICKET_LOG_EVENT_INFO,
   isHttpsUrl,
   isValidPanelEmoji
 } from '@dispatch/shared';
@@ -27,14 +29,17 @@ import {
   addTicketMember,
   assignTicket,
   closeTicket,
+  deleteTicketChannel,
   generateTranscript,
   getGuildAccessSnapshot,
   getGuildResources,
+  logBlacklistEvent,
   publishFormPanel,
   publishMainMenu,
   publishPanel,
   removeTicketMember,
   reopenTicket,
+  sendTicketLogTest,
   sendTicketReply,
   setTicketPriority,
   setTicketStatus,
@@ -440,6 +445,8 @@ const categorySchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().trim().max(500).nullable().default(null),
   discordCategoryId: snowflake.nullable().default(null),
+  // Discord category (type 4) for closed tickets; null = they stay in place.
+  closedParentCategoryId: snowflake.nullable().default(null),
   staffRoleIds: z.array(snowflake).max(20).default([]).refine((items) => new Set(items).size === items.length),
   maxOpenPerUser: z.number().int().min(1).max(10).default(1),
   openCooldownSeconds: z.number().int().min(0).max(86400).default(60),
@@ -496,7 +503,10 @@ const categorySchema = z.object({
       path: ['transcriptAutoGenerate']
     });
   }
-});
+}).transform((value) => (
+  // Escalation off (no minutes): stale escalation roles are never stored.
+  value.escalationMinutes === null ? { ...value, escalationRoleIds: [] } : value
+));
 
 const ticketSystemSettingsSchema = z.object({
   antiSpamEnabled: z.boolean().default(true),
@@ -514,7 +524,11 @@ const ticketSystemSettingsSchema = z.object({
   mainMenuButtonLabel: z.string().trim().min(1).max(80).default('Apri un ticket'),
   mainMenuCategoryIds: z.array(internalId).max(25).default([]).refine(
     (items) => new Set(items).size === items.length
-  )
+  ),
+  // Optional: clients that do not send them leave the log settings unchanged.
+  ticketLogChannelId: snowflake.nullable().optional(),
+  ticketLogEvents: z.array(z.enum(TICKET_LOG_EVENTS)).max(TICKET_LOG_EVENTS.length * 2).optional()
+    .transform((items) => (items ? TICKET_LOG_EVENTS.filter((event) => items.includes(event)) : undefined))
 }).superRefine((value, ctx) => {
   if (value.mainMenuEnabled && !value.mainMenuChannelId) {
     ctx.addIssue({
@@ -715,6 +729,7 @@ const formDefinitionSchema = z.object({
   createTicketOnSubmit: z.boolean().default(false),
   ticketCategoryId: internalId.nullable().default(null),
   ticketParentCategoryId: snowflake.nullable().default(null),
+  ticketClosedParentCategoryId: snowflake.nullable().default(null),
   ticketStaffRoleIds: z.array(snowflake).max(20).default([]),
   ticketPrefix: z.string().trim().regex(/^[a-z0-9-]{1,24}$/i).default('form')
 }).superRefine((value, ctx) => {
@@ -836,6 +851,7 @@ function changesAdminOnlyFormFields(
     ticketCategoryId: string | null;
     ticketStaffRoleIds: string[];
     ticketParentCategoryId: string | null;
+    ticketClosedParentCategoryId: string | null;
   },
   next: z.infer<typeof formDefinitionSchema>
 ) {
@@ -844,7 +860,8 @@ function changesAdminOnlyFormFields(
     existing.createTicketOnSubmit !== next.createTicketOnSubmit ||
     existing.ticketCategoryId !== next.ticketCategoryId ||
     !sameSet(existing.ticketStaffRoleIds, next.ticketStaffRoleIds) ||
-    existing.ticketParentCategoryId !== next.ticketParentCategoryId;
+    existing.ticketParentCategoryId !== next.ticketParentCategoryId ||
+    existing.ticketClosedParentCategoryId !== next.ticketClosedParentCategoryId;
 }
 
 async function validateFormResources(guildId: string, data: z.infer<typeof formDefinitionSchema>) {
@@ -854,6 +871,9 @@ async function validateFormResources(guildId: string, data: z.infer<typeof formD
   const roleIds = new Set(resources.roles.map((role) => role.id));
   if (data.resultChannelId && !channelIds.has(data.resultChannelId)) return 'RESULT_CHANNEL_NOT_FOUND';
   if (data.ticketParentCategoryId && !categoryIds.has(data.ticketParentCategoryId)) return 'TICKET_PARENT_NOT_FOUND';
+  if (data.ticketClosedParentCategoryId && !categoryIds.has(data.ticketClosedParentCategoryId)) {
+    return 'TICKET_CLOSED_PARENT_NOT_FOUND';
+  }
   for (const roleId of [...data.resultRoleIds, ...data.allowedRoleIds, ...data.deniedRoleIds, ...data.ticketStaffRoleIds]) {
     if (roleId === guildId || !roleIds.has(roleId)) return 'FORM_ROLE_NOT_FOUND';
   }
@@ -875,6 +895,12 @@ async function validateCategoryResources(
     !resources.channels.some((channel) => channel.id === data.discordCategoryId && channel.type === 4)
   ) {
     return 'CATEGORY_CHANNEL_NOT_FOUND';
+  }
+  if (
+    data.closedParentCategoryId &&
+    !resources.channels.some((channel) => channel.id === data.closedParentCategoryId && channel.type === 4)
+  ) {
+    return 'CLOSED_CATEGORY_CHANNEL_NOT_FOUND';
   }
 
   const roleIds = new Set(resources.roles.map((role) => role.id));
@@ -898,13 +924,12 @@ async function validateTicketSystemResources(
   guildId: string,
   data: z.infer<typeof ticketSystemSettingsSchema>
 ) {
-  if (data.mainMenuChannelId) {
+  if (data.mainMenuChannelId || data.ticketLogChannelId) {
     const resources = await getGuildResources(guildId);
-    if (!resources.channels.some(
-      (channel) => channel.id === data.mainMenuChannelId && [0, 5].includes(channel.type)
-    )) {
-      return 'MAIN_MENU_CHANNEL_NOT_FOUND';
-    }
+    const textChannel = (id: string) =>
+      resources.channels.some((channel) => channel.id === id && [0, 5].includes(channel.type));
+    if (data.mainMenuChannelId && !textChannel(data.mainMenuChannelId)) return 'MAIN_MENU_CHANNEL_NOT_FOUND';
+    if (data.ticketLogChannelId && !textChannel(data.ticketLogChannelId)) return 'TICKET_LOG_CHANNEL_NOT_FOUND';
   }
 
   if (data.mainMenuCategoryIds.length) {
@@ -995,12 +1020,15 @@ app.get('/api/guilds/:guildId/ticket-system-settings', async (request, reply) =>
       mainMenuTitle: true,
       mainMenuDescription: true,
       mainMenuButtonLabel: true,
-      mainMenuCategoryIds: true
+      mainMenuCategoryIds: true,
+      ticketLogChannelId: true,
+      ticketLogEvents: true
     }
   });
   if (!settings) return reply.code(404).send({ error: 'GUILD_NOT_FOUND' });
 
-  return settings;
+  // Labels and descriptions come from @dispatch/shared (single definition).
+  return { ...settings, ticketLogEventCatalog: TICKET_LOG_EVENT_INFO };
 });
 
 app.put('/api/guilds/:guildId/ticket-system-settings', async (request, reply) => {
@@ -1038,10 +1066,29 @@ app.put('/api/guilds/:guildId/ticket-system-settings', async (request, reply) =>
     closedTicketRetentionDays: settings.closedTicketRetentionDays,
     mainMenuEnabled: settings.mainMenuEnabled,
     mainMenuChannelId: settings.mainMenuChannelId,
-    mainMenuCategoryCount: settings.mainMenuCategoryIds.length
+    mainMenuCategoryCount: settings.mainMenuCategoryIds.length,
+    ticketLogChannelId: settings.ticketLogChannelId,
+    ticketLogEvents: settings.ticketLogEvents
   });
 
-  return settings;
+  return { ...settings, ticketLogEventCatalog: TICKET_LOG_EVENT_INFO };
+});
+
+app.post('/api/guilds/:guildId/ticket-log/test', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  try {
+    const result = await sendTicketLogTest(guildId, session.userId);
+    await panelAudit(request, session, guildId, 'ticket_log.test', { channelId: result.channelId });
+    return result;
+  } catch (error) {
+    request.log.error({ err: error, guildId }, 'Ticket log test failed');
+    const typed = error as Error & { status?: number; code?: string };
+    const status = typed.status && typed.status >= 400 && typed.status < 500 ? 400 : 502;
+    return reply.code(status).send({ error: typed.code ?? 'TICKET_LOG_TEST_FAILED' });
+  }
 });
 
 app.post('/api/guilds/:guildId/main-menu/publish', async (request, reply) => {
@@ -1381,7 +1428,8 @@ app.put('/api/guilds/:guildId/forms/:formId', async (request, reply) => {
         createTicketOnSubmit: true,
         ticketCategoryId: true,
         ticketStaffRoleIds: true,
-        ticketParentCategoryId: true
+        ticketParentCategoryId: true,
+        ticketClosedParentCategoryId: true
       }
     });
     if (!existing) return reply.code(404).send({ error: 'FORM_NOT_FOUND' });
@@ -1712,6 +1760,13 @@ app.post('/api/guilds/:guildId/blacklist', async (request, reply) => {
     expiresAt: entry.expiresAt?.toISOString() ?? null,
     reasonProvided: Boolean(parsed.data.reason)
   });
+  // Best effort, never the reason: the bot accepts only this structured event.
+  void logBlacklistEvent(guildId, {
+    action: 'add',
+    targetUserId: parsed.data.userId,
+    actorId: session.userId,
+    expiresAt: entry.expiresAt?.toISOString() ?? null
+  }).catch((error) => request.log.warn({ err: error, guildId }, 'Blacklist log event failed'));
 
   return reply.code(201).send({
     id: entry.id,
@@ -1737,6 +1792,8 @@ app.delete('/api/guilds/:guildId/blacklist/:userId', async (request, reply) => {
   if (!deleted.count) return reply.code(404).send({ error: 'BLACKLIST_ENTRY_NOT_FOUND' });
 
   await panelAudit(request, session, guildId, 'blacklist.delete', { userId });
+  void logBlacklistEvent(guildId, { action: 'remove', targetUserId: userId, actorId: session.userId, expiresAt: null })
+    .catch((error) => request.log.warn({ err: error, guildId }, 'Blacklist log event failed'));
   return { ok: true };
 });
 
@@ -2126,7 +2183,8 @@ app.get('/api/guilds/:guildId/tickets', async (request, reply) => {
       transcript: ticket.transcript,
       createdAt: ticket.createdAt,
       updatedAt: ticket.updatedAt,
-      closedAt: ticket.closedAt
+      closedAt: ticket.closedAt,
+      channelDeletedAt: ticket.channelDeletedAt
     })),
     total,
     page,
@@ -2418,6 +2476,19 @@ app.post('/api/guilds/:guildId/tickets/:ticketId/reopen', async (request, reply)
 
   return runTicketBotAction(request, reply, () =>
     reopenTicket(guildId, ticketId, session.userId)
+  );
+});
+
+// Deletes the Discord channel of a CLOSED ticket; the ticket row stays until
+// retention. The bot secures the transcript first and re-checks the state.
+app.post('/api/guilds/:guildId/tickets/:ticketId/delete-channel', async (request, reply) => {
+  const { guildId, ticketId } = request.params as { guildId: string; ticketId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+  if (!internalId.safeParse(ticketId).success) return reply.code(400).send({ error: 'INVALID_TICKET_ID' });
+
+  return runTicketBotAction(request, reply, () =>
+    deleteTicketChannel(guildId, ticketId, session.userId)
   );
 });
 
