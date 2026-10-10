@@ -1,11 +1,12 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import ResourcePicker, { CHANNEL_TYPES } from '../../../_components/ResourcePicker';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
-type Channel = { id: string; name: string; type: number };
-type Role = { id: string; name: string; position: number };
+type Channel = { id: string; name: string; type: number; parentId: string | null; position: number };
+type Role = { id: string; name: string; position: number; color?: number; managed?: boolean };
 type QuestionType = 'SHORT_TEXT' | 'LONG_TEXT' | 'INTEGER' | 'NUMBER' | 'EMAIL' | 'URL' | 'DATE' | 'BOOLEAN' | 'SINGLE_SELECT' | 'MULTI_SELECT' | 'DISCORD_ID';
 type Option = { label: string; value: string; description: string | null };
 type Question = {
@@ -24,10 +25,6 @@ type FormDef = {
   maxSubmissionsPerUser: number; cooldownSeconds: number; submissionWindowMinutes: number; maxAttemptsPerWindow: number;
   createTicketOnSubmit: boolean; ticketCategoryId: string | null; ticketParentCategoryId: string | null;
   ticketStaffRoleIds: string[]; ticketPrefix: string;
-};
-type Panel = {
-  id: string; formId: string; channelId: string; messageId: string | null; title: string;
-  description: string | null; buttonLabel: string; enabled: boolean; form?: { name: string };
 };
 type Permission = {
   id: string; discordRoleId: string; canManage: boolean; canView: boolean; canReview: boolean; canSubmit: boolean;
@@ -122,8 +119,6 @@ const emptyForm = () => ({
   ticketStaffRoleIds: [] as string[], ticketPrefix: 'form'
 });
 
-const emptyPanel = { formId: '', channelId: '', title: 'Compila il form', description: '', buttonLabel: 'Compila', enabled: true };
-
 const nullableNumber = (value: string) => value === '' ? null : Number(value);
 
 const errorMessages: Record<string, string> = {
@@ -140,10 +135,8 @@ export default function FormsPage() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [forms, setForms] = useState<FormDef[]>([]);
   const [ticketCategories, setTicketCategories] = useState<Array<{ id: string; name: string }>>([]);
-  const [panels, setPanels] = useState<Panel[]>([]);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [panel, setPanel] = useState(emptyPanel);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [selectedPermissionForm, setSelectedPermissionForm] = useState('');
   const [busy, setBusy] = useState('');
@@ -151,23 +144,20 @@ export default function FormsPage() {
   const [notice, setNotice] = useState('');
 
   const isAdmin = access === 'ADMIN' || access === 'OWNER';
-  const textChannels = useMemo(() => channels.filter((channel) => channel.type === 0 || channel.type === 5), [channels]);
-  const categories = useMemo(() => channels.filter((channel) => channel.type === 4), [channels]);
 
   const load = async () => {
     setError('');
-    const [a, r, f, p, tc] = await Promise.all([
+    const [a, r, f, tc] = await Promise.all([
       fetch(`/backend/api/guilds/${guildId}/access`),
       fetch(`/backend/api/guilds/${guildId}/resources`),
       fetch(`/backend/api/guilds/${guildId}/forms`),
-      fetch(`/backend/api/guilds/${guildId}/form-panels`),
       fetch(`/backend/api/guilds/${guildId}/categories`)
     ]);
     if (a.status === 401) {
       window.location.href = '/backend/auth/discord';
       return;
     }
-    if (![a, r, f, p, tc].every((response) => response.ok)) {
+    if (![a, r, f, tc].every((response) => response.ok)) {
       setError('Impossibile caricare la configurazione dei form.');
       return;
     }
@@ -177,7 +167,6 @@ export default function FormsPage() {
     setChannels(resources.channels);
     setRoles(resources.roles);
     setForms(await f.json());
-    setPanels(await p.json());
     setTicketCategories(await tc.json());
   };
 
@@ -284,33 +273,6 @@ export default function FormsPage() {
     updateQuestion(index, { options, optionsText: formatOptions(options) });
   };
 
-  const createPanel = async (event: FormEvent) => {
-    event.preventDefault(); setBusy('panel'); setError(''); setNotice('');
-    const response = await fetch(`/backend/api/guilds/${guildId}/form-panels`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...panel, description: panel.description || null })
-    });
-    if (!response.ok) setError('Creazione pannello fallita.');
-    else { setPanel(emptyPanel); setNotice('Pannello creato.'); await load(); }
-    setBusy('');
-  };
-
-  const publishPanel = async (id: string) => {
-    setBusy(`publish:${id}`);
-    const response = await fetch(`/backend/api/guilds/${guildId}/form-panels/${id}/publish`, { method: 'POST' });
-    if (!response.ok) setError('Pubblicazione pannello fallita.');
-    else { setNotice('Pannello pubblicato o aggiornato.'); await load(); }
-    setBusy('');
-  };
-
-  const deletePanel = async (id: string) => {
-    setBusy(`panel:${id}`);
-    const response = await fetch(`/backend/api/guilds/${guildId}/form-panels/${id}`, { method: 'DELETE' });
-    if (!response.ok) setError('Eliminazione pannello fallita.');
-    else { setNotice('Pannello eliminato.'); await load(); }
-    setBusy('');
-  };
-
   const savePermission = async (roleId: string, patch: Partial<Permission>) => {
     if (!selectedPermissionForm) return;
     const current = permissions.find((item) => item.discordRoleId === roleId);
@@ -332,6 +294,7 @@ export default function FormsPage() {
       <div className="row">
         <div><p className="eyebrow">Dispatch</p><h1>Form</h1><p className="muted">Candidature, questionari e workflow con validazione e permessi granulari.</p></div>
         <div className="actions">
+          {isAdmin && <a className="button secondary" href={`/dashboard/${guildId}/panels`}>Pannelli</a>}
           <a className="button secondary" href={`/dashboard/${guildId}/tickets`}>Ticket</a>
           <a className="button secondary" href={`/dashboard/${guildId}`}>Permessi dashboard</a>
         </div>
@@ -350,11 +313,18 @@ export default function FormsPage() {
             <label>Chiusura (ora locale)<input type="datetime-local" value={form.closeAt} onChange={(e) => setForm({ ...form, closeAt: e.target.value })}/></label>
           </div>
           {!isAdmin && <p className="muted">Canale risultati, ruoli notificati e ticket automatico sono modificabili solo da Admin/Owner.</p>}
-          <label>Canale risultati<select disabled={!isAdmin} value={form.resultChannelId} onChange={(e) => setForm({ ...form, resultChannelId: e.target.value })}><option value="">Nessuno</option>{textChannels.map((c) => <option key={c.id} value={c.id}>#{c.name}</option>)}</select></label>
-          <label>Ruoli da notificare<select disabled={!isAdmin} multiple value={form.resultRoleIds} onChange={(e) => setForm({ ...form, resultRoleIds: [...e.target.selectedOptions].map((o) => o.value) })}>{roles.filter((r) => r.id !== guildId).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
+          <ResourcePicker label="Canale risultati" kind="channel" channels={channels}
+            channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]} placeholder="Nessuno" disabled={!isAdmin}
+            value={form.resultChannelId} onChange={(resultChannelId) => setForm({ ...form, resultChannelId })}/>
+          <ResourcePicker label="Ruoli da notificare" kind="role" roles={roles} guildId={guildId} multiple disabled={!isAdmin}
+            value={form.resultRoleIds} onChange={(resultRoleIds) => setForm({ ...form, resultRoleIds })}/>
           <fieldset><legend>Accesso e anti-spam</legend>
-            <label>Ruoli autorizzati<select multiple value={form.allowedRoleIds} onChange={(e) => setForm({ ...form, allowedRoleIds: [...e.target.selectedOptions].map((o) => o.value) })}>{roles.filter((r) => r.id !== guildId).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
-            <label>Ruoli esclusi<select multiple value={form.deniedRoleIds} onChange={(e) => setForm({ ...form, deniedRoleIds: [...e.target.selectedOptions].map((o) => o.value) })}>{roles.filter((r) => r.id !== guildId).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
+            <div className="form">
+              <ResourcePicker label="Ruoli autorizzati" kind="role" roles={roles} guildId={guildId} multiple max={20}
+                value={form.allowedRoleIds} onChange={(allowedRoleIds) => setForm({ ...form, allowedRoleIds })}/>
+              <ResourcePicker label="Ruoli esclusi" kind="role" roles={roles} guildId={guildId} multiple max={20}
+                value={form.deniedRoleIds} onChange={(deniedRoleIds) => setForm({ ...form, deniedRoleIds })}/>
+            </div>
             <div className="grid compact-grid">
               <label>Invii massimi per utente<input type="number" min={0} max={1000} value={form.maxSubmissionsPerUser} onChange={(e) => setForm({ ...form, maxSubmissionsPerUser: Number(e.target.value) })}/></label>
               <label>Cooldown secondi<input type="number" min={0} max={2592000} value={form.cooldownSeconds} onChange={(e) => setForm({ ...form, cooldownSeconds: Number(e.target.value) })}/></label>
@@ -396,9 +366,16 @@ export default function FormsPage() {
           <fieldset disabled={!isAdmin}><legend>Ticket automatico dopo invio</legend>
             <label className="checkbox-row"><input type="checkbox" checked={form.createTicketOnSubmit} onChange={(e) => setForm({ ...form, createTicketOnSubmit: e.target.checked })}/>Crea canale privato con report, compilatore e staff</label>
             {form.createTicketOnSubmit && <>
-              <label>Categoria ticket Dispatch<select required value={form.ticketCategoryId} onChange={(e) => setForm({ ...form, ticketCategoryId: e.target.value })}><option value="">Seleziona...</option>{ticketCategories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-              <label>Categoria Discord override<select value={form.ticketParentCategoryId} onChange={(e) => setForm({ ...form, ticketParentCategoryId: e.target.value })}><option value="">Usa quella della categoria ticket</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-              <label>Ruoli staff<select multiple value={form.ticketStaffRoleIds} onChange={(e) => setForm({ ...form, ticketStaffRoleIds: [...e.target.selectedOptions].map((o) => o.value) })}>{roles.filter((r) => r.id !== guildId).map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
+              <div className="form">
+                <ResourcePicker label="Categoria ticket Dispatch" kind="item" items={ticketCategories} required
+                  placeholder="Seleziona..." disabled={!isAdmin}
+                  value={form.ticketCategoryId} onChange={(ticketCategoryId) => setForm({ ...form, ticketCategoryId })}/>
+                <ResourcePicker label="Categoria Discord override" kind="channel" channels={channels}
+                  channelTypes={[CHANNEL_TYPES.category]} placeholder="Usa quella della categoria ticket" disabled={!isAdmin}
+                  value={form.ticketParentCategoryId} onChange={(ticketParentCategoryId) => setForm({ ...form, ticketParentCategoryId })}/>
+                <ResourcePicker label="Ruoli staff" kind="role" roles={roles} guildId={guildId} multiple max={20} disabled={!isAdmin}
+                  value={form.ticketStaffRoleIds} onChange={(ticketStaffRoleIds) => setForm({ ...form, ticketStaffRoleIds })}/>
+              </div>
               <label>Prefisso canale<input value={form.ticketPrefix} onChange={(e) => setForm({ ...form, ticketPrefix: e.target.value })}/></label>
             </>}
           </fieldset>
@@ -408,15 +385,14 @@ export default function FormsPage() {
           </button>
         </form>
 
-        {isAdmin && <form className="card form" onSubmit={createPanel}>
-          <h2>Nuovo pannello form</h2>
-          <label>Form<select required value={panel.formId} onChange={(e) => setPanel({ ...panel, formId: e.target.value })}><option value="">Seleziona...</option>{forms.filter((f) => f.enabled).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>
-          <label>Canale<select required value={panel.channelId} onChange={(e) => setPanel({ ...panel, channelId: e.target.value })}><option value="">Seleziona...</option>{textChannels.map((c) => <option key={c.id} value={c.id}>#{c.name}</option>)}</select></label>
-          <label>Titolo<input required maxLength={256} value={panel.title} onChange={(e) => setPanel({ ...panel, title: e.target.value })}/></label>
-          <label>Descrizione<textarea maxLength={2000} value={panel.description} onChange={(e) => setPanel({ ...panel, description: e.target.value })}/></label>
-          <label>Testo pulsante<input required maxLength={80} value={panel.buttonLabel} onChange={(e) => setPanel({ ...panel, buttonLabel: e.target.value })}/></label>
-          <button disabled={busy === 'panel'} type="submit">Crea pannello</button>
-        </form>}
+        {isAdmin && <article className="card">
+          <h2>Pannelli form</h2>
+          <p className="muted">
+            I pannelli che pubblicano uno o più form su Discord (pulsanti o menu a tendina, embed ed emoji) si gestiscono
+            nella sezione Pannelli.
+          </p>
+          <div className="actions"><a className="button" href={`/dashboard/${guildId}/panels`}>Vai ai pannelli</a></div>
+        </article>}
       </section>
 
       <section><h2>Form configurati</h2><div className="grid">{forms.map((row) => <article className="card" key={row.id}>
@@ -428,12 +404,6 @@ export default function FormsPage() {
           {isAdmin && <button className="danger" disabled={busy === `form:${row.id}`} onClick={() => void removeForm(row.id)}>Elimina</button>}</div>
       </article>)}
       {!forms.length && <div className="card muted">Nessun form visibile.</div>}</div></section>
-
-      <section><h2>Pannelli</h2><div className="grid">{panels.map((row) => <article className="card" key={row.id}>
-        <h3>{row.form?.name ?? row.formId}</h3><p>{row.title}</p><p className="muted">{row.messageId ? 'Pubblicato' : 'Non pubblicato'}</p>
-        {isAdmin && <div className="actions"><button onClick={() => void publishPanel(row.id)} disabled={busy === `publish:${row.id}`}>{row.messageId ? 'Aggiorna su Discord' : 'Pubblica'}</button>
-          <button className="danger" onClick={() => void deletePanel(row.id)} disabled={busy === `panel:${row.id}`}>Elimina</button></div>}
-      </article>)}</div></section>
 
       {isAdmin && selectedPermissionForm && <section className="card">
         <div className="row"><h2>Permessi del form</h2><button className="secondary" onClick={() => { setSelectedPermissionForm(''); setPermissions([]); }}>Chiudi</button></div>

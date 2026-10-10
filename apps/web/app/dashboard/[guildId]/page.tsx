@@ -28,9 +28,10 @@ const accessText: Record<AccessLevel, string> = {
 
 const sections = (guildId: string): Array<{ href: string; icon: IconName; title: string; text: string }> => [
   { href: `/dashboard/${guildId}/tickets/manage`, icon: 'inbox', title: 'Ticket', text: 'Coda dei ticket, filtri per stato, dettaglio, note e azioni dello staff.' },
-  { href: `/dashboard/${guildId}/tickets`, icon: 'ticket', title: 'Configurazione ticket', text: 'Categorie, ruoli staff, questionari, SLA, automazioni, pannelli e risposte rapide.' },
+  { href: `/dashboard/${guildId}/tickets`, icon: 'ticket', title: 'Configurazione ticket', text: 'Categorie, ruoli staff, questionari, SLA, automazioni e risposte rapide.' },
   { href: `/dashboard/${guildId}/tickets/system`, icon: 'sliders', title: 'Sistema e menu', text: 'Anti-spam globale, retention di transcript e canali, menu principale.' },
-  { href: `/dashboard/${guildId}/forms`, icon: 'clipboard', title: 'Form', text: 'Candidature e questionari con domande validate, pannelli e permessi per ruolo.' },
+  { href: `/dashboard/${guildId}/panels`, icon: 'panel', title: 'Pannelli', text: 'Messaggi Discord per aprire ticket e form: menu o pulsanti, embed, emoji e anteprima.' },
+  { href: `/dashboard/${guildId}/forms`, icon: 'clipboard', title: 'Form', text: 'Candidature e questionari con domande validate e permessi per ruolo.' },
   { href: `/dashboard/${guildId}/tickets/analytics`, icon: 'chart', title: 'Analytics', text: 'Volumi, tempi medi, violazioni SLA, feedback e attività dello staff.' },
   { href: `/dashboard/${guildId}/tickets/security`, icon: 'ban', title: 'Blacklist', text: 'Utenti esclusi dall’apertura di nuovi ticket, con scadenza e motivo.' }
 ];

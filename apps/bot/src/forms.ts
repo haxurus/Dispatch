@@ -29,12 +29,19 @@ import {
 } from '@dispatch/shared';
 import { decryptText, encryptText } from './security.js';
 import { ticketControls } from './tickets.js';
+import { panelComponents, panelEmbed, panelStyle } from './panels.js';
 import {
   reserveTicketOpen, consumeTicketOpenReservation, commitTicketOpen,
   releaseTicketOpenReservation, ticketOpenReservationMessage, formVersion
 } from './open-guard.js';
 
+// dispatch:form:start:<panelId>:<formId> (button) and the legacy
+// dispatch:form:start:<panelId> of messages published before multi-form
+// panels (= the panel's first form).
 const START = 'dispatch:form:start:';
+// dispatch:form:pick:<panelId>, value = formId (SELECT style panels).
+const PICK = 'dispatch:form:pick:';
+const CUID = /^[a-z0-9]{20,32}$/i;
 const TEXT = 'dispatch:form:text:';
 const TEXT_MODAL = 'dispatch:form:text-modal:';
 const SELECT = 'dispatch:form:select:';
@@ -627,7 +634,7 @@ async function finalizeSubmission(interaction: FormInteraction, sessionToken: st
 }
 
 async function deliverQuestion(
-  interaction: ButtonInteraction,
+  interaction: ButtonInteraction | StringSelectMenuInteraction,
   deliveryMode: string,
   session: { id: string; token: string },
   questions: FormQuestion[],
@@ -656,10 +663,22 @@ async function deliverQuestion(
     : 'Ti ho inviato il form in privato.');
 }
 
-async function beginForm(interaction: ButtonInteraction) {
+// The forms a panel offers, in order. Rows written before multi-form panels
+// may only carry the primary formId.
+const panelFormIds = (panel: { formId: string; formIds: string[] }) =>
+  panel.formIds.length ? panel.formIds : [panel.formId];
+
+async function beginForm(
+  interaction: ButtonInteraction | StringSelectMenuInteraction,
+  panelId: string,
+  requestedFormId: string | null
+) {
   if (!interaction.guildId || !interaction.guild) return;
   await interaction.deferReply({ ephemeral: true });
-  const panelId = interaction.customId.slice(START.length);
+  if (!CUID.test(panelId) || (requestedFormId !== null && !CUID.test(requestedFormId))) {
+    await sendPrivate(interaction, 'Questo form non è disponibile.');
+    return;
+  }
   const panel = await prisma.formPanel.findFirst({
     where: {
       id: panelId,
@@ -667,14 +686,19 @@ async function beginForm(interaction: ButtonInteraction) {
       channelId: interaction.channelId,
       messageId: interaction.message.id,
       enabled: true
-    },
-    include: { form: true }
+    }
   });
-  if (!panel || !isOpen(panel.form)) {
+  const offered = panel ? panelFormIds(panel) : [];
+  const formId = requestedFormId ?? offered[0];
+  // The form must still be offered by this panel and belong to this guild.
+  const form = panel && formId && offered.includes(formId)
+    ? await prisma.formDefinition.findFirst({ where: { id: formId, guildId: interaction.guildId } })
+    : null;
+  if (!panel || !form || !isOpen(form)) {
     await sendPrivate(interaction, 'Questo form non è disponibile.');
     return;
   }
-  const questions = normalizeQuestions(panel.form.questions);
+  const questions = normalizeQuestions(form.questions);
   if (!questions.length) {
     await sendPrivate(interaction, 'Questo form non contiene domande valide.');
     return;
@@ -684,12 +708,12 @@ async function beginForm(interaction: ButtonInteraction) {
   // index on (formId, userId).
   const now = new Date();
   await prisma.formSession.updateMany({
-    where: { formId: panel.form.id, userId: interaction.user.id, state: 'ACTIVE', expiresAt: { lte: now } },
+    where: { formId: form.id, userId: interaction.user.id, state: 'ACTIVE', expiresAt: { lte: now } },
     data: { state: 'EXPIRED' }
   });
   const existing = await prisma.formSession.findFirst({
     where: {
-      guildId: interaction.guildId, formId: panel.form.id, userId: interaction.user.id,
+      guildId: interaction.guildId, formId: form.id, userId: interaction.user.id,
       state: 'ACTIVE', expiresAt: { gt: now }
     }
   });
@@ -698,11 +722,11 @@ async function beginForm(interaction: ButtonInteraction) {
       await finalizeSubmission(interaction, existing.token);
       return;
     }
-    await deliverQuestion(interaction, panel.form.deliveryMode, existing, questions, existing.currentQuestion, true);
+    await deliverQuestion(interaction, form.deliveryMode, existing, questions, existing.currentQuestion, true);
     return;
   }
 
-  const permission = await canSubmit(interaction.guildId, interaction.user.id, panel.form, interaction.client);
+  const permission = await canSubmit(interaction.guildId, interaction.user.id, form, interaction.client);
   if (!permission.ok) {
     await sendPrivate(interaction, permission.message);
     return;
@@ -712,7 +736,7 @@ async function beginForm(interaction: ButtonInteraction) {
   try {
     session = await prisma.formSession.create({ data: {
       guildId: interaction.guildId,
-      formId: panel.form.id,
+      formId: form.id,
       userId: interaction.user.id,
       token: token(),
       source: sourceKey(panel.id),
@@ -727,7 +751,7 @@ async function beginForm(interaction: ButtonInteraction) {
     throw error;
   }
 
-  await deliverQuestion(interaction, panel.form.deliveryMode, session, questions, 0, false);
+  await deliverQuestion(interaction, form.deliveryMode, session, questions, 0, false);
 }
 
 async function openTextModal(interaction: ButtonInteraction) {
@@ -805,24 +829,46 @@ async function cancel(interaction: ButtonInteraction) {
 
 export async function publishFormPanel(client: Client, guildId: string, panelId: string) {
   const panel = await prisma.formPanel.findFirst({
-    where: { id: panelId, guildId, enabled: true },
-    include: { form: true }
+    where: { id: panelId, guildId, enabled: true }
   });
   if (!panel) throw new Error('FORM_PANEL_NOT_FOUND');
+
+  const ids = panelFormIds(panel);
+  const rows = await prisma.formDefinition.findMany({ where: { guildId, id: { in: ids } } });
+  // Panel order; ids that are not forms of this guild are ignored.
+  const forms = ids
+    .map((id) => rows.find((form) => form.id === id))
+    .filter((form): form is (typeof rows)[number] => Boolean(form))
+    .slice(0, 25);
+  if (!forms.length) throw new Error('PANEL_HAS_NO_ITEMS');
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) throw new Error('GUILD_NOT_FOUND');
   const channel = await guild.channels.fetch(panel.channelId);
   if (!channel || !channel.isTextBased() || !('send' in channel)) throw new Error('FORM_PANEL_CHANNEL_INVALID');
 
+  const style = panelStyle(panel.style, 'BUTTONS');
+  const single = forms.length === 1 ? forms[0]! : null;
   const payload = {
-    embeds: [new EmbedBuilder()
-      .setTitle(panel.title)
-      .setDescription(panel.description || panel.form.description || 'Premi il pulsante per compilare il form.')
-      .setFooter({ text: 'Dispatch' })],
-    components: [new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId(START + panel.id).setLabel(panel.buttonLabel).setStyle(ButtonStyle.Primary)
-    )]
+    allowedMentions: NO_MENTIONS,
+    embeds: [panelEmbed(
+      { ...panel, description: panel.description || single?.description || null },
+      style === 'SELECT' ? 'Scegli il form da compilare.' : 'Premi il pulsante per compilare il form.'
+    )],
+    components: panelComponents({
+      style,
+      placeholder: panel.placeholder,
+      defaultPlaceholder: 'Scegli un form',
+      items: panel.items,
+      // A one-form button panel keeps its historical button label.
+      entries: forms.map((form) => ({
+        id: form.id,
+        label: style === 'BUTTONS' && single ? panel.buttonLabel : form.name,
+        description: form.description
+      })),
+      selectCustomId: PICK + panel.id,
+      buttonCustomId: (formId) => START + panel.id + ':' + formId
+    })
   };
 
   let messageId: string;
@@ -842,11 +888,18 @@ export async function publishFormPanel(client: Client, guildId: string, panelId:
 }
 
 export function isFormInteraction(customId: string) {
-  return [START, TEXT, TEXT_MODAL, SELECT, BOOL, SKIP, CANCEL].some((prefix) => customId.startsWith(prefix));
+  return [START, PICK, TEXT, TEXT_MODAL, SELECT, BOOL, SKIP, CANCEL].some((prefix) => customId.startsWith(prefix));
 }
 
 export async function handleFormInteraction(interaction: FormInteraction) {
-  if (interaction.isButton() && interaction.customId.startsWith(START)) return beginForm(interaction);
+  if (interaction.isButton() && interaction.customId.startsWith(START)) {
+    const [panelId = '', formId, extra] = interaction.customId.slice(START.length).split(':');
+    if (extra !== undefined) return;
+    return beginForm(interaction, panelId, formId ?? null);
+  }
+  if (interaction.isStringSelectMenu() && interaction.customId.startsWith(PICK)) {
+    return beginForm(interaction, interaction.customId.slice(PICK.length), interaction.values[0] ?? '');
+  }
   if (interaction.isButton() && interaction.customId.startsWith(TEXT)) return openTextModal(interaction);
   if (interaction.isModalSubmit() && interaction.customId.startsWith(TEXT_MODAL)) return submitText(interaction);
   if (interaction.isStringSelectMenu() && interaction.customId.startsWith(SELECT)) return selectAnswer(interaction);

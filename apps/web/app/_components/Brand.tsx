@@ -28,6 +28,7 @@ export function Brand({ href, label = 'Dispatch - Home', className = '' }: { hre
 
 const paths = {
   ticket: <><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6h13A1.5 1.5 0 0 1 20 7.5V10a2 2 0 0 0 0 4v2.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 16.5V14a2 2 0 0 0 0-4V7.5Z" /><path d="M14.5 6v2M14.5 11v2M14.5 16v2" /></>,
+  panel: <><rect x="4" y="4.5" width="16" height="15" rx="2" /><path d="M4 9h16M8 13h8M8 16.5h5" /></>,
   clipboard: <><rect x="5" y="4.5" width="14" height="16" rx="2" /><path d="M9 4.5V3.8c0-.4.3-.8.8-.8h4.4c.5 0 .8.4.8.8v.7M8.5 10h7M8.5 13.5h7M8.5 17h4" /></>,
   userCheck: <><circle cx="9.5" cy="8" r="3.2" /><path d="M3.5 19c.6-3.2 2.9-5 6-5 1.5 0 2.8.4 3.8 1.2" /><path d="m14.5 17.5 2 2 4-4.5" /></>,
   clock: <><circle cx="12" cy="12" r="8" /><path d="M12 8v4.5l3 1.8" /></>,

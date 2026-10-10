@@ -90,7 +90,7 @@ export async function leaveBotGuild(guildId: string) {
 export async function getGuildResources(guildId: string) {
   return api<{
     channels: Array<{ id: string; name: string; type: number; parentId: string | null; position: number }>;
-    roles: Array<{ id: string; name: string; color: number; position: number; permissions: string }>;
+    roles: Array<{ id: string; name: string; color: number; position: number; permissions: string; managed?: boolean }>;
   }>(`/guilds/${id(guildId)}/resources`);
 }
 

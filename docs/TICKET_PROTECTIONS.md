@@ -10,6 +10,10 @@ Aprire la dashboard del server, quindi **Configura ticket > Sistema ticket** (`/
 
 La pubblicazione aggiorna il messaggio esistente. Un nuovo messaggio viene creato soltanto quando non ne esiste uno oppure Discord restituisce esplicitamente Unknown Message: errori di permessi/rete non causano una pubblicazione duplicata. Se si cambia canale, il vecchio messaggio resta inattivo e puo essere rimosso manualmente.
 
+### Pannelli ticket
+
+I pannelli ticket si gestiscono nella sezione **Pannelli** ([PANELS.md](PANELS.md)), con menu a tendina o pulsanti. Entrambi seguono lo stesso percorso protetto descritto sotto: limitatore di ingresso, prenotazione con chiave `p_<panelId>`, controllo che il messaggio sia quello attuale del pannello e che la categoria sia ancora inclusa nel pannello e abilitata. Anche la pubblicazione dei pannelli usa la regola Unknown Message per evitare duplicati.
+
 ## Anti-spam e cooldown
 
 Sono configurabili cooldown globale, cooldown per categoria, numero di tentativi e durata della finestra temporale globale/per categoria, durata base del blocco temporaneo. Valori iniziali: 30 secondi globale, 60 secondi per categoria, 5 tentativi globali/10 minuti, 3 per categoria/10 minuti, blocco base 15 minuti.

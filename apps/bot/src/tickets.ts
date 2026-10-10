@@ -21,9 +21,13 @@ import { closeTicket, reopenTicket, setTicketStatus, unclaimTicket } from './tic
 import { reserveTicketOpen, getTicketOpenReservation, consumeTicketOpenReservation,
   commitTicketOpen, releaseTicketOpenReservation, ticketOpenReservationMessage,
   formVersion, allowOpeningInteraction } from './open-guard.js';
+import { panelComponents, panelEmbed, panelStyle } from './panels.js';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 const PANEL_SELECT_PREFIX = 'dispatch:open:';
+// dispatch:panel-btn:<panelId>:<categoryId> (BUTTONS style ticket panels).
+const PANEL_BUTTON_PREFIX = 'dispatch:panel-btn:';
+const CUID = /^[a-z0-9]{20,32}$/i;
 const MAIN_MENU_BUTTON_PREFIX = 'dispatch:main-menu:';
 const MAIN_MENU_SELECT_PREFIX = 'dispatch:main-menu-select:';
 const OPEN_MODAL_PREFIX = 'dispatch:open-modal:';
@@ -150,14 +154,17 @@ export async function publishTicketPanel(client: Client, guildId: string, panelI
   });
   if (!panel) throw new Error('PANEL_NOT_FOUND');
 
-  const categories = await prisma.ticketCategory.findMany({
+  const rows = await prisma.ticketCategory.findMany({
     where: {
       guildId,
       id: { in: panel.categoryIds },
       enabled: true
-    },
-    orderBy: { createdAt: 'asc' }
+    }
   });
+  // Panel order; disabled or deleted categories are skipped.
+  const categories = panel.categoryIds
+    .map((id) => rows.find((category) => category.id === id))
+    .filter((category): category is (typeof rows)[number] => Boolean(category));
   if (!categories.length) throw new Error('PANEL_HAS_NO_CATEGORIES');
   if (categories.length > 25) throw new Error('PANEL_TOO_MANY_CATEGORIES');
 
@@ -169,34 +176,37 @@ export async function publishTicketPanel(client: Client, guildId: string, panelI
     throw new Error('PANEL_CHANNEL_INVALID');
   }
 
-  const embed = new EmbedBuilder()
-    .setTitle(panel.title)
-    .setDescription(panel.description || 'Seleziona il tipo di ticket da aprire.')
-    .setFooter({ text: 'Dispatch' });
-
-  const select = new StringSelectMenuBuilder()
-    .setCustomId(`${PANEL_SELECT_PREFIX}${panel.id}`)
-    .setPlaceholder('Seleziona una categoria')
-    .setMinValues(1)
-    .setMaxValues(1)
-    .addOptions(categories.map((category) => ({
-      label: category.name.slice(0, 100),
-      value: category.id,
-      description: category.description?.slice(0, 100) || undefined
-    })));
-
+  const style = panelStyle(panel.style, 'SELECT');
   const payload = {
-    embeds: [embed],
-    components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)]
+    allowedMentions: { parse: [] as never[] },
+    embeds: [panelEmbed(panel, style === 'BUTTONS'
+      ? 'Premi il pulsante del tipo di ticket da aprire.'
+      : 'Seleziona il tipo di ticket da aprire.')],
+    components: panelComponents({
+      style,
+      placeholder: panel.placeholder,
+      defaultPlaceholder: 'Seleziona una categoria',
+      items: panel.items,
+      entries: categories.map((category) => ({
+        id: category.id,
+        label: category.name,
+        description: category.description
+      })),
+      selectCustomId: PANEL_SELECT_PREFIX + panel.id,
+      buttonCustomId: (categoryId) => PANEL_BUTTON_PREFIX + panel.id + ':' + categoryId
+    })
   };
 
+  // Only a message that no longer exists is replaced: permission or network
+  // errors must not publish a duplicate panel.
   let messageId: string;
   if (panel.messageId) {
     try {
       const existing = await channel.messages.fetch(panel.messageId);
       const edited = await existing.edit(payload);
       messageId = edited.id;
-    } catch {
+    } catch (error) {
+      if ((error as { code?: number }).code !== 10008) throw error;
       const sent = await channel.send(payload);
       messageId = sent.id;
     }
@@ -329,7 +339,7 @@ async function resolveOpenSource(
 }
 
 async function createTicket(
-  interaction: StringSelectMenuInteraction | ModalSubmitInteraction,
+  interaction: StringSelectMenuInteraction | ButtonInteraction | ModalSubmitInteraction,
   sourceKey: string, categoryId: string,
   formAnswers: Array<{ id: string; label: string; value: string }>, token: string
 ) {
@@ -466,7 +476,11 @@ function ticketTextModal(token: string, categoryName: string, fields: FormField[
   return modal;
 }
 
-async function beginTicketOpen(interaction: StringSelectMenuInteraction, sourceKey: string, categoryId: string) {
+async function beginTicketOpen(
+  interaction: StringSelectMenuInteraction | ButtonInteraction,
+  sourceKey: string,
+  categoryId: string
+) {
   if (!interaction.guildId) return;
   const source = await resolveOpenSource(interaction.guildId, sourceKey, categoryId);
   const category = await prisma.ticketCategory.findFirst({
@@ -602,6 +616,28 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
     await interaction.reply({ content: 'Pannello scaduto o non valido.', ephemeral: true });
     return;
   }
+  await beginTicketOpen(interaction, 'p_' + panelId, categoryId);
+}
+
+// BUTTONS panels: same open flow, source key and checks as the panel select.
+async function openTicketFromButton(interaction: ButtonInteraction) {
+  if (!interaction.guildId) return;
+
+  const [panelId, categoryId, extra] = interaction.customId.slice(PANEL_BUTTON_PREFIX.length).split(':');
+  if (!panelId || !categoryId || extra !== undefined || !CUID.test(panelId) || !CUID.test(categoryId)) {
+    await interaction.reply({ content: 'Pannello non valido.', ephemeral: true });
+    return;
+  }
+
+  const panel = await prisma.ticketPanel.findFirst({ where: {
+    id: panelId, guildId: interaction.guildId, channelId: interaction.channelId,
+    messageId: interaction.message.id, enabled: true
+  } });
+  if (!panel) {
+    await interaction.reply({ content: 'Pannello scaduto o non valido.', ephemeral: true });
+    return;
+  }
+  // resolveOpenSource re-checks that the category is still in this panel.
   await beginTicketOpen(interaction, 'p_' + panelId, categoryId);
 }
 
@@ -1076,7 +1112,7 @@ async function submitCloseTicket(interaction: ModalSubmitInteraction) {
 export async function handleTicketInteraction(
   interaction: StringSelectMenuInteraction | ButtonInteraction | ModalSubmitInteraction
 ) {
-  const opening = [PANEL_SELECT_PREFIX, MAIN_MENU_BUTTON_PREFIX, MAIN_MENU_SELECT_PREFIX, OPEN_MODAL_PREFIX, OPEN_SELECT_PREFIX]
+  const opening = [PANEL_SELECT_PREFIX, PANEL_BUTTON_PREFIX, MAIN_MENU_BUTTON_PREFIX, MAIN_MENU_SELECT_PREFIX, OPEN_MODAL_PREFIX, OPEN_SELECT_PREFIX]
     .some((prefix) => interaction.customId.startsWith(prefix));
   if (opening && interaction.guildId && !allowOpeningInteraction(interaction.guildId, interaction.user.id)) {
     await interaction.reply({ content: 'Stai usando il menu troppo rapidamente. Riprova tra pochi secondi.', ephemeral: true });
@@ -1088,6 +1124,14 @@ export async function handleTicketInteraction(
     interaction.customId.startsWith(PANEL_SELECT_PREFIX)
   ) {
     await openTicket(interaction);
+    return true;
+  }
+
+  if (
+    interaction.isButton() &&
+    interaction.customId.startsWith(PANEL_BUTTON_PREFIX)
+  ) {
+    await openTicketFromButton(interaction);
     return true;
   }
 
