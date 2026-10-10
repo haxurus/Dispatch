@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
+import ModeratorLeaderboard from '../../../../_components/ModeratorLeaderboard';
 
 type Analytics = {
   period: { days: number; since: string };
@@ -31,6 +32,7 @@ type Analytics = {
     replies: number;
     currentlyAssigned: number;
     averageRating: number | null;
+    feedbackCount?: number;
   }>;
   daily: Array<{ date: string; created: number; closed: number }>;
 };
@@ -171,11 +173,11 @@ export default function TicketAnalyticsPage() {
                     <tr>
                       <th>User ID</th>
                       <th>Claim</th>
-                      <th>Close</th>
+                      <th title="Ticket chiusi attribuiti a chi li aveva in carico, altrimenti a chi li ha chiusi">Gestiti</th>
                       <th>1ª risposta</th>
                       <th>Reply</th>
                       <th>Assegnati</th>
-                      <th>Rating</th>
+                      <th title="Valutazioni attribuite al moderatore che gestiva il ticket">Rating</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -187,7 +189,7 @@ export default function TicketAnalyticsPage() {
                         <td>{row.firstResponses}</td>
                         <td>{row.replies}</td>
                         <td>{row.currentlyAssigned}</td>
-                        <td>{rating(row.averageRating)}</td>
+                        <td>{rating(row.averageRating)}{row.feedbackCount ? ` (${row.feedbackCount})` : ''}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -197,6 +199,8 @@ export default function TicketAnalyticsPage() {
           </section>
         </>
       )}
+
+      <ModeratorLeaderboard guildId={guildId} />
     </main>
   );
 }

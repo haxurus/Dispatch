@@ -87,6 +87,9 @@ type TicketDetail = {
   createdAt: string;
   closedAt: string | null;
   channelDeletedAt: string | null;
+  // Moderator credited at close and private staff thread (link only, never its content).
+  handledById?: string | null;
+  staffThreadId?: string | null;
   category: Category;
   members: TicketMember[];
   notes: TicketNote[];
@@ -109,6 +112,7 @@ type ResponseTemplate = {
 type TicketFeedback = {
   id: string;
   rating: number;
+  staffUserId?: string | null;
   comment: string | null;
   createdAt: string;
   updatedAt: string;
@@ -408,6 +412,15 @@ export default function TicketDetailPage() {
         <article className="card">
           <h2>Assegnazione</h2>
           <p><strong>Assegnato:</strong> {ticket.claimedById ?? 'Nessuno'}</p>
+          {closed && <p><strong>Gestito da:</strong> {ticket.handledById ?? 'Non attribuito'}</p>}
+          <p>
+            <strong>Thread staff:</strong>{' '}
+            {ticket.staffThreadId && !channelDeleted ? (
+              <a href={`https://discord.com/channels/${guildId}/${ticket.staffThreadId}`} target="_blank" rel="noreferrer">
+                Apri il thread privato
+              </a>
+            ) : ticket.staffThreadId ? 'Eliminato con il canale' : 'Nessuno'}
+          </p>
           <div className="actions">
             {!closed && me && (
               <button
@@ -752,6 +765,7 @@ export default function TicketDetailPage() {
         {ticket.feedback ? (
           <>
             <p><strong>Valutazione:</strong> {'★'.repeat(ticket.feedback.rating)}{'☆'.repeat(5 - ticket.feedback.rating)} ({ticket.feedback.rating}/5)</p>
+            <p><strong>Moderatore valutato:</strong> {ticket.feedback.staffUserId ?? 'Non attribuito'}</p>
             <p className="muted">{new Date(ticket.feedback.updatedAt).toLocaleString()}</p>
             <p className="preserve">{ticket.feedback.comment || 'Nessun commento.'}</p>
           </>
