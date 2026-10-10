@@ -29,6 +29,7 @@ import {
 } from '@dispatch/shared';
 import { decryptText, encryptText } from './security.js';
 import { ticketControls } from './tickets.js';
+import { logTicketEvent, userMention } from './ticket-log.js';
 import { panelComponents, panelEmbed, panelStyle } from './panels.js';
 import {
   reserveTicketOpen, consumeTicketOpenReservation, commitTicketOpen,
@@ -433,6 +434,8 @@ async function createFormTicket(
         openerId: userId,
         channelId: createdChannel.id,
         status: 'OPEN',
+        // Closed-category override of the form (ticketClosedParentCategoryId).
+        sourceFormId: form.id,
         formDataEncrypted: formAnswers.length ? encryptText(JSON.stringify(formAnswers)) : null,
         lastActivityAt: new Date(),
         members: { create: { userId, access: 'OPENER' } },
@@ -463,6 +466,16 @@ async function createFormTicket(
         ticketId: ticket.id, guildId, actorId: null, action: 'ticket.introduction.failed', details: {}
       } }).catch(() => null);
     }
+    await logTicketEvent(interaction.client, guildId, 'TICKET_OPEN', {
+      title: 'Ticket aperto da un form',
+      ticket,
+      actorId: userId,
+      categoryName: category.name,
+      fields: [
+        { name: 'Form', value: form.name, inline: true },
+        { name: 'Invio', value: submissionId, inline: true }
+      ]
+    });
     return createdChannel.id;
   } catch (error) {
     if (!persisted) {
@@ -624,6 +637,19 @@ async function finalizeSubmission(interaction: FormInteraction, sessionToken: st
       'Form submission finalization failed');
     await prisma.formSession.updateMany({ where: { id: session.id }, data: { state: 'COMPLETED' } }).catch(() => null);
   }
+
+  // Never the answers: they are encrypted and stay in the submission.
+  await logTicketEvent(interaction.client, session.guildId, 'FORM_SUBMISSION', {
+    title: 'Form inviato',
+    actorId: session.userId,
+    fields: [
+      { name: 'Form', value: session.form.name, inline: true },
+      { name: 'Utente', value: userMention(session.userId), inline: true },
+      { name: 'Invio', value: submission.id, inline: true },
+      ...(ticketChannelId ? [{ name: 'Ticket', value: `<#${ticketChannelId}>`, inline: true }] : []),
+      ...(ticketFailed ? [{ name: 'Ticket', value: 'Creazione non riuscita', inline: true }] : [])
+    ]
+  });
 
   await sendPrivate(
     interaction,

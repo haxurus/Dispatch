@@ -17,7 +17,8 @@ import {
 } from 'discord.js';
 import { prisma } from '@dispatch/db';
 import { decryptText, encryptText } from './security.js';
-import { closeTicket, reopenTicket, setTicketStatus, unclaimTicket } from './ticket-operations.js';
+import { closeTicket, deleteTicketChannel, reopenTicket, setTicketStatus, unclaimTicket } from './ticket-operations.js';
+import { logTicketEvent } from './ticket-log.js';
 import { reserveTicketOpen, getTicketOpenReservation, consumeTicketOpenReservation,
   commitTicketOpen, releaseTicketOpenReservation, ticketOpenReservationMessage,
   formVersion, allowOpeningInteraction } from './open-guard.js';
@@ -41,6 +42,11 @@ const CLOSE_MODAL_PREFIX = 'dispatch:close-modal:';
 const FEEDBACK_PREFIX = 'dispatch:feedback:';
 const FEEDBACK_MODAL_PREFIX = 'dispatch:feedback-modal:';
 const REOPEN_PREFIX = 'dispatch:reopen:';
+// dispatch:delete-channel:<ticketId> (closure message, staff) asks for an
+// ephemeral confirmation: dispatch:delete-confirm:<ticketId>:<expiry base36>.
+const DELETE_CHANNEL_PREFIX = 'dispatch:delete-channel:';
+const DELETE_CONFIRM_PREFIX = 'dispatch:delete-confirm:';
+const DELETE_CONFIRM_TTL_MS = 2 * 60_000;
 
 type FormField = {
   id: string;
@@ -421,6 +427,13 @@ async function createTicket(
     }
     // An expired interaction response must never delete a successfully created ticket.
     await interaction.editReply('Ticket creato: <#' + createdChannel.id + '>').catch(() => null);
+    await logTicketEvent(interaction.client, guildId, 'TICKET_OPEN', {
+      title: 'Ticket aperto',
+      ticket,
+      actorId: userId,
+      categoryName: category.name,
+      fields: [{ name: 'Origine', value: source.kind === 'PANEL' ? 'Pannello' : 'Menu principale', inline: true }]
+    });
   } catch (error) {
     if (!persisted) {
       let safeToRelease = !discordRequestStarted;
@@ -820,7 +833,14 @@ async function claimTicket(interaction: ButtonInteraction) {
   }
 
   await interaction.reply({
-    content: `Ticket preso in carico da <@${interaction.user.id}>.`
+    content: `Ticket preso in carico da <@${interaction.user.id}>.`,
+    allowedMentions: { users: [interaction.user.id] }
+  });
+  await logTicketEvent(interaction.client, interaction.guildId, 'TICKET_CLAIM', {
+    title: 'Ticket preso in carico',
+    ticket,
+    actorId: interaction.user.id,
+    categoryName: ticket.category.name
   });
 }
 
@@ -990,38 +1010,131 @@ async function submitFeedback(interaction: ModalSubmitInteraction) {
     content: 'Grazie. Il tuo feedback è stato registrato.',
     ephemeral: true
   });
+  // Rating only: the comment is encrypted and never leaves the database.
+  await logTicketEvent(interaction.client, interaction.guildId, 'TICKET_FEEDBACK', {
+    title: 'Feedback ricevuto',
+    ticket,
+    actorId: interaction.user.id,
+    categoryName: ticket.category.name,
+    fields: [{ name: 'Valutazione', value: '★'.repeat(rating) + '☆'.repeat(5 - rating) + ' (' + rating + '/5)', inline: true }]
+  });
 }
 
+// Same reopen path for everyone: the staff (category staff roles or Manage
+// Server/Channels) can always reopen, the opener only within the window.
 async function reopenTicketInteraction(interaction: ButtonInteraction) {
-  if (!interaction.guildId) return;
+  if (!interaction.guild || !interaction.guildId) return;
 
   const ticketId = interaction.customId.slice(REOPEN_PREFIX.length);
   const ticket = await prisma.ticket.findFirst({
-    where: { id: ticketId, guildId: interaction.guildId }
+    where: { id: ticketId, guildId: interaction.guildId },
+    include: { category: true }
   });
-
-  if (!ticket || ticket.openerId !== interaction.user.id) {
+  if (!ticket) {
     await interaction.reply({ content: 'Non puoi riaprire questo ticket.', ephemeral: true });
     return;
   }
 
+  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  const staff = Boolean(member && hasStaffAccess(member, ticket.category.staffRoleIds));
+  if (!staff && ticket.openerId !== interaction.user.id) {
+    await interaction.reply({ content: 'Non puoi riaprire questo ticket.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
   try {
     await reopenTicket(
       interaction.client,
       interaction.guildId,
       ticket.id,
       interaction.user.id,
-      true
+      !staff
     );
-    await interaction.reply({ content: 'Ticket riaperto.', ephemeral: true });
+    await interaction.editReply('Ticket riaperto.');
   } catch (error) {
     const code = error instanceof Error ? error.message : 'REOPEN_FAILED';
     const message = code === 'REOPEN_WINDOW_EXPIRED'
       ? 'La finestra di riapertura è scaduta.'
       : code === 'REOPEN_DISABLED'
         ? 'La riapertura utente non è abilitata per questa categoria.'
-        : 'Non è possibile riaprire questo ticket.';
-    await interaction.reply({ content: message, ephemeral: true }).catch(() => null);
+        : code === 'TICKET_CHANNEL_DELETED'
+          ? 'Il canale di questo ticket è stato eliminato: non può essere riaperto.'
+          : 'Non è possibile riaprire questo ticket.';
+    await interaction.editReply(message).catch(() => null);
+  }
+}
+
+async function closedTicketForStaff(interaction: ButtonInteraction, ticketId: string) {
+  if (!interaction.guild || !interaction.guildId) return null;
+  if (!CUID.test(ticketId)) {
+    await interaction.reply({ content: 'Ticket non valido.', ephemeral: true });
+    return null;
+  }
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId: interaction.guildId, channelId: interaction.channelId },
+    include: { category: true }
+  });
+  if (!ticket || ticket.status !== 'CLOSED' || ticket.retentionPendingAt || ticket.channelDeletedAt) {
+    await interaction.reply({ content: 'Il canale di questo ticket non può essere eliminato.', ephemeral: true });
+    return null;
+  }
+  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member || !hasStaffAccess(member, ticket.category.staffRoleIds)) {
+    await interaction.reply({ content: 'Non hai i permessi per eliminare questo canale.', ephemeral: true });
+    return null;
+  }
+  return ticket;
+}
+
+async function promptDeleteTicketChannel(interaction: ButtonInteraction) {
+  const ticketId = interaction.customId.slice(DELETE_CHANNEL_PREFIX.length);
+  const ticket = await closedTicketForStaff(interaction, ticketId);
+  if (!ticket) return;
+
+  const expiry = (Date.now() + DELETE_CONFIRM_TTL_MS).toString(36);
+  await interaction.reply({
+    content: `Eliminare definitivamente il canale del ticket #${ticket.ticketNumber}? ` +
+      'Il transcript viene prima generato o consegnato secondo le impostazioni della categoria. ' +
+      'Il ticket resta nello storico della dashboard ma non potrà più essere riaperto.',
+    components: [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(DELETE_CONFIRM_PREFIX + ticket.id + ':' + expiry)
+          .setLabel('Conferma eliminazione')
+          .setStyle(ButtonStyle.Danger)
+      )
+    ],
+    allowedMentions: { parse: [] },
+    ephemeral: true
+  });
+}
+
+async function confirmDeleteTicketChannel(interaction: ButtonInteraction) {
+  if (!interaction.guildId) return;
+  const [ticketId, expiry, extra] = interaction.customId.slice(DELETE_CONFIRM_PREFIX.length).split(':');
+  const expiresAt = expiry ? parseInt(expiry, 36) : NaN;
+  if (!ticketId || extra !== undefined || !Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+    await interaction.reply({ content: 'Conferma scaduta. Premi di nuovo “Elimina canale”.', ephemeral: true });
+    return;
+  }
+  // Staff and ticket state are checked again: the confirmation is only a click.
+  const ticket = await closedTicketForStaff(interaction, ticketId);
+  if (!ticket) return;
+
+  await interaction.update({ content: 'Eliminazione del canale in corso…', components: [] });
+  try {
+    await deleteTicketChannel(interaction.client, interaction.guildId, ticket.id, interaction.user.id);
+    // The ephemeral message lived in the deleted channel: a failed edit is fine.
+    await interaction.editReply({ content: 'Canale eliminato.', components: [] }).catch(() => null);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : 'DELETE_FAILED';
+    const message = code === 'TICKET_TRANSCRIPT_FAILED'
+      ? 'Impossibile generare o consegnare il transcript: il canale non è stato eliminato.'
+      : code === 'TICKET_CHANNEL_DELETE_FAILED'
+        ? 'Discord ha rifiutato l’eliminazione del canale. Controlla i permessi del bot.'
+        : 'Il canale di questo ticket non può essere eliminato.';
+    await interaction.editReply({ content: message, components: [] }).catch(() => null);
   }
 }
 
@@ -1203,6 +1316,16 @@ export async function handleTicketInteraction(
 
   if (interaction.isButton() && interaction.customId.startsWith(REOPEN_PREFIX)) {
     await reopenTicketInteraction(interaction);
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith(DELETE_CHANNEL_PREFIX)) {
+    await promptDeleteTicketChannel(interaction);
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith(DELETE_CONFIRM_PREFIX)) {
+    await confirmDeleteTicketChannel(interaction);
     return true;
   }
 

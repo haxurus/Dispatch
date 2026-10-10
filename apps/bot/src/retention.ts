@@ -1,5 +1,6 @@
 import { ChannelType, type Client } from 'discord.js';
 import { prisma, type Prisma } from '@dispatch/db';
+import { logTicketEvent } from './ticket-log.js';
 
 const DAY = 86_400_000;
 export function retentionDue(closedAt: Date | null, days: number | null, reopenHours: number | null, now = Date.now()) {
@@ -55,7 +56,8 @@ async function deleteExpiredTicket(client: Client, id: string) {
   const ticket = await claimDeletion(id);
   if (!ticket) return { deleted: 0, channels: 0, failed: 0 };
   let channels = 0;
-  if (ticket.retentionDeleteChannel) {
+  // A channel already deleted by the staff is treated as absent.
+  if (ticket.retentionDeleteChannel && !ticket.channelDeletedAt) {
     const guild = client.guilds.cache.get(ticket.guildId);
     if (!guild || !guild.available) return { deleted: 0, channels: 0, failed: 1 };
     try {
@@ -80,6 +82,13 @@ async function deleteExpiredTicket(client: Client, id: string) {
   const result = await prisma.ticket.deleteMany({ where: {
     id: ticket.id, status: 'CLOSED', retentionPendingAt: { not: null }
   } });
+  if (channels) {
+    await logTicketEvent(client, ticket.guildId, 'TICKET_DELETE', {
+      title: 'Canale eliminato dalla retention',
+      ticket: { id: ticket.id, ticketNumber: ticket.ticketNumber, channelId: ticket.channelId },
+      fields: [{ name: 'Canale', value: ticket.channelId, inline: true }]
+    });
+  }
   return { deleted: result.count, channels, failed: 0 };
 }
 
