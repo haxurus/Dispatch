@@ -5,10 +5,14 @@ import {
   ButtonStyle,
   ChannelType,
   PermissionFlagsBits,
+  ThreadAutoArchiveDuration,
   type Client,
+  type Guild,
   type GuildMember,
   type Message,
-  type TextChannel
+  type NewsChannel,
+  type TextChannel,
+  type ThreadChannel
 } from 'discord.js';
 import { prisma, type Prisma } from '@dispatch/db';
 import { encryptText } from './security.js';
@@ -46,6 +50,71 @@ const STAFF_PERMISSIONS = {
   ...PARTICIPANT_PERMISSIONS,
   ManageMessages: true
 } as const;
+
+// Staff threads: staff roles may write in the private staff thread (never
+// create threads themselves), the bot creates and manages it. The opener and
+// the participants keep THREAD_DENY.
+const STAFF_THREAD_PERMISSIONS = {
+  ...STAFF_PERMISSIONS,
+  SendMessagesInThreads: true
+} as const;
+
+const BOT_THREAD_PERMISSIONS = {
+  CreatePrivateThreads: true,
+  SendMessagesInThreads: true,
+  ManageThreads: true
+} as const;
+
+const SNOWFLAKE = /^\d{17,20}$/;
+const snowflakeOrNull = (value: string | null | undefined) => (value && SNOWFLAKE.test(value) ? value : null);
+
+/**
+ * Discord only lets the bot grant in an overwrite what it has itself: thread
+ * permissions are added to new ticket channels only when the bot role has
+ * Create Private Threads, Send Messages in Threads and Manage Threads.
+ */
+export function botCanManageThreads(guild: Guild) {
+  try {
+    return guild.members.me?.permissions.has([
+      PermissionFlagsBits.CreatePrivateThreads,
+      PermissionFlagsBits.SendMessagesInThreads,
+      PermissionFlagsBits.ManageThreads
+    ]) ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Overwrites of a new ticket channel (panel/menu tickets and form tickets):
+ * @everyone denied, opener as participant, staff roles with Manage Messages,
+ * threads denied to everyone but the staff (write only) and the bot.
+ */
+export function ticketChannelOverwrites(options: {
+  guildId: string;
+  botId: string;
+  openerId: string;
+  staffRoleIds: string[];
+  threadsAllowed: boolean;
+}) {
+  const participant = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks];
+  const threadCreation = [PermissionFlagsBits.CreatePublicThreads, PermissionFlagsBits.CreatePrivateThreads];
+  const botThreads = options.threadsAllowed
+    ? [PermissionFlagsBits.CreatePrivateThreads, PermissionFlagsBits.SendMessagesInThreads, PermissionFlagsBits.ManageThreads]
+    : [];
+  return [
+    { id: options.guildId, deny: [PermissionFlagsBits.ViewChannel, ...threadCreation, PermissionFlagsBits.SendMessagesInThreads] },
+    { id: options.botId, type: 1 as const, allow: [...participant, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages, ...botThreads] },
+    { id: options.openerId, type: 1 as const, allow: participant },
+    ...options.staffRoleIds.map((id) => ({
+      id,
+      type: 0 as const,
+      allow: [...participant, PermissionFlagsBits.ManageMessages, ...(options.threadsAllowed ? [PermissionFlagsBits.SendMessagesInThreads] : [])],
+      deny: threadCreation
+    }))
+  ];
+}
 
 function escapeHtml(value: string) {
   return value
@@ -186,7 +255,7 @@ async function restoreOpenCategory(ticket: TicketWithRelations, channel: TextCha
   }
 }
 
-async function audit(ticketId: string, guildId: string, actorId: string, action: string, details: Record<string, unknown> = {}) {
+async function audit(ticketId: string, guildId: string, actorId: string | null, action: string, details: Record<string, unknown> = {}) {
   await prisma.ticketAudit.create({
     data: { ticketId, guildId, actorId, action, details: JSON.parse(JSON.stringify(details)) }
   });
@@ -275,7 +344,7 @@ export async function transferTicketCategory(client: Client, guildId: string, ti
   });
   if (!category) throw new Error('CATEGORY_NOT_FOUND');
 
-  const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
 
   for (const roleId of ticket.category.staffRoleIds) {
     if (!category.staffRoleIds.includes(roleId)) {
@@ -283,8 +352,9 @@ export async function transferTicketCategory(client: Client, guildId: string, ti
     }
   }
 
+  const staffPermissions = botCanManageThreads(guild) ? STAFF_THREAD_PERMISSIONS : STAFF_PERMISSIONS;
   for (const roleId of category.staffRoleIds) {
-    await channel.permissionOverwrites.edit(roleId, STAFF_PERMISSIONS);
+    await channel.permissionOverwrites.edit(roleId, staffPermissions);
   }
 
   await channel.setParent(category.discordCategoryId, { lockPermissions: false });
@@ -422,13 +492,9 @@ type TranscriptBuild = {
   ticket: Awaited<ReturnType<typeof getTicket>>;
 };
 
-async function buildTranscript(client: Client, guildId: string, ticketId: string): Promise<TranscriptBuild> {
-  const ticket = await getTicket(guildId, ticketId);
-  if (ticket.channelDeletedAt) throw new Error('TICKET_CHANNEL_DELETED');
-  await assertTranscriptRetention(ticket);
-  const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
-
-  const messages = [];
+// Every message of a channel or thread, oldest first.
+async function fetchAllMessages(channel: TextChannel | ThreadChannel) {
+  const messages: Message[] = [];
   let before: string | undefined;
 
   for (;;) {
@@ -442,7 +508,12 @@ async function buildTranscript(client: Client, guildId: string, ticketId: string
   }
 
   messages.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+  return messages;
+}
 
+// Shared HTML renderer (user transcript and staff thread transcript): every
+// Discord-provided string is escaped.
+function renderTranscriptHtml(title: string, heading: string, subtitle: string, messages: Message[]) {
   const rows = messages.map((message) => {
     const content = message.content ? escapeHtml(message.content) : '<em>[nessun contenuto testuale]</em>';
     const attachments = [...message.attachments.values()].map((attachment) =>
@@ -459,12 +530,12 @@ async function buildTranscript(client: Client, guildId: string, ticketId: string
     </article>`;
   }).join('\n');
 
-  const html = `<!doctype html>
+  return `<!doctype html>
 <html lang="it">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Dispatch Ticket #${ticket.ticketNumber}</title>
+<title>${escapeHtml(title)}</title>
 <style>
 body{font-family:system-ui,sans-serif;background:#0f1115;color:#f5f7fa;max-width:960px;margin:0 auto;padding:32px}
 .message{border-bottom:1px solid #303744;padding:16px 0}
@@ -474,11 +545,28 @@ a{color:#8ab4ff}
 </style>
 </head>
 <body>
-<h1>Ticket #${ticket.ticketNumber}</h1>
-<p>Categoria: ${escapeHtml(ticket.category.name)} · Stato: ${escapeHtml(ticket.status)}</p>
+<h1>${escapeHtml(heading)}</h1>
+<p>${escapeHtml(subtitle)}</p>
 ${rows}
 </body>
 </html>`;
+}
+
+async function buildTranscript(client: Client, guildId: string, ticketId: string): Promise<TranscriptBuild> {
+  const ticket = await getTicket(guildId, ticketId);
+  if (ticket.channelDeletedAt) throw new Error('TICKET_CHANNEL_DELETED');
+  await assertTranscriptRetention(ticket);
+  const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
+
+  // Parent channel only: the private staff thread never enters the user transcript.
+  const messages = await fetchAllMessages(channel);
+
+  const html = renderTranscriptHtml(
+    `Dispatch Ticket #${ticket.ticketNumber}`,
+    `Ticket #${ticket.ticketNumber}`,
+    `Categoria: ${ticket.category.name} · Stato: ${ticket.status}`,
+    messages
+  );
 
   return {
     html,
@@ -643,12 +731,13 @@ export async function closeTicket(
   const ticket = await getTicket(guildId, ticketId);
   assertTicketActive(ticket.status);
 
-  const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const trimmedReason = reason?.trim().slice(0, 1000) || null;
+  const closedById = await staffCloserId(client, guild, ticket, actorId);
 
   // Conditional write: a concurrent close (opener, staff, auto-close) loses
   // instead of duplicating audit/messages and moving the retention clock.
-  await prisma.$transaction(async (tx) => {
+  const handledById = await prisma.$transaction(async (tx) => {
     const changed = await tx.ticket.updateMany({
       where: { id: ticket.id, status: { in: OPEN_STATUSES } },
       data: {
@@ -658,15 +747,21 @@ export async function closeTicket(
       }
     });
     if (changed.count !== 1) throw new Error('TICKET_CLOSED');
+    // The row is locked by the update above and claims require an active
+    // status: the claimer read here is the one at close time.
+    const current = await tx.ticket.findUniqueOrThrow({ where: { id: ticket.id }, select: { claimedById: true } });
+    const handler = snowflakeOrNull(current.claimedById) ?? closedById;
+    await tx.ticket.update({ where: { id: ticket.id }, data: { closedById, handledById: handler } });
     await tx.ticketAudit.create({
       data: {
         ticketId: ticket.id,
         guildId,
         actorId,
         action: 'ticket.close',
-        details: { reasonProvided: Boolean(trimmedReason) }
+        details: { reasonProvided: Boolean(trimmedReason), closedByStaff: Boolean(closedById), handledById: handler }
       }
     });
+    return handler;
   });
 
   for (const member of ticket.members) {
@@ -683,9 +778,12 @@ export async function closeTicket(
     allowedMentions: { users: [actorId] }
   }).catch(() => null);
 
+  // The moderator is named without pinging (allowedMentions parse []).
   await channel.send({
     content: [
-      ticket.category.feedbackEnabled ? 'Puoi valutare l’assistenza ricevuta.' : null,
+      ticket.category.feedbackEnabled
+        ? (handledById ? `Valuta l’assistenza ricevuta da <@${handledById}>.` : 'Puoi valutare l’assistenza ricevuta.')
+        : null,
       ticket.category.reopenWindowHours
         ? `Puoi riaprire il ticket entro ${ticket.category.reopenWindowHours} ore dalla chiusura.`
         : null,
@@ -728,7 +826,29 @@ export async function closeTicket(
     });
   }
 
+  // Server-side copy of the private staff thread, then lock + archive. Never
+  // blocks the close.
+  if (ticket.staffThreadId) {
+    await closeStaffThread(client, guild, ticket, channel, 'close').catch(() => null);
+  }
+
   return { ok: true, status: 'CLOSED' };
+}
+
+// Staff member who closed the ticket: never the opener, never the bot
+// (automatic close), only a member with staff access to the category.
+async function staffCloserId(client: Client, guild: Guild, ticket: TicketWithRelations, actorId: string) {
+  if (!SNOWFLAKE.test(actorId) || actorId === ticket.openerId || actorId === client.user?.id) return null;
+  const member = await fetchMember(guild, actorId);
+  return member && hasStaffAccess(member, ticket.category.staffRoleIds) ? actorId : null;
+}
+
+async function fetchMember(guild: Guild, userId: string) {
+  try {
+    return await guild.members.fetch(userId);
+  } catch {
+    return null;
+  }
 }
 
 export async function reopenTicket(
@@ -739,7 +859,7 @@ export async function reopenTicket(
   if (ticket.status !== 'CLOSED' && ticket.status !== 'REOPENING') throw new Error('TICKET_NOT_CLOSED');
   // The staff deleted the channel: there is nothing left to reopen.
   if (ticket.channelDeletedAt) throw new Error('TICKET_CHANNEL_DELETED');
-  const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
   if (ticket.status === 'CLOSED') {
     if (enforceUserWindow && (!ticket.category.reopenWindowHours || !ticket.closedAt)) throw new Error('REOPEN_DISABLED');
     if (enforceUserWindow && Date.now() >= ticket.closedAt!.getTime() + ticket.category.reopenWindowHours! * 3600000) {
@@ -781,6 +901,7 @@ export async function reopenTicket(
       id: ticket.id, status: 'REOPENING', retentionPendingAt: null, channelDeletedAt: null
     }, data: {
       status: 'OPEN', closeReason: null, closedAt: null, claimedById: null, openParentId: null,
+      closedById: null, handledById: null,
       lastActivityAt: new Date(), escalatedAt: null, feedbackRequestedAt: null, inactivityWarnedAt: null
     } });
     if (changed.count !== 1) throw new Error('REOPEN_STATE_CONFLICT');
@@ -793,6 +914,7 @@ export async function reopenTicket(
   });
   await channel.setName('ticket-' + String(ticket.ticketNumber).padStart(4, '0')).catch(() => null);
   await channel.send({ content: 'Ticket riaperto.', allowedMentions: { parse: [] } }).catch(() => null);
+  if (ticket.staffThreadId) await reopenStaffThread(guild, ticket, channel, actorId).catch(() => null);
   await logTicketEvent(client, guildId, 'TICKET_REOPEN', {
     title: 'Ticket riaperto',
     ticket,
@@ -877,6 +999,11 @@ export async function deleteTicketChannel(client: Client, guildId: string, ticke
   }
 
   if (channel) await secureTranscriptBeforeDeletion(client, guildId, ticket);
+  // Deleting the channel deletes its threads: the staff thread copy is sent
+  // first unless the close already did it. Best effort, never blocking.
+  if (channel && ticket.staffThreadId && !(await staffThreadTranscriptHandled(ticket))) {
+    await closeStaffThread(client, guild, ticket, channel, 'delete').catch(() => null);
+  }
 
   const deletedAt = new Date();
   await prisma.$transaction(async (tx) => {
@@ -1105,6 +1232,8 @@ export async function sendTicketReply(
 
 export async function recordTicketMessage(message: Message) {
   if (!message.guildId || message.author.bot) return;
+  // Ticket channel only: messages in the private staff thread (a thread, not
+  // a GuildText channel) are neither activity nor a first staff response.
   if (
     message.channel.type !== ChannelType.GuildText ||
     !message.channel.topic?.startsWith('Dispatch ticket #')
@@ -1139,6 +1268,287 @@ export async function recordTicketMessage(message: Message) {
     await audit(ticket.id, ticket.guildId, message.author.id, 'ticket.first_staff_response', {
       messageId: message.id
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Private staff threads
+//
+// One private, non-invitable thread per ticket channel (Ticket.staffThreadId),
+// created and joined through the staff-only "Thread staff" button. The opener
+// and the participants are never added and keep the thread denies; the thread
+// is neither ticket activity nor part of the user transcript. On close (and
+// before a staff channel deletion) an HTML copy goes only to a server channel:
+// the category transcript archive channel, otherwise the ticket log channel.
+
+const MISSING_PERMISSION_CODES = new Set([50001, 50013]);
+const missingPermissions = (error: unknown) =>
+  MISSING_PERMISSION_CODES.has(Number((error as { code?: unknown } | null)?.code));
+const staffThreadLocks = new Set<string>();
+
+export type StaffThreadResult = { ok: true; threadId: string; created: boolean };
+
+/** Destination of the staff thread transcript: never the opener, never a DM. */
+export function staffThreadTranscriptDestination(
+  archiveChannelId: string | null | undefined,
+  logChannelId: string | null | undefined
+): { channelId: string; source: 'archive' | 'log' } | null {
+  if (archiveChannelId && SNOWFLAKE.test(archiveChannelId)) return { channelId: archiveChannelId, source: 'archive' };
+  if (logChannelId && SNOWFLAKE.test(logChannelId)) return { channelId: logChannelId, source: 'log' };
+  return null;
+}
+
+// The stored thread, only if it is still a private thread of this channel.
+async function fetchStaffThread(guild: Guild, parent: TextChannel, threadId: string): Promise<ThreadChannel | null> {
+  try {
+    const fetched = await guild.channels.fetch(threadId);
+    if (!fetched || !fetched.isThread() || fetched.parentId !== parent.id || fetched.type !== ChannelType.PrivateThread) {
+      return null;
+    }
+    return fetched;
+  } catch (error) {
+    if (unknownChannel(error)) return null;
+    throw error;
+  }
+}
+
+// Existing tickets: staff roles may write in threads (never create them), the
+// bot may create and manage private threads. edit() merges with the overwrite.
+async function ensureStaffThreadOverwrites(channel: TextChannel, botId: string, staffRoleIds: string[]) {
+  await channel.permissionOverwrites.edit(botId, BOT_THREAD_PERMISSIONS);
+  for (const roleId of staffRoleIds) {
+    await channel.permissionOverwrites.edit(roleId, {
+      SendMessagesInThreads: true,
+      CreatePublicThreads: false,
+      CreatePrivateThreads: false
+    });
+  }
+}
+
+/**
+ * "Thread staff" button. Staff of the ticket category only (never the opener)
+ * and active tickets only. Adds the member to the live staff thread or
+ * creates it (conditional update: concurrent clicks keep a single thread).
+ */
+export async function openStaffThread(
+  client: Client,
+  guildId: string,
+  ticketId: string,
+  userId: string
+): Promise<StaffThreadResult> {
+  const ticket = await getTicket(guildId, ticketId);
+  if (ticket.channelDeletedAt) throw new Error('TICKET_CHANNEL_DELETED');
+  assertTicketActive(ticket.status);
+  if (!SNOWFLAKE.test(userId) || userId === ticket.openerId) throw new Error('STAFF_THREAD_FORBIDDEN');
+  const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const member = await fetchMember(guild, userId);
+  if (!member || !hasStaffAccess(member, ticket.category.staffRoleIds)) throw new Error('STAFF_THREAD_FORBIDDEN');
+
+  if (staffThreadLocks.has(ticket.id)) throw new Error('STAFF_THREAD_BUSY');
+  staffThreadLocks.add(ticket.id);
+  try {
+    const existing = ticket.staffThreadId ? await fetchStaffThread(guild, channel, ticket.staffThreadId) : null;
+    if (existing) {
+      // Auto-archived after a week of silence, or left locked by a failed reopen.
+      if (existing.archived || existing.locked) await existing.edit({ archived: false, locked: false });
+      await existing.members.add(userId);
+      await audit(ticket.id, guildId, userId, 'ticket.staff_thread.join', { threadId: existing.id });
+      return { ok: true, threadId: existing.id, created: false };
+    }
+
+    if (!botCanManageThreads(guild)) throw Object.assign(new Error('Missing Permissions'), { code: 50013 });
+    const botId = client.user?.id;
+    if (!botId) throw new Error('BOT_NOT_READY');
+    await ensureStaffThreadOverwrites(channel, botId, ticket.category.staffRoleIds);
+    const thread = await channel.threads.create({
+      name: 'staff-' + String(ticket.ticketNumber).padStart(4, '0'),
+      type: ChannelType.PrivateThread,
+      invitable: false,
+      autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+      reason: 'Dispatch: thread staff del ticket #' + ticket.ticketNumber
+    });
+
+    const saved = await prisma.$transaction(async (tx) => {
+      await lockTicket(tx, ticket.id);
+      const changed = await tx.ticket.updateMany({
+        where: {
+          id: ticket.id,
+          guildId,
+          staffThreadId: ticket.staffThreadId,
+          status: { in: OPEN_STATUSES },
+          retentionPendingAt: null,
+          channelDeletedAt: null
+        },
+        data: { staffThreadId: thread.id }
+      });
+      if (changed.count !== 1) return false;
+      await tx.ticketAudit.create({
+        data: {
+          ticketId: ticket.id,
+          guildId,
+          actorId: userId,
+          action: 'ticket.staff_thread.create',
+          details: { threadId: thread.id, replacedThreadId: ticket.staffThreadId }
+        }
+      });
+      return true;
+    });
+    if (!saved) {
+      await thread.delete('Dispatch: thread staff duplicato').catch(() => null);
+      throw new Error('TICKET_STATE_CONFLICT');
+    }
+
+    await thread.members.add(userId);
+    await thread.send({
+      content: `Thread privato dello staff per il ticket #${ticket.ticketNumber}. ` +
+        'Chi ha aperto il ticket non può vederlo; i messaggi non contano come risposta al ticket. ' +
+        'Gli altri membri dello staff possono unirsi con il pulsante “Thread staff”.',
+      allowedMentions: { parse: [] }
+    }).catch(() => null);
+    await logTicketEvent(client, guildId, 'TICKET_STAFF_THREAD', {
+      title: 'Thread staff creato',
+      ticket,
+      actorId: userId,
+      categoryName: ticket.category.name,
+      fields: [{ name: 'Thread', value: `<#${thread.id}>`, inline: true }]
+    });
+    return { ok: true, threadId: thread.id, created: true };
+  } catch (error) {
+    if (missingPermissions(error)) {
+      await audit(ticket.id, guildId, userId, 'ticket.staff_thread.missing_permissions', {
+        code: discordErrorCode(error)
+      }).catch(() => null);
+      throw new Error('STAFF_THREAD_MISSING_PERMISSIONS');
+    }
+    throw error;
+  } finally {
+    staffThreadLocks.delete(ticket.id);
+  }
+}
+
+// HTML copy of the staff thread for the server channel only. Returns true
+// when delivered; every outcome is audited.
+async function deliverStaffThreadTranscript(
+  client: Client,
+  guild: Guild,
+  ticket: TicketWithRelations,
+  thread: ThreadChannel,
+  trigger: 'close' | 'delete'
+) {
+  const settings = await prisma.guildSettings.findUnique({
+    where: { guildId: ticket.guildId },
+    select: { ticketLogChannelId: true }
+  });
+  const destination = staffThreadTranscriptDestination(ticket.category.transcriptChannelId, settings?.ticketLogChannelId);
+  if (!destination) {
+    await audit(ticket.id, ticket.guildId, null, 'ticket.staff_thread.transcript_skipped', { threadId: thread.id, trigger });
+    return false;
+  }
+
+  let delivered = false;
+  let messageCount = 0;
+  let code: string | number | null = null;
+  try {
+    const target = await guild.channels.fetch(destination.channelId);
+    if (
+      !target ||
+      target.id !== destination.channelId ||
+      target.guildId !== guild.id ||
+      (target.type !== ChannelType.GuildText && target.type !== ChannelType.GuildAnnouncement)
+    ) {
+      throw new Error('STAFF_THREAD_TRANSCRIPT_CHANNEL_INVALID');
+    }
+    const messages = await fetchAllMessages(thread);
+    messageCount = messages.length;
+    const html = renderTranscriptHtml(
+      `Dispatch Ticket #${ticket.ticketNumber} - thread staff`,
+      `Thread staff · Ticket #${ticket.ticketNumber}`,
+      `Categoria: ${ticket.category.name} · Thread privato dello staff, non visibile all’utente`,
+      messages
+    );
+    await (target as TextChannel | NewsChannel).send({
+      content: `Transcript del thread staff del ticket #${ticket.ticketNumber} (riservato allo staff).`,
+      files: [new AttachmentBuilder(Buffer.from(html, 'utf8'), { name: `dispatch-ticket-${ticket.ticketNumber}-staff.html` })],
+      allowedMentions: { parse: [] }
+    });
+    delivered = true;
+  } catch (error) {
+    code = error instanceof Error && /^[A-Z][A-Z0-9_]{1,63}$/.test(error.message) ? error.message : discordErrorCode(error);
+  }
+
+  await audit(ticket.id, ticket.guildId, null, 'ticket.staff_thread.transcript', {
+    threadId: thread.id,
+    trigger,
+    destination: destination.source,
+    channelId: destination.channelId,
+    delivered,
+    messageCount,
+    ...(code !== null ? { code } : {})
+  });
+  if (delivered) {
+    await logTicketEvent(client, ticket.guildId, 'TICKET_STAFF_THREAD', {
+      title: 'Transcript del thread staff inviato',
+      ticket,
+      categoryName: ticket.category.name,
+      fields: [
+        { name: 'Messaggi', value: String(messageCount), inline: true },
+        {
+          name: 'Destinazione',
+          value: destination.source === 'archive' ? 'Canale archivio transcript' : 'Canale log ticket',
+          inline: true
+        }
+      ]
+    });
+  }
+  return delivered;
+}
+
+// Close / staff channel deletion: transcript to the server channel, then the
+// thread is locked and archived (closed tickets only).
+async function closeStaffThread(
+  client: Client,
+  guild: Guild,
+  ticket: TicketWithRelations,
+  parent: TextChannel,
+  trigger: 'close' | 'delete'
+) {
+  if (!ticket.staffThreadId) return;
+  const thread = await fetchStaffThread(guild, parent, ticket.staffThreadId).catch(() => null);
+  if (!thread) return;
+  await deliverStaffThreadTranscript(client, guild, ticket, thread, trigger).catch(() => false);
+  if (trigger === 'close') {
+    // An auto-archived thread must be unarchived before it can be locked.
+    if (thread.archived) await thread.setArchived(false).catch(() => null);
+    await thread.edit({ locked: true, archived: true, reason: 'Dispatch: ticket chiuso' }).catch(() => null);
+  }
+}
+
+// Already delivered after the last close: the channel deletion does not resend.
+async function staffThreadTranscriptHandled(ticket: TicketWithRelations) {
+  const rows = await prisma.ticketAudit.findMany({
+    where: {
+      ticketId: ticket.id,
+      action: 'ticket.staff_thread.transcript',
+      ...(ticket.closedAt ? { createdAt: { gte: ticket.closedAt } } : {})
+    },
+    orderBy: { createdAt: 'desc' },
+    select: { details: true },
+    take: 20
+  });
+  return rows.some((row) => (row.details as { delivered?: unknown } | null)?.delivered === true);
+}
+
+// Reopen: the thread becomes writable again for the staff.
+async function reopenStaffThread(guild: Guild, ticket: TicketWithRelations, parent: TextChannel, actorId: string) {
+  if (!ticket.staffThreadId) return;
+  const thread = await fetchStaffThread(guild, parent, ticket.staffThreadId);
+  if (!thread) return;
+  try {
+    await thread.edit({ archived: false, locked: false, reason: 'Dispatch: ticket riaperto' });
+  } catch (error) {
+    await audit(ticket.id, ticket.guildId, actorId, 'ticket.staff_thread.reopen_failed', {
+      code: discordErrorCode(error)
+    }).catch(() => null);
   }
 }
 
