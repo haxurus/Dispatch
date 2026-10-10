@@ -5,6 +5,14 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import { prisma, type Prisma } from '@dispatch/db';
+import {
+  PANEL_BUTTON_STYLES,
+  PANEL_DEFAULT_FOOTER,
+  PANEL_LIMITS,
+  PANEL_STYLES,
+  isHttpsUrl,
+  isValidPanelEmoji
+} from '@dispatch/shared';
 import { config } from './config.js';
 import {
   createSession,
@@ -535,13 +543,80 @@ const ticketSystemSettingsSchema = z.object({
   }
 });
 
+// Optional dashboard text: '' and whitespace-only become null.
+const optionalText = (max: number) =>
+  z.string().trim().max(max).nullable().default(null).transform((value) => value || null);
+
+const optionalHttpsUrl = optionalText(PANEL_LIMITS.url).refine(
+  (value) => value === null || isHttpsUrl(value),
+  { message: 'Only https URLs are allowed' }
+);
+
+const panelItemSchema = z.object({
+  id: internalId,
+  label: optionalText(PANEL_LIMITS.selectLabel),
+  emoji: optionalText(64).refine(
+    (value) => value === null || isValidPanelEmoji(value),
+    { message: 'Emoji must be unicode or <:name:id> / <a:name:id>' }
+  ),
+  description: optionalText(PANEL_LIMITS.selectDescription),
+  buttonStyle: z.enum(PANEL_BUTTON_STYLES).nullable().default(null)
+});
+
+// Embed and component customization shared by ticket and form panels.
+const panelAppearance = {
+  title: z.string().trim().min(1).max(PANEL_LIMITS.title),
+  description: optionalText(PANEL_LIMITS.description),
+  placeholder: optionalText(PANEL_LIMITS.placeholder),
+  color: z.number().int().min(0).max(0xffffff).nullable().default(null),
+  imageUrl: optionalHttpsUrl,
+  thumbnailUrl: optionalHttpsUrl,
+  footerText: optionalText(PANEL_LIMITS.footer),
+  items: z.array(panelItemSchema).max(PANEL_LIMITS.items).default([]),
+  enabled: z.boolean().default(true)
+};
+
+type PanelAppearanceInput = {
+  title: string;
+  description: string | null;
+  footerText: string | null;
+  style: (typeof PANEL_STYLES)[number];
+  items: Array<{ id: string; label: string | null }>;
+};
+
+// Cross-field rules: unique ids, overrides only for included entries, button
+// label limit and the 6000-character budget of a Discord embed.
+function panelIssues(value: PanelAppearanceInput, ids: string[], idsPath: string) {
+  const issues: Array<{ path: Array<string | number>; message: string }> = [];
+  if (new Set(ids).size !== ids.length) issues.push({ path: [idsPath], message: 'Duplicate entries' });
+  const included = new Set(ids);
+  const seen = new Set<string>();
+  value.items.forEach((item, index) => {
+    if (!included.has(item.id)) issues.push({ path: ['items', index, 'id'], message: 'Override for an entry not in the panel' });
+    if (seen.has(item.id)) issues.push({ path: ['items', index, 'id'], message: 'Duplicate override' });
+    seen.add(item.id);
+    if (value.style === 'BUTTONS' && item.label && item.label.length > PANEL_LIMITS.buttonLabel) {
+      issues.push({ path: ['items', index, 'label'], message: 'Button labels are limited to 80 characters' });
+    }
+  });
+  const embedLength = value.title.length + (value.description?.length ?? 0) +
+    (value.footerText ?? PANEL_DEFAULT_FOOTER).length;
+  if (embedLength > PANEL_LIMITS.embedTotal) {
+    issues.push({ path: ['description'], message: 'Embed text exceeds 6000 characters' });
+  }
+  return issues;
+}
+
 const panelSchema = z.object({
   name: z.string().trim().min(1).max(80),
   channelId: snowflake,
-  title: z.string().trim().min(1).max(256),
-  description: z.string().trim().max(2000).nullable().default(null),
-  categoryIds: z.array(internalId).min(1).max(25).refine((items) => new Set(items).size === items.length),
-  enabled: z.boolean().default(true)
+  categoryIds: z.array(internalId).min(1).max(PANEL_LIMITS.items),
+  style: z.enum(PANEL_STYLES).default('SELECT'),
+  ...panelAppearance
+}).superRefine((value, ctx) => {
+  for (const issue of panelIssues(value, value.categoryIds, 'categoryIds')) {
+    ctx.addIssue({ code: 'custom', ...issue });
+  }
 });
 
 const formQuestionType = z.enum([
@@ -651,14 +726,28 @@ const formDefinitionSchema = z.object({
   }
 });
 
-const formPanelSchema = z.object({
-  formId: internalId,
-  channelId: snowflake,
-  title: z.string().trim().min(1).max(256),
-  description: z.string().trim().max(2000).nullable().default(null),
-  buttonLabel: z.string().trim().min(1).max(80).default('Compila'),
-  enabled: z.boolean().default(true)
-});
+const formPanelSchema = z.preprocess(
+  // Legacy clients send a single formId: treat it as a one-form panel.
+  (body) => {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+    const row = body as Record<string, unknown>;
+    return row.formIds === undefined && typeof row.formId === 'string'
+      ? { ...row, formIds: [row.formId] }
+      : row;
+  },
+  z.object({
+    name: optionalText(80),
+    formIds: z.array(internalId).min(1).max(PANEL_LIMITS.items),
+    channelId: snowflake,
+    buttonLabel: z.string().trim().min(1).max(PANEL_LIMITS.buttonLabel).default('Compila'),
+    style: z.enum(PANEL_STYLES).default('BUTTONS'),
+    ...panelAppearance
+  }).superRefine((value, ctx) => {
+    for (const issue of panelIssues(value, value.formIds, 'formIds')) {
+      ctx.addIssue({ code: 'custom', ...issue });
+    }
+  })
+);
 
 const formPermissionSchema = z.object({
   canManage: z.boolean().default(false),
@@ -841,9 +930,11 @@ async function validatePanelResources(
     return 'PANEL_CHANNEL_NOT_FOUND';
   }
 
+  // Only enabled categories of this guild can be offered by a panel.
   const count = await prisma.ticketCategory.count({
     where: {
       guildId,
+      enabled: true,
       id: { in: data.categoryIds }
     }
   });
@@ -851,6 +942,36 @@ async function validatePanelResources(
 
   return null;
 }
+
+async function validateFormPanelResources(
+  guildId: string,
+  data: z.infer<typeof formPanelSchema>
+) {
+  const resources = await getGuildResources(guildId);
+  if (!resources.channels.some((channel) => channel.id === data.channelId && [0, 5].includes(channel.type))) {
+    return 'FORM_PANEL_CHANNEL_NOT_FOUND';
+  }
+  const count = await prisma.formDefinition.count({
+    where: { guildId, id: { in: data.formIds } }
+  });
+  if (count !== data.formIds.length) return 'FORM_NOT_FOUND';
+  return null;
+}
+
+// Prisma Json input from validated, plain data.
+const jsonValue = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+
+// Stored per-item overrides without the entry that is being removed.
+const withoutItem = (items: Prisma.JsonValue, id: string) =>
+  Array.isArray(items)
+    ? items.filter((item) => !(item && typeof item === 'object' && !Array.isArray(item) && item.id === id))
+    : [];
+
+// Stable bot error code (e.g. PANEL_HAS_NO_CATEGORIES) for the dashboard.
+const botErrorReason = (error: unknown) => {
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+  return typeof code === 'string' ? { reason: code } : {};
+};
 
 app.get('/api/guilds/:guildId/ticket-system-settings', async (request, reply) => {
   const { guildId } = request.params as { guildId: string };
@@ -1065,10 +1186,17 @@ app.delete('/api/guilds/:guildId/categories/:categoryId', async (request, reply)
   ]);
 
   await prisma.$transaction([
-    ...panels.map((panel) => prisma.ticketPanel.update({
-      where: { id: panel.id },
-      data: { categoryIds: panel.categoryIds.filter((id) => id !== categoryId) }
-    })),
+    ...panels.map((panel) => {
+      const categoryIds = panel.categoryIds.filter((id) => id !== categoryId);
+      return prisma.ticketPanel.update({
+        where: { id: panel.id },
+        data: {
+          categoryIds,
+          items: jsonValue(withoutItem(panel.items, categoryId)),
+          ...(categoryIds.length ? {} : { enabled: false })
+        }
+      });
+    }),
     ...(settings?.mainMenuCategoryIds.includes(categoryId) ? [
       prisma.guildSettings.update({
         where: { guildId },
@@ -1090,7 +1218,7 @@ app.delete('/api/guilds/:guildId/categories/:categoryId', async (request, reply)
 
 app.get('/api/guilds/:guildId/panels', async (request, reply) => {
   const { guildId } = request.params as { guildId: string };
-  const session = await requireGuild(request, reply, guildId);
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
   if (!session) return;
 
   return prisma.ticketPanel.findMany({
@@ -1113,11 +1241,13 @@ app.post('/api/guilds/:guildId/panels', async (request, reply) => {
   if (resourceError) return reply.code(400).send({ error: resourceError });
 
   const panel = await prisma.ticketPanel.create({
-    data: { guildId, ...parsed.data }
+    data: { guildId, ...parsed.data, items: jsonValue(parsed.data.items) }
   });
   await panelAudit(request, session, guildId, 'ticket_panel.create', {
     panelId: panel.id,
-    name: panel.name
+    name: panel.name,
+    style: panel.style,
+    categoryCount: panel.categoryIds.length
   });
   return reply.code(201).send(panel);
 });
@@ -1144,11 +1274,18 @@ app.put('/api/guilds/:guildId/panels/:panelId', async (request, reply) => {
 
   const panel = await prisma.ticketPanel.update({
     where: { id: panelId },
-    data: parsed.data
+    data: {
+      ...parsed.data,
+      items: jsonValue(parsed.data.items),
+      // The old message lives in the previous channel: publish a new one.
+      ...(parsed.data.channelId !== existing.channelId ? { messageId: null } : {})
+    }
   });
   await panelAudit(request, session, guildId, 'ticket_panel.update', {
     panelId,
-    name: panel.name
+    name: panel.name,
+    style: panel.style,
+    categoryCount: panel.categoryIds.length
   });
   return panel;
 });
@@ -1195,7 +1332,7 @@ app.post('/api/guilds/:guildId/panels/:panelId/publish', async (request, reply) 
     return result;
   } catch (error) {
     request.log.error({ err: error, guildId, panelId }, 'Panel publish failed');
-    return reply.code(502).send({ error: 'PANEL_PUBLISH_FAILED' });
+    return reply.code(502).send({ error: 'PANEL_PUBLISH_FAILED', ...botErrorReason(error) });
   }
 });
 
@@ -1270,14 +1407,36 @@ app.put('/api/guilds/:guildId/forms/:formId', async (request, reply) => {
 app.delete('/api/guilds/:guildId/forms/:formId', async (request, reply) => {
   const { guildId, formId } = request.params as { guildId: string; formId: string };
   if (!internalId.safeParse(formId).success) return reply.code(400).send({ error: 'INVALID_FORM_ID' });
-  // Deleting a form also removes its panels and bindings: Owner/Admin only.
+  // Deleting a form also updates/removes its panels and bindings: Owner/Admin only.
   const session = await requireFormPermission(request, reply, guildId, formId, 'admin');
   if (!session) return;
   const submissions = await prisma.formSubmission.count({ where: { formId } });
   if (submissions) return reply.code(409).send({ error: 'FORM_IN_USE', submissions });
   const form = await prisma.formDefinition.findUnique({ where: { id: formId } });
   try {
-    await prisma.formDefinition.delete({ where: { id: formId } });
+    await prisma.$transaction(async (tx) => {
+      // Panels offering this form keep their other forms: drop it from formIds
+      // and move the primary FK to the next form. A panel whose primary form
+      // is deleted and has no other form is removed by the FK cascade; any
+      // other panel left without forms is disabled.
+      const panels = await tx.formPanel.findMany({
+        where: { guildId, OR: [{ formId }, { formIds: { has: formId } }] }
+      });
+      for (const panel of panels) {
+        const formIds = panel.formIds.filter((id) => id !== formId);
+        if (!formIds.length && panel.formId === formId) continue;
+        await tx.formPanel.update({
+          where: { id: panel.id },
+          data: {
+            formIds,
+            items: jsonValue(withoutItem(panel.items, formId)),
+            ...(panel.formId === formId ? { formId: formIds[0]! } : {}),
+            ...(formIds.length ? {} : { enabled: false })
+          }
+        });
+      }
+      await tx.formDefinition.delete({ where: { id: formId } });
+    });
   } catch (error) {
     // A submission landed between the count and the delete (FK Restrict).
     if (isForeignKeyViolation(error)) return reply.code(409).send({ error: 'FORM_IN_USE' });
@@ -1370,84 +1529,91 @@ app.delete('/api/guilds/:guildId/forms/:formId/submissions/:submissionId', async
 
 app.get('/api/guilds/:guildId/form-panels', async (request, reply) => {
   const { guildId } = request.params as { guildId: string };
-  const session = await requireGuild(request, reply, guildId);
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
   if (!session) return;
-  const visible = await visibleFormIds(guildId, session);
-  if (visible && !visible.length) return [];
   return prisma.formPanel.findMany({
-    where: { guildId, ...(visible ? { formId: { in: visible } } : {}) },
+    where: { guildId },
     include: { form: { select: { name: true } } },
     orderBy: { createdAt: 'asc' }
   });
 });
 
+// Panels are guild-level configuration: creation, edits, publication and
+// deletion are reserved to Owner/Admin (see docs/PANELS.md).
 app.post('/api/guilds/:guildId/form-panels', async (request, reply) => {
   const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
   const parsed = formPanelSchema.safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
-  const session = await requireFormPermission(request, reply, guildId, parsed.data.formId, 'admin');
-  if (!session) return;
-  const resources = await getGuildResources(guildId);
-  if (!resources.channels.some((channel) => channel.id === parsed.data.channelId && (channel.type === 0 || channel.type === 5))) {
-    return reply.code(400).send({ error: 'FORM_PANEL_CHANNEL_NOT_FOUND' });
-  }
-  const panel = await prisma.formPanel.create({ data: { guildId, ...parsed.data } });
-  await panelAudit(request, session, guildId, 'form_panel.create', { panelId: panel.id, formId: panel.formId });
+  const resourceError = await validateFormPanelResources(guildId, parsed.data);
+  if (resourceError) return reply.code(resourceError === 'FORM_NOT_FOUND' ? 404 : 400).send({ error: resourceError });
+  const { items, ...data } = parsed.data;
+  const panel = await prisma.formPanel.create({
+    data: { guildId, ...data, formId: data.formIds[0]!, items: jsonValue(items) }
+  });
+  await panelAudit(request, session, guildId, 'form_panel.create', {
+    panelId: panel.id, formIds: panel.formIds, style: panel.style
+  });
   return reply.code(201).send(panel);
 });
 
 app.put('/api/guilds/:guildId/form-panels/:panelId', async (request, reply) => {
   const { guildId, panelId } = request.params as { guildId: string; panelId: string };
   if (!internalId.safeParse(panelId).success) return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
   const existing = await prisma.formPanel.findFirst({ where: { id: panelId, guildId } });
   if (!existing) return reply.code(404).send({ error: 'FORM_PANEL_NOT_FOUND' });
-  const session = await requireFormPermission(request, reply, guildId, existing.formId, 'canManage');
-  if (!session) return;
   const parsed = formPanelSchema.safeParse(request.body);
-  if (!parsed.success || parsed.data.formId !== existing.formId) {
-    return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.success ? undefined : parsed.error.flatten() });
-  }
-  if (parsed.data.channelId !== existing.channelId && !isGuildAdmin(session.access)) {
-    return reply.code(403).send({ error: 'FORM_PANEL_CHANNEL_ADMIN_ONLY' });
-  }
-  const resources = await getGuildResources(guildId);
-  if (!resources.channels.some((channel) => channel.id === parsed.data.channelId && (channel.type === 0 || channel.type === 5))) {
-    return reply.code(400).send({ error: 'FORM_PANEL_CHANNEL_NOT_FOUND' });
-  }
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+  const resourceError = await validateFormPanelResources(guildId, parsed.data);
+  if (resourceError) return reply.code(resourceError === 'FORM_NOT_FOUND' ? 404 : 400).send({ error: resourceError });
+  const { items, ...data } = parsed.data;
   const panel = await prisma.formPanel.update({
     where: { id: panelId },
-    data: { ...parsed.data, ...(parsed.data.channelId !== existing.channelId ? { messageId: null } : {}) }
+    data: {
+      ...data,
+      // formId stays the FK of the primary (first) form.
+      formId: data.formIds[0]!,
+      items: jsonValue(items),
+      ...(data.channelId !== existing.channelId ? { messageId: null } : {})
+    }
   });
-  await panelAudit(request, session, guildId, 'form_panel.update', { panelId });
+  await panelAudit(request, session, guildId, 'form_panel.update', {
+    panelId, formIds: panel.formIds, style: panel.style
+  });
   return panel;
 });
 
 app.delete('/api/guilds/:guildId/form-panels/:panelId', async (request, reply) => {
   const { guildId, panelId } = request.params as { guildId: string; panelId: string };
   if (!internalId.safeParse(panelId).success) return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
   const panel = await prisma.formPanel.findFirst({ where: { id: panelId, guildId } });
   if (!panel) return reply.code(404).send({ error: 'FORM_PANEL_NOT_FOUND' });
-  const session = await requireFormPermission(request, reply, guildId, panel.formId, 'admin');
-  if (!session) return;
   await prisma.formPanel.delete({ where: { id: panelId } });
-  await panelAudit(request, session, guildId, 'form_panel.delete', { panelId, formId: panel.formId });
+  await panelAudit(request, session, guildId, 'form_panel.delete', {
+    panelId, formIds: panel.formIds, messageId: panel.messageId
+  });
   return { ok: true };
 });
 
 app.post('/api/guilds/:guildId/form-panels/:panelId/publish', async (request, reply) => {
   const { guildId, panelId } = request.params as { guildId: string; panelId: string };
   if (!internalId.safeParse(panelId).success) return reply.code(400).send({ error: 'INVALID_PANEL_ID' });
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
   const panel = await prisma.formPanel.findFirst({ where: { id: panelId, guildId } });
   if (!panel) return reply.code(404).send({ error: 'FORM_PANEL_NOT_FOUND' });
-  const session = await requireFormPermission(request, reply, guildId, panel.formId, 'admin');
-  if (!session) return;
   try {
     const result = await publishFormPanel(guildId, panelId);
     await panelAudit(request, session, guildId, 'form_panel.publish', { panelId, messageId: result.messageId });
     return result;
   } catch (error) {
     request.log.error({ err: error, guildId, panelId }, 'Form panel publish failed');
-    return reply.code(502).send({ error: 'FORM_PANEL_PUBLISH_FAILED' });
+    return reply.code(502).send({ error: 'FORM_PANEL_PUBLISH_FAILED', ...botErrorReason(error) });
   }
 });
 
