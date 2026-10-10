@@ -37,6 +37,19 @@ model GuildSettings {
   ticketLogChannelId String?
   ticketLogEvents    String[] @default([])
 
+  // Moderator leaderboard: channel, weekly/monthly schedule (weekday 1=Monday
+  // ..7, hour 0..23 in `timezone`), size, minimum ratings for the average and
+  // the last posted period keys ('2026-W41', '2026-09') for idempotency.
+  leaderboardChannelId   String?
+  leaderboardWeekly      Boolean @default(false)
+  leaderboardMonthly     Boolean @default(false)
+  leaderboardSize        Int     @default(10)
+  leaderboardMinRatings  Int     @default(3)
+  leaderboardWeekday     Int     @default(1)
+  leaderboardHour        Int     @default(9)
+  leaderboardLastWeekly  String?
+  leaderboardLastMonthly String?
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -150,6 +163,12 @@ model Ticket {
   openParentId             String?
   // Channel deleted by staff: the row stays for history until retention.
   channelDeletedAt         DateTime?
+  // Staff member who closed the ticket (not the opener, not auto-close).
+  closedById               String?
+  // Moderator credited with the closed ticket: claimer at close ?? staff closer.
+  handledById              String?
+  // Private staff thread of the ticket channel (never visible to the opener).
+  staffThreadId            String?
   createdAt                DateTime @default(now())
   updatedAt              DateTime @updatedAt
   closedAt               DateTime?
@@ -170,6 +189,7 @@ model Ticket {
   @@index([status, id])
   @@index([guildId, status, closedAt])
   @@index([sourceFormId])
+  @@index([guildId, handledById, closedAt])
 }
 
 model TicketMember {
@@ -290,6 +310,8 @@ model TicketFeedback {
   userId           String
   rating           Int
   commentEncrypted String?
+  // Moderator rated (snapshot at submission); null = unattributed.
+  staffUserId      String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -298,6 +320,7 @@ model TicketFeedback {
 
   @@index([guildId, createdAt(sort: Desc)])
   @@index([guildId, rating])
+  @@index([guildId, staffUserId, createdAt(sort: Desc)])
 }
 
 model GuildBlacklist {
