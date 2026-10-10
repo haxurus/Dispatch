@@ -97,19 +97,19 @@ Il ticket creato:
 
 Oltre ai livelli generali della dashboard, ogni form supporta binding per ruolo Discord (valutati sui ruoli **attuali** del membro, letti da Discord a ogni richiesta):
 
-- **Manage**: modifica di domande, testi, pianificazione (apertura/chiusura), limiti anti-spam, ruoli autorizzati/esclusi e testi dei pannelli esistenti;
-- **View**: il form (e i suoi pannelli) compare nella dashboard dell'utente;
+- **Manage**: modifica di domande, testi, pianificazione (apertura/chiusura), limiti anti-spam e ruoli autorizzati/esclusi;
+- **View**: il form compare nella dashboard dell'utente;
 - **Review**: visualizzazione degli invii;
 - **Submit**: autorizzazione esplicita alla compilazione.
 
-Manage e Review implicano View. Un utente non Admin vede **solo** i form (e i relativi pannelli) per cui almeno uno dei suoi ruoli ha View, Manage o Review; gli invii richiedono Review.
+Manage e Review implicano View. Un utente non Admin vede **solo** i form per cui almeno uno dei suoi ruoli ha View, Manage o Review; gli invii richiedono Review.
 
 Restano riservati a Owner/Admin:
 
 - creazione ed eliminazione dei form;
 - modifica dei binding (`PUT`/`DELETE /api/guilds/:guildId/forms/:formId/permissions/:roleId`): un manager delegato non può concedersi altri permessi;
 - canale risultati, ruoli da notificare, ticket automatico (`createTicketOnSubmit`, `ticketCategoryId`, `ticketParentCategoryId`, `ticketStaffRoleIds`). Un `PUT` di un manager delegato che cambia uno di questi campi riceve `403 FORM_FIELD_ADMIN_ONLY`;
-- creazione, pubblicazione ed eliminazione dei pannelli e cambio del loro canale (`403 FORM_PANEL_CHANNEL_ADMIN_ONLY`);
+- tutta la gestione dei pannelli (elenco, creazione, modifica, pubblicazione ed eliminazione): vedi [PANELS.md](PANELS.md);
 - eliminazione di un singolo invio (`DELETE /api/guilds/:guildId/forms/:formId/submissions/:submissionId`, registrata nell'audit del pannello come `form.submission.delete`).
 
 Un form con invii non può essere eliminato (`409 FORM_IN_USE`, anche in caso di invio concorrente). Una categoria ticket usata da un form per il ticket automatico non può essere eliminata (`409 CATEGORY_IN_USE_BY_FORM`): aggiornare il form o disabilitare la categoria.
@@ -118,7 +118,9 @@ Se un invio non è decifrabile, l'elenco lo restituisce con `unreadable: true` e
 
 ## Pannelli
 
-I form vengono pubblicati tramite pannelli Discord con pulsante configurabile. La ripubblicazione aggiorna il messaggio esistente quando possibile e crea un nuovo messaggio solo se quello precedente non esiste più.
+I form vengono pubblicati tramite pannelli Discord gestiti nella sezione **Pannelli** della dashboard ([PANELS.md](PANELS.md)). Un pannello può offrire uno o più form (fino a 25, ordinati) con pulsanti o menu a tendina, embed personalizzato ed emoji. I pannelli creati prima di questa funzione continuano a mostrare un solo pulsante con il loro testo. Eliminando un form, questo viene tolto dagli altri pannelli; un pannello rimasto senza form viene disattivato o, se il form era il suo principale, eliminato.
+
+La ripubblicazione aggiorna il messaggio esistente quando possibile e crea un nuovo messaggio solo se quello precedente non esiste più.
 
 ## Transcript dei ticket
 
