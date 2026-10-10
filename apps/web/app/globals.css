@@ -872,12 +872,8 @@ input[aria-invalid="true"] { border-color: var(--danger-line-strong); }
 .editor-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
 .editor-split > .form { min-width: 0; }
 .field-row { display: grid; gap: 12px; grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); }
-.form.form-columns { display: block; column-count: 2; column-gap: 24px; }
-.form.form-columns > * { break-inside: avoid; margin-bottom: 14px; }
-.form.form-columns > .row:first-child, .form.form-columns > button[type="submit"] { column-span: all; }
 @media (max-width: 1100px) {
   .editor-split { grid-template-columns: 1fr; }
-  .form.form-columns { column-count: 1; }
 }
 @media (max-width: 700px) { .field-row { grid-template-columns: 1fr; } }
 
