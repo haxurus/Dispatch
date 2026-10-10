@@ -95,7 +95,17 @@ model TicketPanel {
   messageId   String?
   title       String
   description String?
+  // Ordered list of the categories offered by the panel.
   categoryIds String[] @default([])
+  // SELECT (one dropdown) | BUTTONS (one button per category, 5 per row).
+  style        String  @default("SELECT")
+  placeholder  String?
+  color        Int?
+  imageUrl     String?
+  thumbnailUrl String?
+  footerText   String?
+  // Per-category overrides: [{ id, label, emoji, description, buttonStyle }].
+  items        Json    @default("[]")
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -374,12 +384,25 @@ model FormDefinition {
 model FormPanel {
   id          String   @id @default(cuid())
   guildId     String
+  name        String?
+  // Primary form (= formIds[0]): keeps the FK and its cascade.
   formId      String
+  // Ordered list of the forms offered by the panel.
+  formIds     String[] @default([])
   channelId   String
   messageId   String?
   title       String
   description String?
   buttonLabel String   @default("Compila")
+  // BUTTONS (one button per form) | SELECT (one dropdown).
+  style        String  @default("BUTTONS")
+  placeholder  String?
+  color        Int?
+  imageUrl     String?
+  thumbnailUrl String?
+  footerText   String?
+  // Per-form overrides: [{ id, label, emoji, description, buttonStyle }].
+  items        Json    @default("[]")
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
