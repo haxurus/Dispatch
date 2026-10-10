@@ -431,7 +431,7 @@ export default function TicketConfigurationPage() {
       {notice && <p className="success">{notice}</p>}
 
       <section>
-        <form className="card form form-columns" onSubmit={saveCategory}>
+        <form className="card form" onSubmit={saveCategory}>
           <div className="row">
             <h2>{editingCategoryId ? 'Modifica categoria' : 'Nuova categoria ticket'}</h2>
             {editingCategoryId && (
@@ -439,412 +439,422 @@ export default function TicketConfigurationPage() {
             )}
           </div>
 
-          <label>
-            Nome
-            <input
-              required
-              maxLength={80}
-              value={categoryForm.name}
-              onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })}
-            />
-          </label>
-
-          <label>
-            Descrizione
-            <textarea
-              maxLength={500}
-              value={categoryForm.description}
-              onChange={(event) => setCategoryForm({ ...categoryForm, description: event.target.value })}
-            />
-          </label>
-
-          <ResourcePicker
-            label="Categoria Discord"
-            kind="channel"
-            channels={channels}
-            channelTypes={[CHANNEL_TYPES.category]}
-            placeholder="Nessuna"
-            value={categoryForm.discordCategoryId}
-            onChange={(discordCategoryId) => setCategoryForm({ ...categoryForm, discordCategoryId })}
-          />
-
-          <ResourcePicker
-            label="Categoria Discord per i ticket chiusi"
-            kind="channel"
-            channels={channels}
-            channelTypes={[CHANNEL_TYPES.category]}
-            placeholder="Nessuna (restano dove sono)"
-            hint="Facoltativa. Alla chiusura il canale viene spostato qui mantenendo i propri permessi; alla riapertura torna nella categoria di origine. Una categoria Discord contiene al massimo 50 canali: se è piena il ticket resta dov'è."
-            value={categoryForm.closedParentCategoryId}
-            onChange={(closedParentCategoryId) => setCategoryForm({ ...categoryForm, closedParentCategoryId })}
-          />
-
-          <ResourcePicker
-            label="Ruoli staff"
-            kind="role"
-            roles={roles}
-            guildId={guildId}
-            multiple
-            value={categoryForm.staffRoleIds}
-            onChange={(staffRoleIds) => setCategoryForm({ ...categoryForm, staffRoleIds })}
-          />
-
-          <label>
-            Massimo ticket aperti per utente
-            <input
-              type="number"
-              min={1}
-              max={10}
-              value={categoryForm.maxOpenPerUser}
-              onChange={(event) => setCategoryForm({
-                ...categoryForm,
-                maxOpenPerUser: Number(event.target.value)
-              })}
-            />
-          </label>
-
-          <fieldset>
-            <legend>Anti-spam categoria</legend>
-            <div className="grid compact-grid">
-              <label>
-                Cooldown dopo apertura, secondi
-                <input
-                  type="number"
-                  min={0}
-                  max={86400}
-                  value={categoryForm.openCooldownSeconds}
-                  onChange={(event) => setCategoryForm({
-                    ...categoryForm,
-                    openCooldownSeconds: Number(event.target.value)
-                  })}
-                />
-              </label>
-              <label>
-                Finestra tentativi, minuti
-                <input
-                  type="number"
-                  min={1}
-                  max={1440}
-                  value={categoryForm.antiSpamWindowMinutes}
-                  onChange={(event) => setCategoryForm({
-                    ...categoryForm,
-                    antiSpamWindowMinutes: Number(event.target.value)
-                  })}
-                />
-              </label>
-              <label>
-                Tentativi massimi nella finestra
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={categoryForm.antiSpamMaxAttempts}
-                  onChange={(event) => setCategoryForm({
-                    ...categoryForm,
-                    antiSpamMaxAttempts: Number(event.target.value)
-                  })}
-                />
-              </label>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>Form iniziale, massimo 5 domande</legend>
+          {/* Fixed columns: toggling a section (escalation, transcript) only
+              changes the height of its own column instead of reflowing the
+              whole editor like CSS multi-column did. */}
+          <div className="editor-split">
             <div className="form">
-              {categoryForm.formFields.map((field, index) => (
-                <div className="subcard form" key={field.id}>
-                  <div className="row">
-                    <strong>Domanda {index + 1}</strong>
-                    <button className="danger" type="button" onClick={() => removeFormField(index)}>Rimuovi</button>
-                  </div>
+              <label>
+                Nome
+                <input
+                  required
+                  maxLength={80}
+                  value={categoryForm.name}
+                  onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })}
+                />
+              </label>
+
+              <label>
+                Descrizione
+                <textarea
+                  maxLength={500}
+                  value={categoryForm.description}
+                  onChange={(event) => setCategoryForm({ ...categoryForm, description: event.target.value })}
+                />
+              </label>
+
+              <ResourcePicker
+                label="Categoria Discord"
+                kind="channel"
+                channels={channels}
+                channelTypes={[CHANNEL_TYPES.category]}
+                placeholder="Nessuna"
+                value={categoryForm.discordCategoryId}
+                onChange={(discordCategoryId) => setCategoryForm({ ...categoryForm, discordCategoryId })}
+              />
+
+              <ResourcePicker
+                label="Categoria Discord per i ticket chiusi"
+                kind="channel"
+                channels={channels}
+                channelTypes={[CHANNEL_TYPES.category]}
+                placeholder="Nessuna (restano dove sono)"
+                hint="Facoltativa. Alla chiusura il canale viene spostato qui mantenendo i propri permessi; alla riapertura torna nella categoria di origine. Una categoria Discord contiene al massimo 50 canali: se è piena il ticket resta dov'è."
+                value={categoryForm.closedParentCategoryId}
+                onChange={(closedParentCategoryId) => setCategoryForm({ ...categoryForm, closedParentCategoryId })}
+              />
+
+              <ResourcePicker
+                label="Ruoli staff"
+                kind="role"
+                roles={roles}
+                guildId={guildId}
+                multiple
+                value={categoryForm.staffRoleIds}
+                onChange={(staffRoleIds) => setCategoryForm({ ...categoryForm, staffRoleIds })}
+              />
+
+              <label>
+                Massimo ticket aperti per utente
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={categoryForm.maxOpenPerUser}
+                  onChange={(event) => setCategoryForm({
+                    ...categoryForm,
+                    maxOpenPerUser: Number(event.target.value)
+                  })}
+                />
+              </label>
+
+              <fieldset>
+                <legend>Anti-spam categoria</legend>
+                <div className="grid compact-grid">
                   <label>
-                    Etichetta
+                    Cooldown dopo apertura, secondi
                     <input
-                      required
-                      maxLength={45}
-                      value={field.label}
-                      onChange={(event) => updateFormField(index, { label: event.target.value })}
+                      type="number"
+                      min={0}
+                      max={86400}
+                      value={categoryForm.openCooldownSeconds}
+                      onChange={(event) => setCategoryForm({
+                        ...categoryForm,
+                        openCooldownSeconds: Number(event.target.value)
+                      })}
                     />
                   </label>
                   <label>
-                    Tipo
-                    <select
-                      value={field.type}
-                      onChange={(event) => {
-                        const type = event.target.value as FormField['type'];
-                        updateFormField(index, {
-                          type,
-                          style: type === 'LONG_TEXT' ? 'PARAGRAPH' : 'SHORT',
-                          options: type === 'SINGLE_SELECT' ? field.options : []
-                        });
-                      }}
-                    >
-                      <option value="SHORT_TEXT">Risposta breve</option>
-                      <option value="LONG_TEXT">Paragrafo</option>
-                      <option value="SINGLE_SELECT">Menu a scelta singola</option>
-                    </select>
+                    Finestra tentativi, minuti
+                    <input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      value={categoryForm.antiSpamWindowMinutes}
+                      onChange={(event) => setCategoryForm({
+                        ...categoryForm,
+                        antiSpamWindowMinutes: Number(event.target.value)
+                      })}
+                    />
                   </label>
                   <label>
-                    Placeholder
+                    Tentativi massimi nella finestra
                     <input
-                      maxLength={100}
-                      value={field.placeholder ?? ''}
-                      onChange={(event) => updateFormField(index, { placeholder: event.target.value || null })}
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={categoryForm.antiSpamMaxAttempts}
+                      onChange={(event) => setCategoryForm({
+                        ...categoryForm,
+                        antiSpamMaxAttempts: Number(event.target.value)
+                      })}
                     />
                   </label>
-                  {field.type === 'SINGLE_SELECT' && (
-                    <label>
-                      Opzioni, una per riga: Etichetta|valore
-                      <textarea
-                        value={optionDrafts[field.id] ?? formatFieldOptions(field.options)}
-                        onChange={(event) => {
-                          const text = event.target.value;
-                          setOptionDrafts((current) => ({ ...current, [field.id]: text }));
-                        }}
-                        onBlur={() => commitOptionDraft(index, field.id)}
-                      />
-                    </label>
-                  )}
-                  <label className="checkbox-row">
-                    <input
-                      type="checkbox"
-                      checked={field.required}
-                      onChange={(event) => updateFormField(index, { required: event.target.checked })}
-                    />
-                    Obbligatoria
-                  </label>
-                  <div className="row">
-                    <label>
-                      Min caratteri
-                      <input
-                        type="number"
-                        min={0}
-                        max={4000}
-                        value={field.minLength ?? ''}
-                        onChange={(event) => updateFormField(index, { minLength: nullableNumber(event.target.value) })}
-                      />
-                    </label>
-                    <label>
-                      Max caratteri
-                      <input
-                        type="number"
-                        min={1}
-                        max={4000}
-                        value={field.maxLength ?? ''}
-                        onChange={(event) => updateFormField(index, { maxLength: nullableNumber(event.target.value) })}
-                      />
-                    </label>
-                  </div>
                 </div>
-              ))}
-              <button
-                className="secondary"
-                type="button"
-                disabled={categoryForm.formFields.length >= 5}
-                onClick={addFormField}
-              >
-                Aggiungi domanda
-              </button>
-            </div>
-          </fieldset>
+              </fieldset>
 
-          <fieldset>
-            <legend>SLA e automazioni</legend>
-            <p className="muted">Lascia vuoto un campo per disattivare la relativa automazione.</p>
-            <div className="grid compact-grid">
-              <label>
-                SLA prima risposta, minuti
-                <input
-                  type="number"
-                  min={1}
-                  max={10080}
-                  placeholder="Vuoto = disattivato"
-                  value={categoryForm.slaFirstResponseMinutes ?? ''}
-                  onChange={(event) => setCategoryForm({
-                    ...categoryForm,
-                    slaFirstResponseMinutes: nullableNumber(event.target.value)
-                  })}
-                />
-              </label>
-              <label>
-                SLA risoluzione, minuti
-                <input
-                  type="number"
-                  min={1}
-                  max={43200}
-                  placeholder="Vuoto = disattivato"
-                  value={categoryForm.slaResolutionMinutes ?? ''}
-                  onChange={(event) => setCategoryForm({
-                    ...categoryForm,
-                    slaResolutionMinutes: nullableNumber(event.target.value)
-                  })}
-                />
-              </label>
-              <label>
-                Auto-chiusura inattività, ore
-                <input
-                  type="number"
-                  min={1}
-                  max={720}
-                  placeholder="Vuoto = disattivata"
-                  value={categoryForm.inactivityCloseHours ?? ''}
-                  onChange={(event) => setCategoryForm({
-                    ...categoryForm,
-                    inactivityCloseHours: nullableNumber(event.target.value)
-                  })}
-                />
-              </label>
-              <label>
-                Preavviso auto-chiusura, minuti
-                <input
-                  type="number"
-                  min={1}
-                  max={1440}
-                  placeholder="Vuoto = nessun preavviso"
-                  value={categoryForm.inactivityWarningMinutes ?? ''}
-                  onChange={(event) => setCategoryForm({
-                    ...categoryForm,
-                    inactivityWarningMinutes: nullableNumber(event.target.value)
-                  })}
-                />
-              </label>
-              <label>
-                Finestra riapertura utente, ore
-                <input
-                  type="number"
-                  min={1}
-                  max={720}
-                  placeholder="Vuoto = solo lo staff"
-                  value={categoryForm.reopenWindowHours ?? ''}
-                  onChange={(event) => setCategoryForm({
-                    ...categoryForm,
-                    reopenWindowHours: nullableNumber(event.target.value)
-                  })}
-                />
-              </label>
-            </div>
+              <fieldset>
+                <legend>SLA e automazioni</legend>
+                <p className="muted">Lascia vuoto un campo per disattivare la relativa automazione.</p>
+                <div className="grid compact-grid">
+                  <label>
+                    SLA prima risposta, minuti
+                    <input
+                      type="number"
+                      min={1}
+                      max={10080}
+                      placeholder="Vuoto = disattivato"
+                      value={categoryForm.slaFirstResponseMinutes ?? ''}
+                      onChange={(event) => setCategoryForm({
+                        ...categoryForm,
+                        slaFirstResponseMinutes: nullableNumber(event.target.value)
+                      })}
+                    />
+                  </label>
+                  <label>
+                    SLA risoluzione, minuti
+                    <input
+                      type="number"
+                      min={1}
+                      max={43200}
+                      placeholder="Vuoto = disattivato"
+                      value={categoryForm.slaResolutionMinutes ?? ''}
+                      onChange={(event) => setCategoryForm({
+                        ...categoryForm,
+                        slaResolutionMinutes: nullableNumber(event.target.value)
+                      })}
+                    />
+                  </label>
+                  <label>
+                    Auto-chiusura inattività, ore
+                    <input
+                      type="number"
+                      min={1}
+                      max={720}
+                      placeholder="Vuoto = disattivata"
+                      value={categoryForm.inactivityCloseHours ?? ''}
+                      onChange={(event) => setCategoryForm({
+                        ...categoryForm,
+                        inactivityCloseHours: nullableNumber(event.target.value)
+                      })}
+                    />
+                  </label>
+                  <label>
+                    Preavviso auto-chiusura, minuti
+                    <input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      placeholder="Vuoto = nessun preavviso"
+                      value={categoryForm.inactivityWarningMinutes ?? ''}
+                      onChange={(event) => setCategoryForm({
+                        ...categoryForm,
+                        inactivityWarningMinutes: nullableNumber(event.target.value)
+                      })}
+                    />
+                  </label>
+                  <label>
+                    Finestra riapertura utente, ore
+                    <input
+                      type="number"
+                      min={1}
+                      max={720}
+                      placeholder="Vuoto = solo lo staff"
+                      value={categoryForm.reopenWindowHours ?? ''}
+                      onChange={(event) => setCategoryForm({
+                        ...categoryForm,
+                        reopenWindowHours: nullableNumber(event.target.value)
+                      })}
+                    />
+                  </label>
+                </div>
 
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={categoryForm.escalationEnabled}
-                onChange={(event) => setCategoryForm({
-                  ...categoryForm,
-                  escalationEnabled: event.target.checked,
-                  escalationMinutes: event.target.checked
-                    ? categoryForm.escalationMinutes ?? 60
-                    : categoryForm.escalationMinutes
-                })}
-              />
-              Escalation automatica
-            </label>
-
-            {categoryForm.escalationEnabled ? (
-              <div className="form">
-                <label>
-                  Escalation dopo, minuti dall’apertura
-                  <input
-                    type="number"
-                    required
-                    min={1}
-                    max={43200}
-                    value={categoryForm.escalationMinutes ?? ''}
-                    onChange={(event) => setCategoryForm({
-                      ...categoryForm,
-                      escalationMinutes: nullableNumber(event.target.value)
-                    })}
-                  />
-                </label>
-
-                <ResourcePicker
-                  label="Ruoli escalation"
-                  kind="role"
-                  roles={roles}
-                  guildId={guildId}
-                  multiple
-                  hint="Vuoto = vengono menzionati i ruoli staff della categoria."
-                  value={categoryForm.escalationRoleIds}
-                  onChange={(escalationRoleIds) => setCategoryForm({ ...categoryForm, escalationRoleIds })}
-                />
-              </div>
-            ) : (
-              <p className="muted">
-                Disattivata: nessuna menzione automatica per i ticket aperti da troppo tempo.
-              </p>
-            )}
-
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={categoryForm.feedbackEnabled}
-                onChange={(event) => setCategoryForm({
-                  ...categoryForm,
-                  feedbackEnabled: event.target.checked
-                })}
-              />
-              Richiedi feedback 1-5 stelle alla chiusura
-            </label>
-          </fieldset>
-
-          <fieldset>
-            <legend>Transcript</legend>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={categoryForm.transcriptAutoGenerate}
-                onChange={(event) => setCategoryForm({
-                  ...categoryForm,
-                  transcriptAutoGenerate: event.target.checked
-                })}
-              />
-              Genera automaticamente il transcript alla chiusura
-            </label>
-
-            {categoryForm.transcriptAutoGenerate && (
-              <div className="form">
                 <label className="checkbox-row">
                   <input
                     type="checkbox"
-                    checked={categoryForm.transcriptSendToOpener}
+                    checked={categoryForm.escalationEnabled}
                     onChange={(event) => setCategoryForm({
                       ...categoryForm,
-                      transcriptSendToOpener: event.target.checked
+                      escalationEnabled: event.target.checked,
+                      escalationMinutes: event.target.checked
+                        ? categoryForm.escalationMinutes ?? 60
+                        : categoryForm.escalationMinutes
                     })}
                   />
-                  Invia il file HTML in DM all'utente che ha aperto il ticket
+                  Escalation automatica
                 </label>
 
-                <ResourcePicker
-                  label="Canale archivio transcript"
-                  kind="channel"
-                  channels={channels}
-                  channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]}
-                  placeholder="Non inviare in un canale"
-                  value={categoryForm.transcriptChannelId}
-                  onChange={(transcriptChannelId) => setCategoryForm({ ...categoryForm, transcriptChannelId })}
-                />
+                {categoryForm.escalationEnabled ? (
+                  <div className="form">
+                    <label>
+                      Escalation dopo, minuti dall’apertura
+                      <input
+                        type="number"
+                        required
+                        min={1}
+                        max={43200}
+                        value={categoryForm.escalationMinutes ?? ''}
+                        onChange={(event) => setCategoryForm({
+                          ...categoryForm,
+                          escalationMinutes: nullableNumber(event.target.value)
+                        })}
+                      />
+                    </label>
 
-              </div>
-            )}
+                    <ResourcePicker
+                      label="Ruoli escalation"
+                      kind="role"
+                      roles={roles}
+                      guildId={guildId}
+                      multiple
+                      hint="Vuoto = vengono menzionati i ruoli staff della categoria."
+                      value={categoryForm.escalationRoleIds}
+                      onChange={(escalationRoleIds) => setCategoryForm({ ...categoryForm, escalationRoleIds })}
+                    />
+                  </div>
+                ) : (
+                  <p className="muted">
+                    Disattivata: nessuna menzione automatica per i ticket aperti da troppo tempo.
+                  </p>
+                )}
 
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={categoryForm.transcriptRetain}
-                onChange={(event) => setCategoryForm({
-                  ...categoryForm,
-                  transcriptRetain: event.target.checked
-                })}
-              />
-              Conserva una copia cifrata lato Dispatch fino alla retention/eliminazione del ticket
-            </label>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={categoryForm.feedbackEnabled}
+                    onChange={(event) => setCategoryForm({
+                      ...categoryForm,
+                      feedbackEnabled: event.target.checked
+                    })}
+                  />
+                  Richiedi feedback 1-5 stelle alla chiusura
+                </label>
+              </fieldset>
 
-            <p className="muted">
-              Attivo: la copia resta disponibile e può essere scaricata più volte dalla dashboard.
-              Disattivo: il transcript generato dalla dashboard è monouso e viene eliminato dal database al primo
-              download; il transcript automatico viene creato solo in memoria per l'invio e non viene salvato.
-            </p>
-          </fieldset>
+            </div>
+            <div className="form">
+              <fieldset>
+                <legend>Form iniziale, massimo 5 domande</legend>
+                <div className="form">
+                  {categoryForm.formFields.map((field, index) => (
+                    <div className="subcard form" key={field.id}>
+                      <div className="row">
+                        <strong>Domanda {index + 1}</strong>
+                        <button className="danger" type="button" onClick={() => removeFormField(index)}>Rimuovi</button>
+                      </div>
+                      <label>
+                        Etichetta
+                        <input
+                          required
+                          maxLength={45}
+                          value={field.label}
+                          onChange={(event) => updateFormField(index, { label: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        Tipo
+                        <select
+                          value={field.type}
+                          onChange={(event) => {
+                            const type = event.target.value as FormField['type'];
+                            updateFormField(index, {
+                              type,
+                              style: type === 'LONG_TEXT' ? 'PARAGRAPH' : 'SHORT',
+                              options: type === 'SINGLE_SELECT' ? field.options : []
+                            });
+                          }}
+                        >
+                          <option value="SHORT_TEXT">Risposta breve</option>
+                          <option value="LONG_TEXT">Paragrafo</option>
+                          <option value="SINGLE_SELECT">Menu a scelta singola</option>
+                        </select>
+                      </label>
+                      <label>
+                        Placeholder
+                        <input
+                          maxLength={100}
+                          value={field.placeholder ?? ''}
+                          onChange={(event) => updateFormField(index, { placeholder: event.target.value || null })}
+                        />
+                      </label>
+                      {field.type === 'SINGLE_SELECT' && (
+                        <label>
+                          Opzioni, una per riga: Etichetta|valore
+                          <textarea
+                            value={optionDrafts[field.id] ?? formatFieldOptions(field.options)}
+                            onChange={(event) => {
+                              const text = event.target.value;
+                              setOptionDrafts((current) => ({ ...current, [field.id]: text }));
+                            }}
+                            onBlur={() => commitOptionDraft(index, field.id)}
+                          />
+                        </label>
+                      )}
+                      <label className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={field.required}
+                          onChange={(event) => updateFormField(index, { required: event.target.checked })}
+                        />
+                        Obbligatoria
+                      </label>
+                      <div className="row">
+                        <label>
+                          Min caratteri
+                          <input
+                            type="number"
+                            min={0}
+                            max={4000}
+                            value={field.minLength ?? ''}
+                            onChange={(event) => updateFormField(index, { minLength: nullableNumber(event.target.value) })}
+                          />
+                        </label>
+                        <label>
+                          Max caratteri
+                          <input
+                            type="number"
+                            min={1}
+                            max={4000}
+                            value={field.maxLength ?? ''}
+                            onChange={(event) => updateFormField(index, { maxLength: nullableNumber(event.target.value) })}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={categoryForm.formFields.length >= 5}
+                    onClick={addFormField}
+                  >
+                    Aggiungi domanda
+                  </button>
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend>Transcript</legend>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={categoryForm.transcriptAutoGenerate}
+                    onChange={(event) => setCategoryForm({
+                      ...categoryForm,
+                      transcriptAutoGenerate: event.target.checked
+                    })}
+                  />
+                  Genera automaticamente il transcript alla chiusura
+                </label>
+
+                {categoryForm.transcriptAutoGenerate && (
+                  <div className="form">
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={categoryForm.transcriptSendToOpener}
+                        onChange={(event) => setCategoryForm({
+                          ...categoryForm,
+                          transcriptSendToOpener: event.target.checked
+                        })}
+                      />
+                      Invia il file HTML in DM all'utente che ha aperto il ticket
+                    </label>
+
+                    <ResourcePicker
+                      label="Canale archivio transcript"
+                      kind="channel"
+                      channels={channels}
+                      channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]}
+                      placeholder="Non inviare in un canale"
+                      value={categoryForm.transcriptChannelId}
+                      onChange={(transcriptChannelId) => setCategoryForm({ ...categoryForm, transcriptChannelId })}
+                    />
+
+                  </div>
+                )}
+
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={categoryForm.transcriptRetain}
+                    onChange={(event) => setCategoryForm({
+                      ...categoryForm,
+                      transcriptRetain: event.target.checked
+                    })}
+                  />
+                  Conserva una copia cifrata lato Dispatch fino alla retention/eliminazione del ticket
+                </label>
+
+                <p className="muted">
+                  Attivo: la copia resta disponibile e può essere scaricata più volte dalla dashboard.
+                  Disattivo: il transcript generato dalla dashboard è monouso e viene eliminato dal database al primo
+                  download; il transcript automatico viene creato solo in memoria per l'invio e non viene salvato.
+                </p>
+              </fieldset>
+
+            </div>
+          </div>
 
           <button disabled={busy === 'category'} type="submit">
             {busy === 'category' ? 'Salvataggio...' : editingCategoryId ? 'Salva modifiche' : 'Crea categoria'}
