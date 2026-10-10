@@ -38,6 +38,7 @@ type Category = {
   name: string;
   description: string | null;
   discordCategoryId: string | null;
+  closedParentCategoryId: string | null;
   staffRoleIds: string[];
   maxOpenPerUser: number;
   openCooldownSeconds: number;
@@ -69,6 +70,7 @@ const newCategory = () => ({
   name: '',
   description: '',
   discordCategoryId: '',
+  closedParentCategoryId: '',
   staffRoleIds: [] as string[],
   maxOpenPerUser: 1,
   openCooldownSeconds: 60,
@@ -79,6 +81,8 @@ const newCategory = () => ({
   slaResolutionMinutes: null as number | null,
   inactivityCloseHours: null as number | null,
   inactivityWarningMinutes: null as number | null,
+  // UI-only toggle: escalation is off when escalationMinutes is null.
+  escalationEnabled: false,
   escalationMinutes: null as number | null,
   escalationRoleIds: [] as string[],
   reopenWindowHours: 24 as number | null,
@@ -174,6 +178,7 @@ export default function TicketConfigurationPage() {
       name: category.name,
       description: category.description ?? '',
       discordCategoryId: category.discordCategoryId ?? '',
+      closedParentCategoryId: category.closedParentCategoryId ?? '',
       staffRoleIds: category.staffRoleIds,
       maxOpenPerUser: category.maxOpenPerUser,
       openCooldownSeconds: category.openCooldownSeconds,
@@ -188,6 +193,7 @@ export default function TicketConfigurationPage() {
       slaResolutionMinutes: category.slaResolutionMinutes,
       inactivityCloseHours: category.inactivityCloseHours,
       inactivityWarningMinutes: category.inactivityWarningMinutes,
+      escalationEnabled: category.escalationMinutes != null,
       escalationMinutes: category.escalationMinutes,
       escalationRoleIds: category.escalationRoleIds ?? [],
       reopenWindowHours: category.reopenWindowHours,
@@ -203,10 +209,16 @@ export default function TicketConfigurationPage() {
 
   const saveCategory = async (event: FormEvent) => {
     event.preventDefault();
-    setBusy('category');
     setError('');
     setNotice('');
 
+    const { escalationEnabled, ...categoryData } = categoryForm;
+    if (escalationEnabled && categoryData.escalationMinutes == null) {
+      setError('Indica dopo quanti minuti attivare l’escalation automatica, oppure disattivala.');
+      return;
+    }
+
+    setBusy('category');
     try {
       const path = editingCategoryId
         ? `/backend/api/guilds/${guildId}/categories/${editingCategoryId}`
@@ -216,7 +228,10 @@ export default function TicketConfigurationPage() {
         method: editingCategoryId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...categoryForm,
+          ...categoryData,
+          // Escalation off: no minutes and no escalation roles are stored.
+          escalationMinutes: escalationEnabled ? categoryData.escalationMinutes : null,
+          escalationRoleIds: escalationEnabled ? categoryData.escalationRoleIds : [],
           formFields: categoryForm.formFields.map((field) =>
             field.type === 'SINGLE_SELECT' && optionDrafts[field.id] !== undefined
               ? { ...field, options: parseFieldOptions(optionDrafts[field.id]) }
@@ -224,6 +239,7 @@ export default function TicketConfigurationPage() {
           ),
           description: categoryForm.description || null,
           discordCategoryId: categoryForm.discordCategoryId || null,
+          closedParentCategoryId: categoryForm.closedParentCategoryId || null,
           transcriptChannelId: categoryForm.transcriptChannelId || null
         })
       });
@@ -453,6 +469,17 @@ export default function TicketConfigurationPage() {
           />
 
           <ResourcePicker
+            label="Categoria Discord per i ticket chiusi"
+            kind="channel"
+            channels={channels}
+            channelTypes={[CHANNEL_TYPES.category]}
+            placeholder="Nessuna (restano dove sono)"
+            hint="Facoltativa. Alla chiusura il canale viene spostato qui mantenendo i propri permessi; alla riapertura torna nella categoria di origine. Una categoria Discord contiene al massimo 50 canali: se è piena il ticket resta dov'è."
+            value={categoryForm.closedParentCategoryId}
+            onChange={(closedParentCategoryId) => setCategoryForm({ ...categoryForm, closedParentCategoryId })}
+          />
+
+          <ResourcePicker
             label="Ruoli staff"
             kind="role"
             roles={roles}
@@ -623,6 +650,7 @@ export default function TicketConfigurationPage() {
 
           <fieldset>
             <legend>SLA e automazioni</legend>
+            <p className="muted">Lascia vuoto un campo per disattivare la relativa automazione.</p>
             <div className="grid compact-grid">
               <label>
                 SLA prima risposta, minuti
@@ -630,6 +658,7 @@ export default function TicketConfigurationPage() {
                   type="number"
                   min={1}
                   max={10080}
+                  placeholder="Vuoto = disattivato"
                   value={categoryForm.slaFirstResponseMinutes ?? ''}
                   onChange={(event) => setCategoryForm({
                     ...categoryForm,
@@ -643,6 +672,7 @@ export default function TicketConfigurationPage() {
                   type="number"
                   min={1}
                   max={43200}
+                  placeholder="Vuoto = disattivato"
                   value={categoryForm.slaResolutionMinutes ?? ''}
                   onChange={(event) => setCategoryForm({
                     ...categoryForm,
@@ -656,6 +686,7 @@ export default function TicketConfigurationPage() {
                   type="number"
                   min={1}
                   max={720}
+                  placeholder="Vuoto = disattivata"
                   value={categoryForm.inactivityCloseHours ?? ''}
                   onChange={(event) => setCategoryForm({
                     ...categoryForm,
@@ -669,23 +700,11 @@ export default function TicketConfigurationPage() {
                   type="number"
                   min={1}
                   max={1440}
+                  placeholder="Vuoto = nessun preavviso"
                   value={categoryForm.inactivityWarningMinutes ?? ''}
                   onChange={(event) => setCategoryForm({
                     ...categoryForm,
                     inactivityWarningMinutes: nullableNumber(event.target.value)
-                  })}
-                />
-              </label>
-              <label>
-                Escalation automatica, minuti
-                <input
-                  type="number"
-                  min={1}
-                  max={43200}
-                  value={categoryForm.escalationMinutes ?? ''}
-                  onChange={(event) => setCategoryForm({
-                    ...categoryForm,
-                    escalationMinutes: nullableNumber(event.target.value)
                   })}
                 />
               </label>
@@ -695,6 +714,7 @@ export default function TicketConfigurationPage() {
                   type="number"
                   min={1}
                   max={720}
+                  placeholder="Vuoto = solo lo staff"
                   value={categoryForm.reopenWindowHours ?? ''}
                   onChange={(event) => setCategoryForm({
                     ...categoryForm,
@@ -704,15 +724,54 @@ export default function TicketConfigurationPage() {
               </label>
             </div>
 
-            <ResourcePicker
-              label="Ruoli escalation"
-              kind="role"
-              roles={roles}
-              guildId={guildId}
-              multiple
-              value={categoryForm.escalationRoleIds}
-              onChange={(escalationRoleIds) => setCategoryForm({ ...categoryForm, escalationRoleIds })}
-            />
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={categoryForm.escalationEnabled}
+                onChange={(event) => setCategoryForm({
+                  ...categoryForm,
+                  escalationEnabled: event.target.checked,
+                  escalationMinutes: event.target.checked
+                    ? categoryForm.escalationMinutes ?? 60
+                    : categoryForm.escalationMinutes
+                })}
+              />
+              Escalation automatica
+            </label>
+
+            {categoryForm.escalationEnabled ? (
+              <div className="form">
+                <label>
+                  Escalation dopo, minuti dall’apertura
+                  <input
+                    type="number"
+                    required
+                    min={1}
+                    max={43200}
+                    value={categoryForm.escalationMinutes ?? ''}
+                    onChange={(event) => setCategoryForm({
+                      ...categoryForm,
+                      escalationMinutes: nullableNumber(event.target.value)
+                    })}
+                  />
+                </label>
+
+                <ResourcePicker
+                  label="Ruoli escalation"
+                  kind="role"
+                  roles={roles}
+                  guildId={guildId}
+                  multiple
+                  hint="Vuoto = vengono menzionati i ruoli staff della categoria."
+                  value={categoryForm.escalationRoleIds}
+                  onChange={(escalationRoleIds) => setCategoryForm({ ...categoryForm, escalationRoleIds })}
+                />
+              </div>
+            ) : (
+              <p className="muted">
+                Disattivata: nessuna menzione automatica per i ticket aperti da troppo tempo.
+              </p>
+            )}
 
             <label className="checkbox-row">
               <input
@@ -809,6 +868,11 @@ export default function TicketConfigurationPage() {
               </p>
               <p className="muted">
                 Escalation: {category.escalationMinutes ? `${category.escalationMinutes} min` : 'off'} · Riapertura: {category.reopenWindowHours ? `${category.reopenWindowHours}h` : 'off'} · Feedback: {category.feedbackEnabled ? 'on' : 'off'} · Transcript: {category.transcriptAutoGenerate ? 'auto' : 'manuale'}
+              </p>
+              <p className="muted">
+                Ticket chiusi: {category.closedParentCategoryId
+                  ? `spostati in ${channels.find((channel) => channel.id === category.closedParentCategoryId)?.name ?? category.closedParentCategoryId}`
+                  : 'restano nella categoria'}
               </p>
               <div className="actions">
                 <button className="secondary" onClick={() => editCategory(category)}>Modifica</button>
