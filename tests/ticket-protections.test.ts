@@ -1,5 +1,7 @@
 import { test, beforeEach, after } from 'node:test';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
 import { prisma, PrismaClient } from '@dispatch/db';
 import { ChannelType, type Client } from 'discord.js';
@@ -10,6 +12,8 @@ import {
 import { retentionDue, runTicketRetention } from '../apps/bot/src/retention.js';
 import { reopenTicket } from '../apps/bot/src/ticket-operations.js';
 import { handleTicketInteraction, publishMainMenu } from '../apps/bot/src/tickets.js';
+import { panelComponents } from '../apps/bot/src/panels.js';
+import { isHttpsUrl, layoutPanelButtons, normalizePanelItems, parsePanelEmoji } from '@dispatch/shared';
 
 const db = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid/invalid');
 assert.equal(process.env.DISPATCH_TEST_DATABASE, '1', 'Explicit test database opt-in required');
@@ -362,4 +366,131 @@ test('bot database role has only the form privileges the runtime needs', async (
     await assert.rejects(bot.formSubmission.deleteMany({ where: { formId: definition.id } }));
     assert.ok(await prisma.formDefinition.findUnique({ where: { id: definition.id } }));
   } finally { await bot.$disconnect(); }
+});
+
+// Panel customization (migration 20261010120000_panel_customization).
+const PANEL_MIGRATION = resolve('packages/db/prisma/migrations/20261010120000_panel_customization/migration.sql');
+
+test('panel migration backfills FormPanel.formIds from the legacy formId', async () => {
+  const definition = await form();
+  const id = 'cpanellegacyform00000001';
+  // A row as written before the migration: no formIds, style or items.
+  await prisma.$executeRaw`INSERT INTO "FormPanel" ("id", "guildId", "formId", "channelId", "title", "updatedAt")
+    VALUES (${id}, ${G}, ${definition.id}, '990000000000006001', 'Legacy', NOW())`;
+  assert.deepEqual((await prisma.formPanel.findUniqueOrThrow({ where: { id } })).formIds, []);
+  const statements = readFileSync(PANEL_MIGRATION, 'utf8').split(';')
+    .map((chunk) => chunk.slice(Math.max(0, chunk.indexOf('UPDATE'))).trim())
+    .filter((chunk) => chunk.startsWith('UPDATE "FormPanel"'));
+  assert.equal(statements.length, 1);
+  await prisma.$executeRawUnsafe(statements[0]!);
+  const panel = await prisma.formPanel.findUniqueOrThrow({ where: { id } });
+  assert.deepEqual(panel.formIds, [definition.id]);
+  assert.equal(panel.formId, definition.id);
+  assert.equal(panel.style, 'BUTTONS');
+  assert.equal(panel.buttonLabel, 'Compila');
+  assert.deepEqual(panel.items, []);
+  // Idempotent: a second run keeps an already populated list untouched.
+  await prisma.$executeRawUnsafe(statements[0]!);
+  assert.deepEqual((await prisma.formPanel.findUniqueOrThrow({ where: { id } })).formIds, [definition.id]);
+});
+
+test('existing ticket panels keep the select menu look by default', async () => {
+  const id = 'cpanellegacyticket000001';
+  await prisma.$executeRaw`INSERT INTO "TicketPanel" ("id", "guildId", "name", "channelId", "title", "updatedAt")
+    VALUES (${id}, ${G}, 'Legacy', '990000000000006002', 'Legacy', NOW())`;
+  const panel = await prisma.ticketPanel.findUniqueOrThrow({ where: { id } });
+  assert.equal(panel.style, 'SELECT');
+  assert.equal(panel.placeholder, null);
+  assert.equal(panel.color, null);
+  assert.equal(panel.footerText, null);
+  assert.deepEqual(panel.items, []);
+  await assert.rejects(prisma.$executeRaw`UPDATE "TicketPanel" SET "style" = 'GRID' WHERE "id" = ${id}`);
+});
+
+test('panel emoji parsing accepts unicode and custom emoji only', () => {
+  assert.deepEqual(parsePanelEmoji('🎫'), { name: '🎫' });
+  assert.deepEqual(parsePanelEmoji(' 👩🏽‍💻 '), { name: '👩🏽‍💻' });
+  assert.deepEqual(parsePanelEmoji('🇮🇹'), { name: '🇮🇹' });
+  assert.deepEqual(parsePanelEmoji('<:ticket:990000000000007001>'), { name: 'ticket', id: '990000000000007001' });
+  assert.deepEqual(parsePanelEmoji('<a:spin:990000000000007002>'), { name: 'spin', id: '990000000000007002', animated: true });
+  for (const invalid of ['', 'ticket', ':ticket:', '<:x:1>', '<:ticket:abc>', '🎫🎫', 'a🎫', '<@990000000000007003>', null, 42]) {
+    assert.equal(parsePanelEmoji(invalid), null, String(invalid));
+  }
+});
+
+test('panel helpers sanitise overrides, URLs and button layout', () => {
+  const a = 'c'.repeat(24);
+  const b = 'd'.repeat(24);
+  const items = normalizePanelItems([
+    { id: a, label: '  Supporto  ', emoji: 'nope', buttonStyle: 'DANGER', description: 'x'.repeat(150) },
+    { id: a, label: 'duplicate' },
+    { id: 'e'.repeat(24), label: 'not in panel' },
+    'garbage'
+  ], [a, b]);
+  assert.deepEqual(items, [{ id: a, label: 'Supporto', emoji: null, description: 'x'.repeat(100), buttonStyle: 'DANGER' }]);
+  assert.equal(isHttpsUrl('https://cdn.discordapp.com/x.png'), true);
+  assert.equal(isHttpsUrl('http://example.com/x.png'), false);
+  assert.equal(isHttpsUrl('javascript:alert(1)'), false);
+  assert.equal(isHttpsUrl('https://user:pass@example.com/'), false);
+  assert.deepEqual(layoutPanelButtons([1, 2, 3, 4, 5, 6, 7]).map((row) => row.length), [5, 2]);
+  assert.equal(layoutPanelButtons(Array.from({ length: 30 }, (_, index) => index)).flat().length, 25);
+});
+
+test('panel components render select or 5x5 buttons within Discord limits', () => {
+  const panelId = 'p'.repeat(32);
+  const entries = Array.from({ length: 7 }, (_, index) => ({
+    id: String.fromCharCode(97 + index).repeat(32), label: 'Categoria ' + index, description: 'Descrizione ' + index
+  }));
+  const items = [{ id: entries[0]!.id, label: 'Supporto', emoji: '<:help:990000000000007004>', buttonStyle: 'SUCCESS', description: 'Aiuto' }];
+  const base = {
+    placeholder: null, defaultPlaceholder: 'Seleziona una categoria', items, entries,
+    selectCustomId: 'dispatch:open:' + panelId,
+    buttonCustomId: (id: string) => 'dispatch:panel-btn:' + panelId + ':' + id
+  };
+  const select = panelComponents({ ...base, style: 'SELECT' }).map((row) => row.toJSON() as any);
+  assert.equal(select.length, 1);
+  const menu = select[0].components[0];
+  assert.equal(menu.custom_id, 'dispatch:open:' + panelId);
+  assert.equal(menu.placeholder, 'Seleziona una categoria');
+  assert.deepEqual(menu.options.map((option: any) => option.value), entries.map((entry) => entry.id));
+  assert.equal(menu.options[0].label, 'Supporto');
+  assert.equal(menu.options[0].description, 'Aiuto');
+  assert.deepEqual(menu.options[0].emoji, { name: 'help', id: '990000000000007004' });
+  assert.equal(menu.options[1].description, 'Descrizione 1');
+
+  const buttons = panelComponents({ ...base, style: 'BUTTONS' }).map((row) => row.toJSON() as any);
+  assert.deepEqual(buttons.map((row) => row.components.length), [5, 2]);
+  const first = buttons[0].components[0];
+  assert.equal(first.custom_id, 'dispatch:panel-btn:' + panelId + ':' + entries[0]!.id);
+  assert.ok(first.custom_id.length <= 100);
+  assert.equal(first.label, 'Supporto');
+  assert.equal(first.style, 3);
+  assert.equal(buttons[0].components[1].style, 1);
+  assert.equal(buttons[0].components[1].emoji, undefined);
+});
+
+test('ticket panel buttons re-check panel message and category before opening', async () => {
+  const user = '990000000000000004';
+  const included = await category({ name: 'Included' });
+  const excluded = await category({ name: 'Excluded' });
+  const channelId = '990000000000006101';
+  const messageId = '990000000000006102';
+  const panel = await prisma.ticketPanel.create({ data: {
+    guildId: G, name: 'Buttons', channelId, messageId, title: 'Panel', style: 'BUTTONS', categoryIds: [included.id]
+  } });
+  const replies: any[] = [];
+  const interaction = (categoryId: string, message = messageId) => ({
+    customId: 'dispatch:panel-btn:' + panel.id + ':' + categoryId, guildId: G, channelId,
+    user: { id: user }, message: { id: message },
+    isButton: () => true, isStringSelectMenu: () => false, isModalSubmit: () => false,
+    reply: async (payload: unknown) => { replies.push(payload); }
+  });
+  assert.equal(await handleTicketInteraction(interaction(included.id, '990000000000006103') as any), true);
+  assert.match(replies.at(-1).content, /Pannello scaduto/);
+  await handleTicketInteraction(interaction(excluded.id) as any);
+  assert.match(replies.at(-1).content, /non e piu disponibile/);
+  await prisma.ticketCategory.update({ where: { id: included.id }, data: { enabled: false } });
+  await handleTicketInteraction(interaction(included.id) as any);
+  assert.match(replies.at(-1).content, /non e piu disponibile/);
+  assert.equal(await prisma.ticketUserGuard.count({ where: { guildId: G, userId: user } }), 0);
 });
