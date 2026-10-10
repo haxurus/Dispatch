@@ -906,7 +906,7 @@ export async function deleteTicketChannel(client: Client, guildId: string, ticke
         await prisma.$transaction(async (tx) => {
           await lockTicket(tx, ticket.id);
           await tx.ticket.updateMany({
-            where: { id: ticket.id, channelDeletedAt: deletedAt },
+            where: { id: ticket.id, guildId, channelDeletedAt: deletedAt },
             data: { channelDeletedAt: null }
           });
           await tx.ticketAudit.create({
