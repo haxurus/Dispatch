@@ -414,8 +414,8 @@ export default function TicketConfigurationPage() {
       {error && <p className="error">{error}</p>}
       {notice && <p className="success">{notice}</p>}
 
-      <section className="grid settings-grid">
-        <form className="card form" onSubmit={saveCategory}>
+      <section>
+        <form className="card form form-columns" onSubmit={saveCategory}>
           <div className="row">
             <h2>{editingCategoryId ? 'Modifica categoria' : 'Nuova categoria ticket'}</h2>
             {editingCategoryId && (
@@ -792,16 +792,6 @@ export default function TicketConfigurationPage() {
           </button>
         </form>
 
-        <article className="card">
-          <h2>Pannelli di apertura</h2>
-          <p className="muted">
-            I pannelli ticket e form (menu a tendina o pulsanti, embed, emoji e ordine delle categorie) si gestiscono
-            nella sezione dedicata.
-          </p>
-          <div className="actions">
-            <a className="button" href={`/dashboard/${guildId}/panels`}>Vai ai pannelli</a>
-          </div>
-        </article>
       </section>
 
       <section>

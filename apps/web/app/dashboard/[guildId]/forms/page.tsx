@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { type CSSProperties, FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ResourcePicker, { CHANNEL_TYPES } from '../../../_components/ResourcePicker';
 
@@ -302,98 +302,97 @@ export default function FormsPage() {
       {error && <p className="error">{error}</p>}
       {notice && <p className="success">{notice}</p>}
 
-      <section className="grid settings-grid">
-        <form className="card form" onSubmit={save}>
-          <div className="row"><h2>{editingId ? 'Modifica form' : 'Nuovo form'}</h2>{editingId && <button type="button" className="secondary" onClick={() => { setEditingId(null); setForm(emptyForm()); }}>Annulla</button>}</div>
-          <label>Nome<input required maxLength={100} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}/></label>
-          <label>Descrizione<textarea maxLength={2000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></label>
-          <div className="grid compact-grid">
-            <label>Modalità<select value={form.deliveryMode} onChange={(e) => setForm({ ...form, deliveryMode: e.target.value as 'EPHEMERAL' | 'DM' })}><option value="EPHEMERAL">In chat - solo utente</option><option value="DM">Messaggi privati</option></select></label>
-            <label>Apertura (ora locale)<input type="datetime-local" value={form.openAt} onChange={(e) => setForm({ ...form, openAt: e.target.value })}/></label>
-            <label>Chiusura (ora locale)<input type="datetime-local" value={form.closeAt} onChange={(e) => setForm({ ...form, closeAt: e.target.value })}/></label>
-          </div>
-          {!isAdmin && <p className="muted">Canale risultati, ruoli notificati e ticket automatico sono modificabili solo da Admin/Owner.</p>}
-          <ResourcePicker label="Canale risultati" kind="channel" channels={channels}
-            channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]} placeholder="Nessuno" disabled={!isAdmin}
-            value={form.resultChannelId} onChange={(resultChannelId) => setForm({ ...form, resultChannelId })}/>
-          <ResourcePicker label="Ruoli da notificare" kind="role" roles={roles} guildId={guildId} multiple disabled={!isAdmin}
-            value={form.resultRoleIds} onChange={(resultRoleIds) => setForm({ ...form, resultRoleIds })}/>
-          <fieldset><legend>Accesso e anti-spam</legend>
-            <div className="form">
-              <ResourcePicker label="Ruoli autorizzati" kind="role" roles={roles} guildId={guildId} multiple max={20}
-                value={form.allowedRoleIds} onChange={(allowedRoleIds) => setForm({ ...form, allowedRoleIds })}/>
-              <ResourcePicker label="Ruoli esclusi" kind="role" roles={roles} guildId={guildId} multiple max={20}
-                value={form.deniedRoleIds} onChange={(deniedRoleIds) => setForm({ ...form, deniedRoleIds })}/>
+      <form className="card form" onSubmit={save}>
+        <div className="row"><h2>{editingId ? 'Modifica form' : 'Nuovo form'}</h2>{editingId && <button type="button" className="secondary" onClick={() => { setEditingId(null); setForm(emptyForm()); }}>Annulla</button>}</div>
+        <div className="editor-split">
+          <div className="form">
+            <label>Nome<input required maxLength={100} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}/></label>
+            <label>Descrizione<textarea maxLength={2000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></label>
+            <div className="field-row" style={{ '--cols': 3 } as CSSProperties}>
+              <label>Modalità<select value={form.deliveryMode} onChange={(e) => setForm({ ...form, deliveryMode: e.target.value as 'EPHEMERAL' | 'DM' })}><option value="EPHEMERAL">In chat - solo utente</option><option value="DM">Messaggi privati</option></select></label>
+              <label>Apertura (ora locale)<input type="datetime-local" value={form.openAt} onChange={(e) => setForm({ ...form, openAt: e.target.value })}/></label>
+              <label>Chiusura (ora locale)<input type="datetime-local" value={form.closeAt} onChange={(e) => setForm({ ...form, closeAt: e.target.value })}/></label>
             </div>
-            <div className="grid compact-grid">
-              <label>Invii massimi per utente<input type="number" min={0} max={1000} value={form.maxSubmissionsPerUser} onChange={(e) => setForm({ ...form, maxSubmissionsPerUser: Number(e.target.value) })}/></label>
-              <label>Cooldown secondi<input type="number" min={0} max={2592000} value={form.cooldownSeconds} onChange={(e) => setForm({ ...form, cooldownSeconds: Number(e.target.value) })}/></label>
-              <label>Finestra tentativi minuti<input type="number" min={1} max={10080} value={form.submissionWindowMinutes} onChange={(e) => setForm({ ...form, submissionWindowMinutes: Number(e.target.value) })}/></label>
-              <label>Tentativi massimi<input type="number" min={1} max={100} value={form.maxAttemptsPerWindow} onChange={(e) => setForm({ ...form, maxAttemptsPerWindow: Number(e.target.value) })}/></label>
+            {!isAdmin && <p className="muted">Canale risultati, ruoli notificati e ticket automatico sono modificabili solo da Admin/Owner.</p>}
+            <div className="field-row">
+              <ResourcePicker label="Canale risultati" kind="channel" channels={channels}
+                channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]} placeholder="Nessuno" disabled={!isAdmin}
+                value={form.resultChannelId} onChange={(resultChannelId) => setForm({ ...form, resultChannelId })}/>
+              <ResourcePicker label="Ruoli da notificare" kind="role" roles={roles} guildId={guildId} multiple disabled={!isAdmin}
+                value={form.resultRoleIds} onChange={(resultRoleIds) => setForm({ ...form, resultRoleIds })}/>
             </div>
-          </fieldset>
-
-          <fieldset><legend>Domande - massimo 25</legend>
-            {form.questions.map((q, index) => <div className="subcard form" key={q.clientKey}>
-              <div className="row"><strong>Domanda {index + 1}</strong><button type="button" className="danger" onClick={() => removeQuestion(index)}>Rimuovi</button></div>
-              <label>ID<input required maxLength={40} value={q.id} onChange={(e) => updateQuestion(index, { id: e.target.value })}/></label>
-              <label>Domanda<input required maxLength={100} value={q.label} onChange={(e) => updateQuestion(index, { label: e.target.value })}/></label>
-              <label>Descrizione<textarea maxLength={500} value={q.description ?? ''} onChange={(e) => updateQuestion(index, { description: e.target.value || null })}/></label>
-              <label>Tipo<select value={q.type} onChange={(e) => {
-                const type = e.target.value as QuestionType;
-                updateQuestion(index, {
-                  type,
-                  optionsText: isSelectType(type) ? q.optionsText : '',
-                  options: isSelectType(type) ? q.options : [],
-                  maxLength: TEXT_TYPES.includes(type) ? (q.maxLength ?? 1000) : null,
-                  minLength: TEXT_TYPES.includes(type) ? q.minLength : null
-                });
-              }}>
-                <option value="SHORT_TEXT">Testo breve</option><option value="LONG_TEXT">Testo lungo</option><option value="INTEGER">Intero</option><option value="NUMBER">Numero</option>
-                <option value="EMAIL">Email</option><option value="URL">URL</option><option value="DATE">Data</option><option value="BOOLEAN">Sì/No</option>
-                <option value="SINGLE_SELECT">Scelta singola</option><option value="MULTI_SELECT">Scelta multipla</option><option value="DISCORD_ID">ID Discord</option>
-              </select></label>
-              {isSelectType(q.type) && <label>Opzioni, una per riga: Etichetta|valore<textarea value={q.optionsText} onChange={(e) => updateQuestion(index, { optionsText: e.target.value })} onBlur={() => commitOptions(index)}/></label>}
-              {q.type === 'MULTI_SELECT' && <div className="grid compact-grid">
-                <label>Selezioni minime<input type="number" min={0} max={25} value={q.minSelections ?? ''} onChange={(e) => updateQuestion(index, { minSelections: nullableNumber(e.target.value) })}/></label>
-                <label>Selezioni massime<input type="number" min={1} max={25} value={q.maxSelections ?? ''} onChange={(e) => updateQuestion(index, { maxSelections: nullableNumber(e.target.value) })}/></label>
-              </div>}
-              <label className="checkbox-row"><input type="checkbox" checked={q.required} onChange={(e) => updateQuestion(index, { required: e.target.checked })}/>Obbligatoria</label>
-            </div>)}
-            <button type="button" className="secondary" disabled={form.questions.length >= 25} onClick={addQuestion}>Aggiungi domanda</button>
-          </fieldset>
-
-          <fieldset disabled={!isAdmin}><legend>Ticket automatico dopo invio</legend>
-            <label className="checkbox-row"><input type="checkbox" checked={form.createTicketOnSubmit} onChange={(e) => setForm({ ...form, createTicketOnSubmit: e.target.checked })}/>Crea canale privato con report, compilatore e staff</label>
-            {form.createTicketOnSubmit && <>
-              <div className="form">
-                <ResourcePicker label="Categoria ticket Dispatch" kind="item" items={ticketCategories} required
-                  placeholder="Seleziona..." disabled={!isAdmin}
-                  value={form.ticketCategoryId} onChange={(ticketCategoryId) => setForm({ ...form, ticketCategoryId })}/>
-                <ResourcePicker label="Categoria Discord override" kind="channel" channels={channels}
-                  channelTypes={[CHANNEL_TYPES.category]} placeholder="Usa quella della categoria ticket" disabled={!isAdmin}
-                  value={form.ticketParentCategoryId} onChange={(ticketParentCategoryId) => setForm({ ...form, ticketParentCategoryId })}/>
-                <ResourcePicker label="Ruoli staff" kind="role" roles={roles} guildId={guildId} multiple max={20} disabled={!isAdmin}
-                  value={form.ticketStaffRoleIds} onChange={(ticketStaffRoleIds) => setForm({ ...form, ticketStaffRoleIds })}/>
+            <fieldset><legend>Accesso e anti-spam</legend>
+              <div className="field-row">
+                <ResourcePicker label="Ruoli autorizzati" kind="role" roles={roles} guildId={guildId} multiple max={20}
+                  value={form.allowedRoleIds} onChange={(allowedRoleIds) => setForm({ ...form, allowedRoleIds })}/>
+                <ResourcePicker label="Ruoli esclusi" kind="role" roles={roles} guildId={guildId} multiple max={20}
+                  value={form.deniedRoleIds} onChange={(deniedRoleIds) => setForm({ ...form, deniedRoleIds })}/>
               </div>
-              <label>Prefisso canale<input value={form.ticketPrefix} onChange={(e) => setForm({ ...form, ticketPrefix: e.target.value })}/></label>
-            </>}
-          </fieldset>
-          <label className="checkbox-row"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })}/>Form abilitato</label>
-          <button disabled={busy === 'form' || (!editingId && !isAdmin)} type="submit">
-            {editingId ? 'Salva modifiche' : isAdmin ? 'Crea form' : 'Solo Admin/Owner può creare nuovi form'}
-          </button>
-        </form>
+              <div className="field-row" style={{ '--cols': 4 } as CSSProperties}>
+                <label>Invii massimi per utente<input type="number" min={0} max={1000} value={form.maxSubmissionsPerUser} onChange={(e) => setForm({ ...form, maxSubmissionsPerUser: Number(e.target.value) })}/></label>
+                <label>Cooldown secondi<input type="number" min={0} max={2592000} value={form.cooldownSeconds} onChange={(e) => setForm({ ...form, cooldownSeconds: Number(e.target.value) })}/></label>
+                <label>Finestra tentativi minuti<input type="number" min={1} max={10080} value={form.submissionWindowMinutes} onChange={(e) => setForm({ ...form, submissionWindowMinutes: Number(e.target.value) })}/></label>
+                <label>Tentativi massimi<input type="number" min={1} max={100} value={form.maxAttemptsPerWindow} onChange={(e) => setForm({ ...form, maxAttemptsPerWindow: Number(e.target.value) })}/></label>
+              </div>
+            </fieldset>
 
-        {isAdmin && <article className="card">
-          <h2>Pannelli form</h2>
-          <p className="muted">
-            I pannelli che pubblicano uno o più form su Discord (pulsanti o menu a tendina, embed ed emoji) si gestiscono
-            nella sezione Pannelli.
-          </p>
-          <div className="actions"><a className="button" href={`/dashboard/${guildId}/panels`}>Vai ai pannelli</a></div>
-        </article>}
-      </section>
+            <fieldset disabled={!isAdmin}><legend>Ticket automatico dopo invio</legend>
+              <label className="checkbox-row"><input type="checkbox" checked={form.createTicketOnSubmit} onChange={(e) => setForm({ ...form, createTicketOnSubmit: e.target.checked })}/>Crea canale privato con report, compilatore e staff</label>
+              {form.createTicketOnSubmit && <>
+                <div className="form">
+                  <ResourcePicker label="Categoria ticket Dispatch" kind="item" items={ticketCategories} required
+                    placeholder="Seleziona..." disabled={!isAdmin}
+                    value={form.ticketCategoryId} onChange={(ticketCategoryId) => setForm({ ...form, ticketCategoryId })}/>
+                  <ResourcePicker label="Categoria Discord override" kind="channel" channels={channels}
+                    channelTypes={[CHANNEL_TYPES.category]} placeholder="Usa quella della categoria ticket" disabled={!isAdmin}
+                    value={form.ticketParentCategoryId} onChange={(ticketParentCategoryId) => setForm({ ...form, ticketParentCategoryId })}/>
+                  <ResourcePicker label="Ruoli staff" kind="role" roles={roles} guildId={guildId} multiple max={20} disabled={!isAdmin}
+                    value={form.ticketStaffRoleIds} onChange={(ticketStaffRoleIds) => setForm({ ...form, ticketStaffRoleIds })}/>
+                </div>
+                <label>Prefisso canale<input value={form.ticketPrefix} onChange={(e) => setForm({ ...form, ticketPrefix: e.target.value })}/></label>
+              </>}
+            </fieldset>
+          </div>
+          <div className="form">
+            <fieldset><legend>Domande ({form.questions.length}/25)</legend>
+              {form.questions.map((q, index) => <div className="subcard form" key={q.clientKey}>
+                <div className="row"><strong>Domanda {index + 1}</strong><button type="button" className="danger" onClick={() => removeQuestion(index)}>Rimuovi</button></div>
+                <div className="field-row" style={{ '--cols': 2 } as CSSProperties}>
+                  <label>ID<input required maxLength={40} value={q.id} onChange={(e) => updateQuestion(index, { id: e.target.value })}/></label>
+                  <label>Domanda<input required maxLength={100} value={q.label} onChange={(e) => updateQuestion(index, { label: e.target.value })}/></label>
+                </div>
+                <label>Descrizione<textarea maxLength={500} value={q.description ?? ''} onChange={(e) => updateQuestion(index, { description: e.target.value || null })}/></label>
+                <label>Tipo<select value={q.type} onChange={(e) => {
+                  const type = e.target.value as QuestionType;
+                  updateQuestion(index, {
+                    type,
+                    optionsText: isSelectType(type) ? q.optionsText : '',
+                    options: isSelectType(type) ? q.options : [],
+                    maxLength: TEXT_TYPES.includes(type) ? (q.maxLength ?? 1000) : null,
+                    minLength: TEXT_TYPES.includes(type) ? q.minLength : null
+                  });
+                }}>
+                  <option value="SHORT_TEXT">Testo breve</option><option value="LONG_TEXT">Testo lungo</option><option value="INTEGER">Intero</option><option value="NUMBER">Numero</option>
+                  <option value="EMAIL">Email</option><option value="URL">URL</option><option value="DATE">Data</option><option value="BOOLEAN">Sì/No</option>
+                  <option value="SINGLE_SELECT">Scelta singola</option><option value="MULTI_SELECT">Scelta multipla</option><option value="DISCORD_ID">ID Discord</option>
+                </select></label>
+                {isSelectType(q.type) && <label>Opzioni, una per riga: Etichetta|valore<textarea value={q.optionsText} onChange={(e) => updateQuestion(index, { optionsText: e.target.value })} onBlur={() => commitOptions(index)}/></label>}
+                {q.type === 'MULTI_SELECT' && <div className="grid compact-grid">
+                  <label>Selezioni minime<input type="number" min={0} max={25} value={q.minSelections ?? ''} onChange={(e) => updateQuestion(index, { minSelections: nullableNumber(e.target.value) })}/></label>
+                  <label>Selezioni massime<input type="number" min={1} max={25} value={q.maxSelections ?? ''} onChange={(e) => updateQuestion(index, { maxSelections: nullableNumber(e.target.value) })}/></label>
+                </div>}
+                <label className="checkbox-row"><input type="checkbox" checked={q.required} onChange={(e) => updateQuestion(index, { required: e.target.checked })}/>Obbligatoria</label>
+              </div>)}
+              <button type="button" className="secondary" disabled={form.questions.length >= 25} onClick={addQuestion}>Aggiungi domanda</button>
+            </fieldset>
+
+          </div>
+        </div>
+        <label className="checkbox-row"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })}/>Form abilitato</label>
+        <button disabled={busy === 'form' || (!editingId && !isAdmin)} type="submit">
+            {editingId ? 'Salva modifiche' : isAdmin ? 'Crea form' : 'Solo Admin/Owner può creare nuovi form'}
+        </button>
+      </form>
 
       <section><h2>Form configurati</h2><div className="grid">{forms.map((row) => <article className="card" key={row.id}>
         <h3>{row.name}</h3><p>{row.description || 'Nessuna descrizione.'}</p>
