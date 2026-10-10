@@ -24,6 +24,7 @@ function navItems(guildId: string): NavItem[] {
     { key: 'manage', href: `${base}/tickets/manage`, label: 'Ticket', icon: 'inbox' },
     { key: 'tickets', href: `${base}/tickets`, label: 'Configurazione ticket', icon: 'ticket' },
     { key: 'system', href: `${base}/tickets/system`, label: 'Sistema e menu', icon: 'sliders' },
+    { key: 'panels', href: `${base}/panels`, label: 'Pannelli', icon: 'panel' },
     { key: 'forms', href: `${base}/forms`, label: 'Form', icon: 'clipboard' },
     { key: 'analytics', href: `${base}/tickets/analytics`, label: 'Analytics', icon: 'chart' },
     { key: 'security', href: `${base}/tickets/security`, label: 'Blacklist', icon: 'ban' }
@@ -35,6 +36,7 @@ function activeKey(pathname: string, guildId: string) {
   const rest = pathname.replace(`/dashboard/${guildId}`, '').split('/').filter(Boolean);
   if (rest.length === 0) return 'overview';
   if (rest[0] === 'forms') return 'forms';
+  if (rest[0] === 'panels') return 'panels';
   if (rest[0] === 'tickets') {
     if (rest.length === 1) return 'tickets';
     const sub = rest[1]!;
