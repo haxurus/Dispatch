@@ -144,7 +144,8 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
               name: role.name,
               color: role.color,
               position: role.position,
-              permissions: role.permissions.bitfield.toString()
+              permissions: role.permissions.bitfield.toString(),
+              managed: role.managed
             }))
             .sort((a, b) => b.position - a.position)
         }));
