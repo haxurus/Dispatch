@@ -24,7 +24,7 @@ type FormDef = {
   resultChannelId: string | null; resultRoleIds: string[]; allowedRoleIds: string[]; deniedRoleIds: string[];
   maxSubmissionsPerUser: number; cooldownSeconds: number; submissionWindowMinutes: number; maxAttemptsPerWindow: number;
   createTicketOnSubmit: boolean; ticketCategoryId: string | null; ticketParentCategoryId: string | null;
-  ticketStaffRoleIds: string[]; ticketPrefix: string;
+  ticketClosedParentCategoryId: string | null; ticketStaffRoleIds: string[]; ticketPrefix: string;
 };
 type Permission = {
   id: string; discordRoleId: string; canManage: boolean; canView: boolean; canReview: boolean; canSubmit: boolean;
@@ -115,7 +115,7 @@ const emptyForm = () => ({
   openAt: '', closeAt: '', deliveryMode: 'EPHEMERAL' as 'EPHEMERAL' | 'DM', resultChannelId: '',
   resultRoleIds: [] as string[], allowedRoleIds: [] as string[], deniedRoleIds: [] as string[],
   maxSubmissionsPerUser: 1, cooldownSeconds: 300, submissionWindowMinutes: 60, maxAttemptsPerWindow: 5,
-  createTicketOnSubmit: false, ticketCategoryId: '', ticketParentCategoryId: '',
+  createTicketOnSubmit: false, ticketCategoryId: '', ticketParentCategoryId: '', ticketClosedParentCategoryId: '',
   ticketStaffRoleIds: [] as string[], ticketPrefix: 'form'
 });
 
@@ -124,7 +124,9 @@ const nullableNumber = (value: string) => value === '' ? null : Number(value);
 const errorMessages: Record<string, string> = {
   FORM_FIELD_ADMIN_ONLY: 'Canale risultati, ruoli notificati e impostazioni ticket possono essere modificati solo da Admin/Owner.',
   FORBIDDEN: 'Permessi insufficienti per questa operazione.',
-  FORM_IN_USE: 'Il form ha già invii e non può essere eliminato.'
+  FORM_IN_USE: 'Il form ha già invii e non può essere eliminato.',
+  TICKET_PARENT_NOT_FOUND: 'La categoria Discord override non è una categoria del server.',
+  TICKET_CLOSED_PARENT_NOT_FOUND: 'La categoria Discord per i ticket chiusi non è una categoria del server.'
 };
 
 export default function FormsPage() {
@@ -201,6 +203,7 @@ export default function FormsPage() {
       createTicketOnSubmit: row.createTicketOnSubmit,
       ticketCategoryId: row.ticketCategoryId ?? '',
       ticketParentCategoryId: row.ticketParentCategoryId ?? '',
+      ticketClosedParentCategoryId: row.ticketClosedParentCategoryId ?? '',
       ticketStaffRoleIds: row.ticketStaffRoleIds ?? [],
       ticketPrefix: row.ticketPrefix
     });
@@ -224,7 +227,8 @@ export default function FormsPage() {
             closeAt: localInputToIso(form.closeAt),
             resultChannelId: form.resultChannelId || null,
             ticketCategoryId: form.ticketCategoryId || null,
-            ticketParentCategoryId: form.ticketParentCategoryId || null
+            ticketParentCategoryId: form.ticketParentCategoryId || null,
+            ticketClosedParentCategoryId: form.ticketClosedParentCategoryId || null
           })
         }
       );
@@ -346,6 +350,10 @@ export default function FormsPage() {
                   <ResourcePicker label="Categoria Discord override" kind="channel" channels={channels}
                     channelTypes={[CHANNEL_TYPES.category]} placeholder="Usa quella della categoria ticket" disabled={!isAdmin}
                     value={form.ticketParentCategoryId} onChange={(ticketParentCategoryId) => setForm({ ...form, ticketParentCategoryId })}/>
+                  <ResourcePicker label="Categoria Discord per i ticket chiusi (override)" kind="channel" channels={channels}
+                    channelTypes={[CHANNEL_TYPES.category]} placeholder="Usa quella della categoria ticket" disabled={!isAdmin}
+                    hint="Alla chiusura i ticket creati da questo form vengono spostati qui invece che nella categoria dei ticket chiusi della categoria ticket."
+                    value={form.ticketClosedParentCategoryId} onChange={(ticketClosedParentCategoryId) => setForm({ ...form, ticketClosedParentCategoryId })}/>
                   <ResourcePicker label="Ruoli staff" kind="role" roles={roles} guildId={guildId} multiple max={20} disabled={!isAdmin}
                     value={form.ticketStaffRoleIds} onChange={(ticketStaffRoleIds) => setForm({ ...form, ticketStaffRoleIds })}/>
                 </div>

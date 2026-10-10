@@ -86,6 +86,7 @@ type TicketDetail = {
   slaResolutionBreachedAt: string | null;
   createdAt: string;
   closedAt: string | null;
+  channelDeletedAt: string | null;
   category: Category;
   members: TicketMember[];
   notes: TicketNote[];
@@ -315,6 +316,16 @@ export default function TicketDetailPage() {
   }
 
   const closed = ticket.status === 'CLOSED' || ticket.status === 'REOPENING';
+  const channelDeleted = Boolean(ticket.channelDeletedAt);
+
+  const deleteChannel = async () => {
+    if (!window.confirm(
+      `Eliminare definitivamente il canale Discord del ticket #${ticket.ticketNumber}? ` +
+      'Il transcript viene prima generato o consegnato secondo le impostazioni della categoria. ' +
+      'Il ticket resta nello storico ma non potrà più essere riaperto.'
+    )) return;
+    await action('delete-channel', `/backend/api/guilds/${guildId}/tickets/${ticketId}/delete-channel`);
+  };
 
   return (
     <main className="shell">
@@ -324,18 +335,21 @@ export default function TicketDetailPage() {
           <h1>#{ticket.ticketNumber} · {ticket.category.name}</h1>
           <p className="muted">
             Stato: {ticket.status} · Priorità: {ticket.priority} · Utente: {ticket.openerId}
+            {channelDeleted && ' · Canale eliminato'}
           </p>
         </div>
         <div className="actions">
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/manage`}>Tutti i ticket</a>
-          <a
-            className="button secondary"
-            href={`https://discord.com/channels/${guildId}/${ticket.channelId}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Apri Discord
-          </a>
+          {!channelDeleted && (
+            <a
+              className="button secondary"
+              href={`https://discord.com/channels/${guildId}/${ticket.channelId}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Apri Discord
+            </a>
+          )}
         </div>
       </div>
 
@@ -520,7 +534,7 @@ export default function TicketDetailPage() {
           </p>
           <div className="actions">
             <button
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || channelDeleted}
               onClick={() => void action(
                 'transcript',
                 `/backend/api/guilds/${guildId}/tickets/${ticketId}/transcript`
@@ -675,15 +689,33 @@ export default function TicketDetailPage() {
         {closed ? (
           <>
             <p><strong>Motivo:</strong> {ticket.closeReason || 'Nessun motivo indicato.'}</p>
-            <button
-              disabled={Boolean(busy)}
-              onClick={() => void action(
-                'reopen',
-                `/backend/api/guilds/${guildId}/tickets/${ticketId}/reopen`
-              )}
-            >
-              Riapri ticket
-            </button>
+            {channelDeleted ? (
+              <p className="notice notice-warn">
+                Canale eliminato il {new Date(ticket.channelDeletedAt!).toLocaleString()}: il ticket resta nello
+                storico fino alla retention ma non può più essere riaperto.
+              </p>
+            ) : (
+              <div className="actions">
+                <button
+                  disabled={Boolean(busy)}
+                  onClick={() => void action(
+                    'reopen',
+                    `/backend/api/guilds/${guildId}/tickets/${ticketId}/reopen`
+                  )}
+                >
+                  Riapri ticket
+                </button>
+                {ticket.status === 'CLOSED' && (
+                  <button
+                    className="danger"
+                    disabled={Boolean(busy)}
+                    onClick={() => void deleteChannel()}
+                  >
+                    {busy === 'delete-channel' ? 'Eliminazione...' : 'Elimina canale'}
+                  </button>
+                )}
+              </div>
+            )}
           </>
         ) : (
           <>

@@ -16,6 +16,7 @@ type TicketRow = {
   transcript: { messageCount: number; createdAt: string } | null;
   createdAt: string;
   closedAt: string | null;
+  channelDeletedAt?: string | null;
 };
 
 export default function TicketManagementPage() {
@@ -94,13 +95,16 @@ export default function TicketManagementPage() {
             </div>
             <div>
               <span className="badge">{ticket.status}</span>
+              {ticket.channelDeletedAt && <span className="badge">Canale eliminato</span>}
               <div className="muted">
                 {ticket.claimedById ? `Staff: ${ticket.claimedById}` : 'Non assegnato'}
               </div>
             </div>
             <div className="actions">
               <a className="button" href={`/dashboard/${guildId}/tickets/${ticket.id}`}>Apri</a>
-              <a className="button secondary" href={`https://discord.com/channels/${guildId}/${ticket.channelId}`} target="_blank" rel="noreferrer">Discord</a>
+              {!ticket.channelDeletedAt && (
+                <a className="button secondary" href={`https://discord.com/channels/${guildId}/${ticket.channelId}`} target="_blank" rel="noreferrer">Discord</a>
+              )}
             </div>
           </article>
         ))}
