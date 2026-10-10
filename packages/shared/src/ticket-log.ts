@@ -14,6 +14,7 @@ export const TICKET_LOG_EVENTS = [
   'TICKET_DELETE',
   'TICKET_TRANSCRIPT',
   'TICKET_FEEDBACK',
+  'TICKET_STAFF_THREAD',
   'TICKET_AUTOMATION',
   'FORM_SUBMISSION',
   'BLACKLIST'
@@ -33,6 +34,7 @@ export const TICKET_LOG_EVENT_INFO: readonly TicketLogEventInfo[] = [
   { key: 'TICKET_DELETE', label: 'Eliminazione canale', description: 'Canale eliminato dallo staff o dalla retention.' },
   { key: 'TICKET_TRANSCRIPT', label: 'Transcript', description: 'Generazione manuale o consegna automatica del transcript.' },
   { key: 'TICKET_FEEDBACK', label: 'Feedback', description: 'Valutazione 1-5 inviata dall’utente (mai il commento).' },
+  { key: 'TICKET_STAFF_THREAD', label: 'Thread staff', description: 'Thread privato dello staff creato e transcript del thread inviato (mai il contenuto).' },
   { key: 'TICKET_AUTOMATION', label: 'Automazioni', description: 'SLA superati, escalation, preavviso e chiusura per inattività.' },
   { key: 'FORM_SUBMISSION', label: 'Invii form', description: 'Nome del form, utente, ID invio ed eventuale ticket (mai le risposte).' },
   { key: 'BLACKLIST', label: 'Blacklist', description: 'Utente aggiunto o rimosso dalla blacklist dalla dashboard.' }

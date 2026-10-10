@@ -82,7 +82,8 @@ In **Sistema e menu** la scheda **Log ticket** sceglie un canale testuale o di a
 | `TICKET_REOPEN` | riapertura |
 | `TICKET_DELETE` | canale eliminato dallo staff o dalla retention |
 | `TICKET_TRANSCRIPT` | generazione manuale e consegna automatica |
-| `TICKET_FEEDBACK` | valutazione 1-5, mai il commento |
+| `TICKET_FEEDBACK` | valutazione 1-5 e moderatore valutato, mai il commento |
+| `TICKET_STAFF_THREAD` | thread staff creato, transcript del thread inviato (mai il contenuto) |
 | `TICKET_AUTOMATION` | SLA superati, escalation, preavviso e chiusura per inattività |
 | `FORM_SUBMISSION` | nome del form, utente, ID invio, ticket collegato; mai le risposte |
 | `BLACKLIST` | aggiunta o rimozione dalla dashboard |
@@ -90,6 +91,56 @@ In **Sistema e menu** la scheda **Log ticket** sceglie un canale testuale o di a
 Ogni evento è un embed compatto (titolo, ticket e canale, autore con ID, categoria, dati specifici, data) inviato con `allowedMentions: { parse: [] }`. I campi cifrati (motivo di chiusura, risposte dei form, note, commento del feedback) non vengono mai pubblicati. L'invio è best effort: errori di Discord o di configurazione vengono registrati nel log del bot con il solo codice e non interrompono mai l'azione sul ticket. Le impostazioni sono lette con una cache di 30 secondi; **Invia messaggio di prova** (`POST /api/guilds/:guildId/ticket-log/test`, Admin) salva, ricarica la configurazione e restituisce codici stabili (`TICKET_LOG_CHANNEL_REQUIRED`, `TICKET_LOG_CHANNEL_INVALID`, `TICKET_LOG_SEND_FAILED`).
 
 Gli eventi `BLACKLIST` nascono nell'API: dopo la modifica l'API invia al bot (`POST /guilds/:guildId/ticket-log/event`) solo un payload strutturato `{ event: 'BLACKLIST', action: 'add' | 'remove', targetUserId, actorId, expiresAt? }`. Il bot rifiuta qualunque altra chiave o testo libero (`INVALID_TICKET_LOG_EVENT`): il motivo della blacklist non viene mai inviato.
+
+## Valutazioni attribuite al moderatore
+
+Migrazione `20261012100000_ratings_leaderboard_threads`. Prima gli analytics attribuivano feedback e chiusure al `claimedById` *attuale*, che viene azzerato da rilascio e riapertura. Ora l'attribuzione viene fissata nel momento in cui avviene:
+
+- **Chiusura** (modulo Discord, dashboard, chiusura automatica): `Ticket.closedById` = chi ha chiuso, solo se ha accesso staff alla categoria (ruoli staff, Gestisci server o Gestisci canali; verificato dal bot sul membro Discord, anche per le chiusure dalla dashboard). Mai l'utente che ha aperto il ticket (anche se ha un ruolo staff) né il bot (chiusura per inattività). `Ticket.handledById` = claimer al momento della chiusura, altrimenti `closedById`, altrimenti `NULL`. La riapertura azzera entrambi; la chiusura successiva li ricalcola.
+- **Feedback**: `TicketFeedback.staffUserId` = claimer del ticket chiuso, altrimenti `closedById`, altrimenti `NULL` (non attribuito). Il valore resta anche se in seguito il claim cambia.
+- Il messaggio di chiusura nomina il moderatore («Valuta l’assistenza ricevuta da @moderatore», menzione **senza** notifica: `allowedMentions: { parse: [] }`), oppure il testo generico se il ticket non è attribuito.
+- Analytics (`GET /api/guilds/:guildId/analytics`): nella tabella staff `closures` conta i ticket con `handledById` = moderatore e `averageRating`/`feedbackCount` usano `staffUserId`. Gli altri campi restano invariati.
+- Backfill: i feedback esistenti vengono attribuiti al claimer attuale del ticket (ciò che gli analytics mostravano finora) e i ticket già chiusi ricevono `handledById` = claimer. Valori non snowflake restano `NULL`; vincoli `CHECK` snowflake sulle nuove colonne.
+
+## Classifica moderatori
+
+Nella pagina **Analytics** la sezione **Classifica moderatori** mostra (livello Moderator o superiore, come gli analytics) la classifica della settimana o del mese corrente/precedente. Per periodo `[inizio, fine)` e per moderatore:
+
+- **ticket gestiti**: ticket chiusi nel periodo con `handledById` = moderatore;
+- **valutazione media** e numero di valutazioni: feedback creati nel periodo con `staffUserId` = moderatore; la media conta solo con almeno `leaderboardMinRatings` valutazioni (0..50, predefinito 3), altrimenti è mostrata come «—»;
+- **prima risposta**: mediana dei tempi dei ticket in cui il moderatore è stato il primo a rispondere (audit `ticket.first_staff_response` nel periodo);
+- **claim**: claim e assegnazioni nel periodo.
+
+Ordine: ticket gestiti, poi valutazione media (chi non raggiunge il minimo sta sotto chi lo raggiunge), poi numero di valutazioni, poi ID; a parità completa la posizione è condivisa (1, 1, 3). Ranking e periodi sono funzioni pure in `@dispatch/shared` (`rankLeaderboard`, `leaderboardPeriod`, `dueLeaderboardPeriods`): settimane ISO 8601 (chiave `2026-W41`; la settimana appartiene all'anno del suo giovedì, quindi 28/12/2026-03/01/2027 è `2026-W53`) e mesi di calendario (chiave `2026-09`), con mezzanotte locale nel fuso del server (`GuildSettings.timezone`, predefinito `Europe/Rome`, API `Intl`, nessuna dipendenza): la settimana del cambio d'ora dura 7 giorni ± 1 ora.
+
+### Pubblicazione automatica
+
+Scheda **Pubblicazione della classifica** (Admin/Owner): canale testuale o di annunci (`leaderboardChannelId`), classifica settimanale e/o mensile, giorno della settimana (`leaderboardWeekday`, 1 = lunedì) e ora (`leaderboardHour`, 0..23) nel fuso del server, numero di moderatori (`leaderboardSize`, 3..25) e valutazioni minime. API: `GET/PUT /api/guilds/:guildId/leaderboard/settings` (Admin; `LEADERBOARD_CHANNEL_NOT_FOUND` se il canale non è testuale o di annunci del server), anteprima `GET /api/guilds/:guildId/leaderboard?period=week|month&offset=0` (Moderator), **Invia ora** `POST /api/guilds/:guildId/leaderboard/send` `{ period, offset }` (Admin; RPC del bot `POST /guilds/:guildId/leaderboard/send`, codici `LEADERBOARD_CHANNEL_REQUIRED`, `LEADERBOARD_CHANNEL_INVALID`, `LEADERBOARD_SEND_FAILED`). «Invia ora» pubblica il periodo mostrato nell'anteprima e non modifica la pianificazione.
+
+Il bot controlla ogni 15 minuti (e all'avvio; cicli mai sovrapposti, errori isolati per server). Quando l'ora locale ha superato (giorno, ora) della settimana corrente pubblica la settimana precedente; quando ha superato (giorno 1, ora) del mese corrente, il mese precedente. Prima di pubblicare, la chiave del periodo (`leaderboardLastWeekly` / `leaderboardLastMonthly`) viene prenotata con un aggiornamento condizionale sul valore precedente: riavvii e due processi del bot non pubblicano mai due volte lo stesso periodo; se Discord rifiuta l'invio la chiave viene ripristinata e il ciclo successivo riprova. Un bot offline all'orario pubblica in ritardo lo stesso periodo. Abilitando la pianificazione dopo l'orario della settimana corrente, la settimana precedente viene pubblicata al ciclo successivo. Un periodo senza ticket gestiti produce il breve messaggio «Nessun ticket gestito in questo periodo» e viene comunque segnato come pubblicato.
+
+L'embed («Classifica moderatori — settimana dal 5 all’11 ottobre 2026» / «— settembre 2026») ha medaglie per i primi tre e una riga per moderatore: menzione, ticket gestiti, ⭐ media (numero di valutazioni), prima risposta. Le menzioni non notificano nessuno (`allowedMentions: { parse: [] }`).
+
+## Thread staff privati
+
+I controlli del ticket hanno una seconda riga con **Thread staff** (`dispatch:staff-thread:<ticketId>`). Il pulsante è riservato allo staff della categoria (ruoli staff, Gestisci server o Gestisci canali; mai l'utente che ha aperto il ticket, anche se ha un ruolo staff) e ai ticket attivi (non chiusi, non in riapertura, canale non eliminato). Al primo click il bot crea un thread **privato** (`staff-NNNN`, non invitabile, archiviazione automatica dopo una settimana di inattività), vi aggiunge chi ha premuto, pubblica una breve introduzione senza menzioni e salva `Ticket.staffThreadId` con un aggiornamento condizionale (due click contemporanei non creano due thread). I click successivi aggiungono il membro dello staff al thread esistente (riattivandolo se archiviato) e rispondono in privato con il link. L'utente e i partecipanti non vengono mai aggiunti. I ticket aperti prima di questa versione non hanno il pulsante nel messaggio iniziale.
+
+Permessi del canale ticket:
+
+- `@everyone`, utente e partecipanti: thread negati come prima (creazione pubblica/privata e invio nei thread).
+- Ruoli staff: possono scrivere nei thread (`SendMessagesInThreads`), non crearli.
+- Bot: `CreatePrivateThreads`, `SendMessagesInThreads`, `ManageThreads` sul proprio override.
+
+Discord permette al bot di concedere negli override solo i permessi che possiede: per questo il link di installazione richiede ora **Gestisci thread**, **Crea thread privati** e **Invia messaggi nei thread** (bitfield `361045814288`, vedi [DEPLOYMENT.md](DEPLOYMENT.md)). I nuovi canali ricevono i permessi dei thread solo se il ruolo del bot li possiede; per i ticket esistenti gli override di staff e bot vengono aggiornati alla creazione del primo thread. Se i permessi mancano il pulsante risponde «Il bot non ha i permessi per creare thread privati: aggiorna i permessi del suo ruolo» e l'audit registra `ticket.staff_thread.missing_permissions`. Un membro con Gestisci thread a livello di server può comunque vedere i thread privati: non concederlo agli utenti che aprono ticket.
+
+Riservatezza:
+
+- I messaggi del thread non sono attività del ticket né prima risposta dello staff (il tracciamento considera solo il canale ticket) e non entrano nel transcript dell'utente, che legge soltanto il canale principale.
+- Alla chiusura (tutti i percorsi) il bot costruisce il transcript HTML del thread (stesso generatore con escaping del transcript ticket) e lo invia **solo** a un canale del server: il canale archivio transcript della categoria, se configurato, altrimenti il canale log ticket (`GuildSettings.ticketLogChannelId`). Mai all'utente, mai in DM, mai salvato nel database. Senza destinazione l'invio viene saltato con l'audit `ticket.staff_thread.transcript_skipped`; ogni invio è registrato come `ticket.staff_thread.transcript` (destinazione, esito, numero di messaggi). Poi il thread viene bloccato e archiviato; la riapertura lo sblocca.
+- Prima dell'eliminazione del canale da parte dello staff (che elimina anche i thread) il transcript viene inviato se la chiusura non lo aveva già consegnato. È best effort e non blocca l'eliminazione.
+- La dashboard (dettaglio ticket) mostra solo se il thread esiste, con il link Discord; mai il contenuto.
+
+Eventi di log: `TICKET_STAFF_THREAD` (thread creato, transcript inviato).
 
 ## SLA ed escalation
 
@@ -115,4 +166,4 @@ I transcript scaduti non possono essere rigenerati per aggirare la retention. Le
 
 Il workflow `Ticket protection tests` usa PostgreSQL temporaneo, migration reali e simulazioni dell'API Discord. Verifica concorrenza, replay, limiti, blacklist, menu privato, retention, errori Discord e privilegi DB. La build di produzione dipende da questi test. I test NON equivalgono a una prova dal vivo con Discord o alla verifica della VPS.
 
-Il metodo di deploy resta quello di Sentinel: immagini costruite su GitHub, GHCR, digest immutabili e deploy SSH ristretto. Al primo setup usare la versione aggiornata di `deploy/runtime/harden-users.sh`; il bot deve poter usare TicketOpenAttempt, TicketUserGuard e TicketFeedback, ma non leggere PanelSession, TicketNote o _prisma_migrations.
+Il metodo di deploy resta quello di Sentinel: immagini costruite su GitHub, GHCR, digest immutabili e deploy SSH ristretto. Al primo setup usare la versione aggiornata di `deploy/runtime/harden-users.sh`; il bot deve poter usare TicketOpenAttempt, TicketUserGuard e TicketFeedback, ma non leggere PanelSession, TicketNote o _prisma_migrations. Valutazioni attribuite, classifica e thread staff aggiungono solo colonne a tabelle esistenti (`GuildSettings`, `Ticket`, `TicketFeedback`): i grant non cambiano.

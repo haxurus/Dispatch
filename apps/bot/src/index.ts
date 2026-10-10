@@ -10,6 +10,7 @@ import {
   runTicketAutomations
 } from './ticket-operations.js';
 import { runTicketRetention } from './retention.js';
+import { runLeaderboardCycle } from './leaderboard.js';
 import { checkInstall, isGuildInstallBlocked } from './install-guard.js';
 
 const log = pino({ level: config.logLevel });
@@ -67,6 +68,7 @@ client.once(Events.ClientReady, async (ready) => {
 
   internalApi = startInternalApi(client, config.internalApiKey, config.internalApiPort);
   void runRetentionCycle();
+  void runLeaderboards();
 });
 
 client.on(Events.GuildCreate, async (guild) => {
@@ -132,6 +134,26 @@ setInterval(() => {
 setInterval(() => {
   void runRetentionCycle();
 }, 6 * 60 * 60 * 1000).unref();
+
+// Moderator leaderboard: no overlapping cycles, per-guild errors are isolated
+// inside runLeaderboardCycle.
+let leaderboardRunning = false;
+async function runLeaderboards() {
+  if (leaderboardRunning || !client.isReady()) return;
+  leaderboardRunning = true;
+  try {
+    const result = await runLeaderboardCycle(client);
+    if (result.posted || result.failed) log.info(result, 'Leaderboard cycle completed');
+  } catch (error) {
+    log.error({ err: error }, 'Leaderboard cycle failed');
+  } finally {
+    leaderboardRunning = false;
+  }
+}
+
+setInterval(() => {
+  void runLeaderboards();
+}, 15 * 60 * 1000).unref();
 
 client.on(Events.Warn, (warning) => log.warn({ warning }, 'Discord client warning'));
 client.on(Events.Error, (error) => log.error({ err: error }, 'Discord client error'));

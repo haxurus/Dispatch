@@ -4,8 +4,10 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
-import { prisma, type Prisma } from '@dispatch/db';
+import { loadLeaderboardActivity, prisma, type Prisma } from '@dispatch/db';
 import {
+  LEADERBOARD_LIMITS,
+  LEADERBOARD_PERIOD_KINDS,
   PANEL_BUTTON_STYLES,
   PANEL_DEFAULT_FOOTER,
   PANEL_LIMITS,
@@ -13,7 +15,10 @@ import {
   TICKET_LOG_EVENTS,
   TICKET_LOG_EVENT_INFO,
   isHttpsUrl,
-  isValidPanelEmoji
+  isValidPanelEmoji,
+  leaderboardPeriod,
+  leaderboardTitle,
+  rankLeaderboard
 } from '@dispatch/shared';
 import { config } from './config.js';
 import {
@@ -39,6 +44,7 @@ import {
   publishPanel,
   removeTicketMember,
   reopenTicket,
+  sendLeaderboard,
   sendTicketLogTest,
   sendTicketReply,
   setTicketPriority,
@@ -1821,13 +1827,14 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
         categoryId: true,
         status: true,
         claimedById: true,
+        handledById: true,
         createdAt: true,
         firstStaffResponseAt: true,
         closedAt: true,
         slaFirstBreachedAt: true,
         slaResolutionBreachedAt: true,
         category: { select: { name: true } },
-        feedback: { select: { rating: true } }
+        feedback: { select: { rating: true, staffUserId: true } }
       }
     }),
     prisma.ticket.count({
@@ -1903,7 +1910,7 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
     categoryMap.set(ticket.categoryId, current);
   }
 
-  const staffMap = new Map<string, {
+  type StaffRow = {
     userId: string;
     claims: number;
     closures: number;
@@ -1911,7 +1918,16 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
     replies: number;
     currentlyAssigned: number;
     ratings: number[];
-  }>();
+  };
+  const staffMap = new Map<string, StaffRow>();
+  const staffRow = (userId: string) => {
+    let row = staffMap.get(userId);
+    if (!row) {
+      row = { userId, claims: 0, closures: 0, firstResponses: 0, replies: 0, currentlyAssigned: 0, ratings: [] };
+      staffMap.set(userId, row);
+    }
+    return row;
+  };
 
   for (const event of staffEvents) {
     let staffId = event.actorId;
@@ -1927,51 +1943,23 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
 
     if (!staffId) continue;
 
-    const row = staffMap.get(staffId) ?? {
-      userId: staffId,
-      claims: 0,
-      closures: 0,
-      firstResponses: 0,
-      replies: 0,
-      currentlyAssigned: 0,
-      ratings: []
-    };
-
+    const row = staffRow(staffId);
     if (event.action === 'ticket.claim' || event.action === 'ticket.assign') row.claims += 1;
     if (event.action === 'ticket.first_staff_response') row.firstResponses += 1;
     if (event.action === 'ticket.reply') row.replies += 1;
-    staffMap.set(staffId, row);
   }
 
   for (const assignment of currentAssignments) {
     if (!assignment.claimedById) continue;
-    const row = staffMap.get(assignment.claimedById) ?? {
-      userId: assignment.claimedById,
-      claims: 0,
-      closures: 0,
-      firstResponses: 0,
-      replies: 0,
-      currentlyAssigned: 0,
-      ratings: []
-    };
-    row.currentlyAssigned = assignment._count._all;
-    staffMap.set(assignment.claimedById, row);
+    staffRow(assignment.claimedById).currentlyAssigned = assignment._count._all;
   }
 
+  // Closures go to the moderator credited at close (handledById: claimer at
+  // close, otherwise the staff closer) and ratings to the moderator frozen in
+  // the feedback (staffUserId): unclaim/reopen no longer move them.
   for (const ticket of tickets) {
-    if (!ticket.claimedById) continue;
-    const row = staffMap.get(ticket.claimedById) ?? {
-      userId: ticket.claimedById,
-      claims: 0,
-      closures: 0,
-      firstResponses: 0,
-      replies: 0,
-      currentlyAssigned: 0,
-      ratings: []
-    };
-    if (ticket.closedAt) row.closures += 1;
-    if (ticket.feedback) row.ratings.push(ticket.feedback.rating);
-    staffMap.set(ticket.claimedById, row);
+    if (ticket.closedAt && ticket.handledById) staffRow(ticket.handledById).closures += 1;
+    if (ticket.feedback?.staffUserId) staffRow(ticket.feedback.staffUserId).ratings.push(ticket.feedback.rating);
   }
 
   const dayMap = new Map<string, { date: string; created: number; closed: number }>();
@@ -2021,10 +2009,141 @@ app.get('/api/guilds/:guildId/analytics', async (request, reply) => {
       firstResponses: row.firstResponses,
       replies: row.replies,
       currentlyAssigned: row.currentlyAssigned,
-      averageRating: average(row.ratings)
+      averageRating: average(row.ratings),
+      feedbackCount: row.ratings.length
     })).sort((a, b) => b.closures - a.closures || b.replies - a.replies),
     daily: [...dayMap.values()]
   };
+});
+
+// Moderator leaderboard: schedule settings (Admin), preview (Moderator, like
+// the analytics) and "Invia ora" (Admin, bot RPC; scheduler keys untouched).
+const leaderboardSettingsSchema = z.object({
+  leaderboardChannelId: snowflake.nullable(),
+  leaderboardWeekly: z.boolean(),
+  leaderboardMonthly: z.boolean(),
+  leaderboardSize: z.number().int().min(LEADERBOARD_LIMITS.sizeMin).max(LEADERBOARD_LIMITS.sizeMax),
+  leaderboardMinRatings: z.number().int().min(LEADERBOARD_LIMITS.minRatingsMin).max(LEADERBOARD_LIMITS.minRatingsMax),
+  leaderboardWeekday: z.number().int().min(1).max(7),
+  leaderboardHour: z.number().int().min(0).max(23)
+}).superRefine((value, ctx) => {
+  if ((value.leaderboardWeekly || value.leaderboardMonthly) && !value.leaderboardChannelId) {
+    ctx.addIssue({ code: 'custom', message: 'Leaderboard channel is required when a schedule is enabled', path: ['leaderboardChannelId'] });
+  }
+});
+
+const leaderboardSettingsSelect = {
+  timezone: true,
+  leaderboardChannelId: true,
+  leaderboardWeekly: true,
+  leaderboardMonthly: true,
+  leaderboardSize: true,
+  leaderboardMinRatings: true,
+  leaderboardWeekday: true,
+  leaderboardHour: true,
+  leaderboardLastWeekly: true,
+  leaderboardLastMonthly: true
+} as const;
+
+const leaderboardQuerySchema = z.object({
+  period: z.enum(LEADERBOARD_PERIOD_KINDS).default('week'),
+  offset: z.coerce.number().int().min(0).max(LEADERBOARD_LIMITS.maxOffset).default(0)
+});
+
+app.get('/api/guilds/:guildId/leaderboard/settings', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  const settings = await prisma.guildSettings.findUnique({ where: { guildId }, select: leaderboardSettingsSelect });
+  if (!settings) return reply.code(404).send({ error: 'GUILD_NOT_FOUND' });
+  return settings;
+});
+
+app.put('/api/guilds/:guildId/leaderboard/settings', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  const parsed = leaderboardSettingsSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
+
+  if (parsed.data.leaderboardChannelId) {
+    const resources = await getGuildResources(guildId);
+    const valid = resources.channels.some((channel) =>
+      channel.id === parsed.data.leaderboardChannelId && [0, 5].includes(channel.type));
+    if (!valid) return reply.code(400).send({ error: 'LEADERBOARD_CHANNEL_NOT_FOUND' });
+  }
+
+  const updated = await prisma.guildSettings.updateMany({ where: { guildId }, data: parsed.data });
+  if (updated.count !== 1) return reply.code(404).send({ error: 'GUILD_NOT_FOUND' });
+
+  await panelAudit(request, session, guildId, 'leaderboard_settings.update', { ...parsed.data });
+  return prisma.guildSettings.findUnique({ where: { guildId }, select: leaderboardSettingsSelect });
+});
+
+app.get('/api/guilds/:guildId/leaderboard', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'MODERATOR');
+  if (!session) return;
+
+  const parsed = leaderboardQuerySchema.safeParse(request.query);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_QUERY' });
+
+  const settings = await prisma.guildSettings.findUnique({
+    where: { guildId },
+    select: { timezone: true, leaderboardSize: true, leaderboardMinRatings: true }
+  });
+  if (!settings) return reply.code(404).send({ error: 'GUILD_NOT_FOUND' });
+
+  const period = leaderboardPeriod(parsed.data.period, new Date(), settings.timezone, parsed.data.offset);
+  const activity = await loadLeaderboardActivity(prisma, guildId, period.start, period.end);
+  const entries = rankLeaderboard(activity, { minRatings: settings.leaderboardMinRatings, size: settings.leaderboardSize });
+
+  return {
+    period: {
+      kind: period.kind,
+      key: period.key,
+      label: period.label,
+      title: leaderboardTitle(period),
+      start: period.start,
+      end: period.end,
+      timeZone: period.timeZone,
+      offset: parsed.data.offset,
+      inProgress: period.end.getTime() > Date.now()
+    },
+    minRatings: settings.leaderboardMinRatings,
+    size: settings.leaderboardSize,
+    entries
+  };
+});
+
+app.post('/api/guilds/:guildId/leaderboard/send', async (request, reply) => {
+  const { guildId } = request.params as { guildId: string };
+  const session = await requireGuild(request, reply, guildId, 'ADMIN');
+  if (!session) return;
+
+  const parsed = z.object({
+    period: z.enum(LEADERBOARD_PERIOD_KINDS),
+    offset: z.number().int().min(0).max(LEADERBOARD_LIMITS.maxOffset).default(1)
+  }).safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  try {
+    const result = await sendLeaderboard(guildId, session.userId, parsed.data.period, parsed.data.offset);
+    await panelAudit(request, session, guildId, 'leaderboard.send', {
+      period: parsed.data.period,
+      offset: parsed.data.offset,
+      periodKey: result.period,
+      channelId: result.channelId
+    });
+    return result;
+  } catch (error) {
+    request.log.error({ err: error, guildId }, 'Leaderboard send failed');
+    const typed = error as Error & { status?: number; code?: string };
+    const status = typed.status && typed.status >= 400 && typed.status < 500 ? 400 : 502;
+    return reply.code(status).send({ error: typed.code ?? 'LEADERBOARD_SEND_FAILED' });
+  }
 });
 
 app.get('/api/guilds/:guildId/response-templates', async (request, reply) => {
@@ -2236,6 +2355,7 @@ app.get('/api/guilds/:guildId/tickets/:ticketId', async (request, reply) => {
     feedback: ticket.feedback ? {
       id: ticket.feedback.id,
       rating: ticket.feedback.rating,
+      staffUserId: ticket.feedback.staffUserId,
       comment: decryptText(ticket.feedback.commentEncrypted),
       createdAt: ticket.feedback.createdAt,
       updatedAt: ticket.feedback.updatedAt

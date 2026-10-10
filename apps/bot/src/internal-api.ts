@@ -3,8 +3,9 @@ import http from 'node:http';
 import type { Client } from 'discord.js';
 import { publishMainMenu, publishTicketPanel } from './tickets.js';
 import { publishFormPanel } from './forms.js';
-import { parseBlacklistLogPayload } from '@dispatch/shared';
+import { LEADERBOARD_LIMITS, parseBlacklistLogPayload } from '@dispatch/shared';
 import { logBlacklistEvent, sendTicketLogTest } from './ticket-log.js';
+import { sendLeaderboardNow } from './leaderboard.js';
 import {
   addTicketMember,
   assignTicket,
@@ -226,6 +227,26 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
         const payload = parseBlacklistLogPayload(await readJson(req));
         const sent = await logBlacklistEvent(client, guildId, payload);
         res.end(JSON.stringify({ ok: true, sent }));
+        return;
+      }
+
+      // Dashboard "Invia ora": { actorId, period: 'week' | 'month', offset }.
+      // Posts the leaderboard without touching the scheduler period keys.
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/leaderboard\/send$/);
+      if (req.method === 'POST' && match) {
+        const guildId = match[1]!;
+        if (!SNOWFLAKE.test(guildId)) throw new Error('INVALID_ID');
+        const body = await readJson(req);
+        if (Object.keys(body).some((key) => !['actorId', 'period', 'offset'].includes(key))) throw new Error('INVALID_BODY');
+        bodySnowflake(body, 'actorId');
+        const period = body.period;
+        if (period !== 'week' && period !== 'month') throw new Error('INVALID_PERIOD');
+        const offset = body.offset ?? 1;
+        if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0 || offset > LEADERBOARD_LIMITS.maxOffset) {
+          throw new Error('INVALID_OFFSET');
+        }
+        const result = await sendLeaderboardNow(client, guildId, period === 'week' ? 'week' : 'month', offset);
+        res.end(JSON.stringify(result));
         return;
       }
 

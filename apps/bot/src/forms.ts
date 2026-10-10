@@ -6,7 +6,6 @@ import {
   ChannelType,
   EmbedBuilder,
   ModalBuilder,
-  PermissionFlagsBits,
   StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -28,7 +27,8 @@ import {
   type FormQuestion
 } from '@dispatch/shared';
 import { decryptText, encryptText } from './security.js';
-import { ticketControls } from './tickets.js';
+import { ticketControlRows } from './tickets.js';
+import { botCanManageThreads, ticketChannelOverwrites } from './ticket-operations.js';
 import { logTicketEvent, userMention } from './ticket-log.js';
 import { panelComponents, panelEmbed, panelStyle } from './panels.js';
 import {
@@ -405,25 +405,16 @@ async function createFormTicket(
       select: { ticketCounter: true }
     });
     const number = counter.ticketCounter;
-    const participant = [
-      PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
-      PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks
-    ];
     discordRequestStarted = true;
     channel = await guild.channels.create({
       name: `ticket-${String(number).padStart(4, '0')}-${safeChannelPart(interaction.user.username)}`,
       type: ChannelType.GuildText,
       parent: form.ticketParentCategoryId ?? category.discordCategoryId ?? undefined,
       topic: `Dispatch ticket #${number} - ${userId} - form ${form.name}`.slice(0, 1024),
-      permissionOverwrites: [
-        { id: guildId, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.CreatePublicThreads,
-          PermissionFlagsBits.CreatePrivateThreads, PermissionFlagsBits.SendMessagesInThreads] },
-        { id: interaction.client.user!.id, type: 1, allow: [...participant, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
-        { id: userId, type: 1, allow: participant },
-        ...staffRoleIds.map((id) => ({
-          id, type: 0 as const, allow: [...participant, PermissionFlagsBits.ManageMessages]
-        }))
-      ]
+      permissionOverwrites: ticketChannelOverwrites({
+        guildId, botId: interaction.client.user!.id, openerId: userId, staffRoleIds,
+        threadsAllowed: botCanManageThreads(guild)
+      })
     });
     const createdChannel = channel;
     const ticket = await commitTicketOpen(guildId, userId, reservationToken, (tx) => tx.ticket.create({
@@ -455,7 +446,7 @@ async function createFormTicket(
           pings.map((id) => `<@&${id}>`).join(' '),
           `Ticket #${number} aperto da <@${userId}> tramite il form **${form.name.slice(0, 100)}**.`
         ].filter(Boolean).join('\n'),
-        components: [ticketControls(ticket.id)],
+        components: ticketControlRows(ticket.id),
         allowedMentions: { parse: [], roles: pings, users: [] }
       });
       for (const embeds of reports) {

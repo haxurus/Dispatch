@@ -220,3 +220,13 @@ export async function logBlacklistEvent(
     }
   );
 }
+
+// Dashboard "Invia ora": the bot posts the period, scheduler keys untouched.
+export async function sendLeaderboard(guildId: string, actorId: string, period: 'week' | 'month', offset: number) {
+  if (!Number.isInteger(offset) || offset < 0 || offset > 52) throw new Error('Invalid leaderboard offset');
+  return api<{ ok: true; channelId: string; period: string; entries: number }>(
+    `/guilds/${id(guildId)}/leaderboard/send`,
+    'POST',
+    { actorId: id(actorId), period, offset }
+  );
+}

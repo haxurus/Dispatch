@@ -17,7 +17,10 @@ import {
 } from 'discord.js';
 import { prisma } from '@dispatch/db';
 import { decryptText, encryptText } from './security.js';
-import { closeTicket, deleteTicketChannel, reopenTicket, setTicketStatus, unclaimTicket } from './ticket-operations.js';
+import {
+  botCanManageThreads, closeTicket, deleteTicketChannel, openStaffThread, reopenTicket, setTicketStatus,
+  ticketChannelOverwrites, unclaimTicket
+} from './ticket-operations.js';
 import { logTicketEvent } from './ticket-log.js';
 import { reserveTicketOpen, getTicketOpenReservation, consumeTicketOpenReservation,
   commitTicketOpen, releaseTicketOpenReservation, ticketOpenReservationMessage,
@@ -47,6 +50,10 @@ const REOPEN_PREFIX = 'dispatch:reopen:';
 const DELETE_CHANNEL_PREFIX = 'dispatch:delete-channel:';
 const DELETE_CONFIRM_PREFIX = 'dispatch:delete-confirm:';
 const DELETE_CONFIRM_TTL_MS = 2 * 60_000;
+// dispatch:staff-thread:<ticketId> (ticket controls, staff only): creates or
+// joins the private staff thread of the ticket.
+const STAFF_THREAD_PREFIX = 'dispatch:staff-thread:';
+const SNOWFLAKE = /^\d{17,20}$/;
 
 type FormField = {
   id: string;
@@ -133,6 +140,21 @@ export function ticketControls(ticketId: string) {
       .setLabel('Chiudi')
       .setStyle(ButtonStyle.Danger)
   );
+}
+
+// Second row of the ticket controls (the first one is full): staff-only tools.
+export function ticketStaffControls(ticketId: string) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${STAFF_THREAD_PREFIX}${ticketId}`)
+      .setLabel('Thread staff')
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+/** Every control row of the ticket introduction message. */
+export function ticketControlRows(ticketId: string) {
+  return [ticketControls(ticketId), ticketStaffControls(ticketId)];
 }
 
 function hasStaffAccess(member: GuildMember, staffRoleIds: string[]) {
@@ -384,20 +406,15 @@ async function createTicket(
     const counter = await prisma.guildSettings.update({ where: { guildId },
       data: { ticketCounter: { increment: 1 } }, select: { ticketCounter: true } });
     const number = counter.ticketCounter;
-    const participant = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages,
-      PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks];
     discordRequestStarted = true;
     channel = await interaction.guild.channels.create({
       name: 'ticket-' + String(number).padStart(4, '0') + '-' + safeChannelPart(interaction.user.username),
       type: ChannelType.GuildText, parent: category.discordCategoryId ?? undefined,
       topic: ('Dispatch ticket #' + number + ' - ' + userId + ' - ' + category.name).slice(0, 1024),
-      permissionOverwrites: [
-        { id: guildId, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.CreatePublicThreads,
-          PermissionFlagsBits.CreatePrivateThreads, PermissionFlagsBits.SendMessagesInThreads] },
-        { id: interaction.client.user!.id, type: 1, allow: [...participant, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages] },
-        { id: userId, type: 1, allow: participant },
-        ...category.staffRoleIds.map((id) => ({ id, type: 0 as const, allow: [...participant, PermissionFlagsBits.ManageMessages] }))
-      ]
+      permissionOverwrites: ticketChannelOverwrites({
+        guildId, botId: interaction.client.user!.id, openerId: userId, staffRoleIds: category.staffRoleIds,
+        threadsAllowed: botCanManageThreads(interaction.guild)
+      })
     });
     const createdChannel = channel;
     const ticket = await commitTicketOpen(guildId, userId, token, (tx) => tx.ticket.create({ data: {
@@ -416,7 +433,7 @@ async function createTicket(
       }))).setFooter({ text: 'Dispatch - ' + ticket.id }).setTimestamp();
     try {
       await createdChannel.send({
-        embeds: [intro], components: [ticketControls(ticket.id)],
+        embeds: [intro], components: ticketControlRows(ticket.id),
         content: category.staffRoleIds.map((id) => '<@&' + id + '>').join(' ') || undefined,
         allowedMentions: { parse: [], roles: category.staffRoleIds, users: [] }
       });
@@ -978,6 +995,7 @@ async function submitFeedback(interaction: ModalSubmitInteraction) {
   }
 
   const comment = interaction.fields.getTextInputValue('comment').trim().slice(0, 1500);
+  const staffUserId = feedbackStaffUserId(ticket);
 
   await prisma.$transaction([
     prisma.ticketFeedback.upsert({
@@ -985,14 +1003,16 @@ async function submitFeedback(interaction: ModalSubmitInteraction) {
       update: {
         rating,
         commentEncrypted: comment ? encryptText(comment) : null,
-        userId: interaction.user.id
+        userId: interaction.user.id,
+        staffUserId
       },
       create: {
         ticketId: ticket.id,
         guildId: interaction.guildId,
         userId: interaction.user.id,
         rating,
-        commentEncrypted: comment ? encryptText(comment) : null
+        commentEncrypted: comment ? encryptText(comment) : null,
+        staffUserId
       }
     }),
     prisma.ticketAudit.create({
@@ -1001,7 +1021,7 @@ async function submitFeedback(interaction: ModalSubmitInteraction) {
         guildId: interaction.guildId,
         actorId: interaction.user.id,
         action: 'ticket.feedback',
-        details: { rating, commentProvided: Boolean(comment) }
+        details: { rating, commentProvided: Boolean(comment), staffUserId }
       }
     })
   ]);
@@ -1016,8 +1036,23 @@ async function submitFeedback(interaction: ModalSubmitInteraction) {
     ticket,
     actorId: interaction.user.id,
     categoryName: ticket.category.name,
-    fields: [{ name: 'Valutazione', value: '★'.repeat(rating) + '☆'.repeat(5 - rating) + ' (' + rating + '/5)', inline: true }]
+    fields: [
+      { name: 'Valutazione', value: '★'.repeat(rating) + '☆'.repeat(5 - rating) + ' (' + rating + '/5)', inline: true },
+      { name: 'Moderatore', value: staffUserId ? '<@' + staffUserId + '> (' + staffUserId + ')' : 'Non attribuito', inline: true }
+    ]
   });
+}
+
+/**
+ * Moderator the rating is attributed to, frozen in the feedback row: the
+ * claimer of the closed ticket, otherwise the staff member who closed it
+ * (Ticket.closedById is never the opener nor the automatic close).
+ */
+export function feedbackStaffUserId(ticket: { claimedById: string | null; closedById: string | null }) {
+  for (const candidate of [ticket.claimedById, ticket.closedById]) {
+    if (candidate && SNOWFLAKE.test(candidate)) return candidate;
+  }
+  return null;
 }
 
 // Same reopen path for everyone: the staff (category staff roles or Manage
@@ -1135,6 +1170,57 @@ async function confirmDeleteTicketChannel(interaction: ButtonInteraction) {
         ? 'Discord ha rifiutato l’eliminazione del canale. Controlla i permessi del bot.'
         : 'Il canale di questo ticket non può essere eliminato.';
     await interaction.editReply({ content: message, components: [] }).catch(() => null);
+  }
+}
+
+const STAFF_THREAD_ERRORS: Record<string, string> = {
+  STAFF_THREAD_MISSING_PERMISSIONS: 'Il bot non ha i permessi per creare thread privati: aggiorna i permessi del suo ruolo ' +
+    '(Crea thread privati, Invia messaggi nei thread, Gestisci thread).',
+  STAFF_THREAD_BUSY: 'Il thread staff è in fase di creazione: riprova tra qualche secondo.',
+  STAFF_THREAD_FORBIDDEN: 'Solo lo staff di questa categoria può usare il thread staff.',
+  TICKET_CLOSED: 'Il thread staff è disponibile solo per i ticket attivi.',
+  TICKET_REOPENING: 'Il thread staff è disponibile solo per i ticket attivi.',
+  TICKET_CHANNEL_DELETED: 'Il thread staff è disponibile solo per i ticket attivi.'
+};
+
+// Staff only (category staff roles, Manage Server/Channels), never the opener,
+// active tickets only. Joins the live staff thread or creates it.
+async function staffThreadInteraction(interaction: ButtonInteraction) {
+  if (!interaction.guild || !interaction.guildId) return;
+
+  const ticketId = interaction.customId.slice(STAFF_THREAD_PREFIX.length);
+  if (!CUID.test(ticketId)) {
+    await interaction.reply({ content: 'Ticket non valido.', ephemeral: true });
+    return;
+  }
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: ticketId, guildId: interaction.guildId, channelId: interaction.channelId },
+    include: { category: true }
+  });
+  if (!ticket || !OPEN_STATUSES.includes(ticket.status) || ticket.retentionPendingAt || ticket.channelDeletedAt) {
+    await interaction.reply({ content: STAFF_THREAD_ERRORS.TICKET_CLOSED!, ephemeral: true });
+    return;
+  }
+
+  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member || interaction.user.id === ticket.openerId || !hasStaffAccess(member, ticket.category.staffRoleIds)) {
+    await interaction.reply({ content: STAFF_THREAD_ERRORS.STAFF_THREAD_FORBIDDEN!, ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  try {
+    const result = await openStaffThread(interaction.client, interaction.guildId, ticket.id, interaction.user.id);
+    await interaction.editReply({
+      content: (result.created ? 'Thread staff creato: ' : 'Sei stato aggiunto al thread staff: ') + '<#' + result.threadId + '>',
+      allowedMentions: { parse: [] }
+    });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : '';
+    await interaction.editReply({
+      content: STAFF_THREAD_ERRORS[code] ?? 'Impossibile aprire il thread staff.',
+      allowedMentions: { parse: [] }
+    }).catch(() => null);
   }
 }
 
@@ -1334,6 +1420,11 @@ export async function handleTicketInteraction(
     interaction.customId.startsWith(FEEDBACK_MODAL_PREFIX)
   ) {
     await submitFeedback(interaction);
+    return true;
+  }
+
+  if (interaction.isButton() && interaction.customId.startsWith(STAFF_THREAD_PREFIX)) {
+    await staffThreadInteraction(interaction);
     return true;
   }
 
