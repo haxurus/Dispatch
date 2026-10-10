@@ -4,18 +4,23 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import assert from 'node:assert/strict';
 import { prisma, PrismaClient } from '@dispatch/db';
-import { ChannelType, type Client } from 'discord.js';
+import { ChannelType, PermissionFlagsBits, type Client } from 'discord.js';
 import {
   reserveTicketOpen, consumeTicketOpenReservation, releaseTicketOpenReservation,
   getTicketOpenReservation, commitTicketOpen, formVersion, allowOpeningInteraction
 } from '../apps/bot/src/open-guard.js';
 import { retentionDue, runTicketRetention } from '../apps/bot/src/retention.js';
-import { closeTicket, deleteTicketChannel, reopenTicket } from '../apps/bot/src/ticket-operations.js';
+import {
+  closeTicket, deleteTicketChannel, recordTicketMessage, reopenTicket, staffThreadTranscriptDestination, ticketChannelOverwrites
+} from '../apps/bot/src/ticket-operations.js';
+import { claimLeaderboardPeriod, releaseLeaderboardPeriod, runLeaderboardCycle } from '../apps/bot/src/leaderboard.js';
 import { handleTicketInteraction, publishMainMenu } from '../apps/bot/src/tickets.js';
 import { panelComponents } from '../apps/bot/src/panels.js';
 import { invalidateTicketLogSettings, logTicketEvent } from '../apps/bot/src/ticket-log.js';
 import {
-  isHttpsUrl, layoutPanelButtons, normalizePanelItems, normalizeTicketLogEvents, parseBlacklistLogPayload, parsePanelEmoji
+  isHttpsUrl, layoutPanelButtons, normalizePanelItems, normalizeTicketLogEvents, parseBlacklistLogPayload, parsePanelEmoji,
+  dueLeaderboardPeriods, formatLeaderboardMinutes, isoWeek, leaderboardPeriod, leaderboardTitle, median, rankLeaderboard,
+  safeTimeZone, zonedTimeToUtc
 } from '@dispatch/shared';
 
 const db = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid/invalid');
@@ -746,4 +751,565 @@ test('BLACKLIST log RPC payload accepts only structured fields', () => {
     assert.throws(() => parseBlacklistLogPayload(invalid), /INVALID_TICKET_LOG_EVENT/);
   }
   assert.deepEqual(normalizeTicketLogEvents(['BLACKLIST', 'NOPE', 'TICKET_OPEN', 'BLACKLIST']), ['TICKET_OPEN', 'BLACKLIST']);
+});
+
+// Ratings attribution, moderator leaderboard and private staff threads
+// (migration 20261012100000_ratings_leaderboard_threads).
+const RATINGS_MIGRATION = resolve('packages/db/prisma/migrations/20261012100000_ratings_leaderboard_threads/migration.sql');
+const MOD1 = '990000000000000011';
+const MOD2 = '990000000000000012';
+const NON_STAFF = '990000000000000013';
+const STAFF_ROLE_X = '990000000000007401';
+const THREAD_ID = '990000000000007402';
+const ARCHIVE = '990000000000007403';
+const LOG_CHANNEL = '990000000000007404';
+const LB_CHANNEL = '990000000000007405';
+
+function memberFor(staff: boolean) {
+  return {
+    permissions: { has: () => false },
+    roles: { cache: { has: (roleId: string) => staff && roleId === STAFF_ROLE_X } }
+  };
+}
+
+// Simulated guild: channels by id (mutable), staff members and the bot's
+// guild-wide thread permissions (members.me).
+function guildClient(channels: Record<string, unknown>, staffIds: string[] = [], threadsAllowed = true) {
+  const guild = {
+    id: G,
+    available: true,
+    channels: { fetch: async (id: string) => channels[id] ?? null },
+    members: {
+      me: { permissions: { has: () => threadsAllowed } },
+      fetch: async (id: string) => memberFor(staffIds.includes(id))
+    }
+  };
+  const mock = { isReady: () => true, user: { id: OTHER }, guilds: { cache: new Map([[G, guild]]) } } as unknown as Client;
+  return { client: mock, guild };
+}
+
+function fakeThread(parentId: string, id = THREAD_ID, messages: any[] = []) {
+  const state = { added: [] as string[], sent: [] as any[], edits: [] as any[], archived: false, locked: false, deleted: false };
+  const page = Object.assign(new Map(messages.map((message) => [message.id, message])), {
+    last: () => messages[messages.length - 1]
+  });
+  const thread = {
+    id,
+    guildId: G,
+    parentId,
+    type: ChannelType.PrivateThread,
+    isThread: () => true,
+    get archived() { return state.archived; },
+    get locked() { return state.locked; },
+    members: { add: async (userId: string) => { state.added.push(userId); } },
+    messages: { fetch: async () => page },
+    send: async (payload: unknown) => { state.sent.push(payload); },
+    edit: async (options: { archived?: boolean; locked?: boolean }) => {
+      state.edits.push(options);
+      if (options.archived !== undefined) state.archived = options.archived;
+      if (options.locked !== undefined) state.locked = options.locked;
+    },
+    setArchived: async (value: boolean) => { state.archived = value; },
+    delete: async () => { state.deleted = true; }
+  };
+  return { thread, state };
+}
+
+// Ticket channel that records overwrite edits and creates fake threads.
+function threadedChannel(row: { channelId: string; ticketNumber: number }) {
+  const base = fakeTicketChannel(row, null);
+  const edits: Array<{ id: string; options: any }> = [];
+  const created: Array<{ options: any; thread: ReturnType<typeof fakeThread> }> = [];
+  Object.assign(base.channel, {
+    permissionOverwrites: {
+      edit: async (id: string, options: unknown) => { edits.push({ id, options }); },
+      delete: async () => undefined
+    },
+    threads: {
+      create: async (options: unknown) => {
+        const thread = fakeThread(row.channelId);
+        created.push({ options, thread });
+        return thread.thread;
+      }
+    }
+  });
+  return { ...base, edits, created };
+}
+
+function textChannel(id: string, sink: any[]) {
+  return {
+    id,
+    guildId: G,
+    type: ChannelType.GuildText,
+    isTextBased: () => true,
+    send: async (payload: unknown) => { sink.push(payload); return { id: '990000000000008998' }; }
+  };
+}
+
+test('ratings/leaderboard/threads migration: defaults, backfill and constraints', async () => {
+  const settings = await prisma.guildSettings.findUniqueOrThrow({ where: { guildId: G } });
+  assert.equal(settings.leaderboardChannelId, null);
+  assert.equal(settings.leaderboardWeekly, false);
+  assert.equal(settings.leaderboardMonthly, false);
+  assert.equal(settings.leaderboardSize, 10);
+  assert.equal(settings.leaderboardMinRatings, 3);
+  assert.equal(settings.leaderboardWeekday, 1);
+  assert.equal(settings.leaderboardHour, 9);
+  assert.equal(settings.leaderboardLastWeekly, null);
+  assert.equal(settings.leaderboardLastMonthly, null);
+
+  const cat = await category();
+  const closed = await ticket(cat, { claimedById: MOD1 });
+  const open = await ticket(cat, { status: 'OPEN', closedAt: null, claimedById: MOD2 });
+  const unclaimed = await ticket(cat);
+  for (const row of [closed, open, unclaimed]) {
+    assert.equal(row.closedById, null);
+    assert.equal(row.handledById, null);
+    assert.equal(row.staffThreadId, null);
+  }
+  await prisma.ticketFeedback.create({ data: { ticketId: closed.id, guildId: G, userId: U, rating: 5 } });
+  await prisma.ticketFeedback.create({ data: { ticketId: unclaimed.id, guildId: G, userId: U, rating: 2 } });
+
+  // Rows as they were before the migration: run its backfill statements.
+  const statements = readFileSync(RATINGS_MIGRATION, 'utf8').split(';')
+    .map((chunk) => chunk.slice(Math.max(0, chunk.indexOf('UPDATE'))).trim())
+    .filter((chunk) => chunk.startsWith('UPDATE '));
+  assert.equal(statements.length, 2);
+  for (let run = 0; run < 2; run++) {
+    for (const statement of statements) await prisma.$executeRawUnsafe(statement);
+  }
+  assert.equal((await prisma.ticketFeedback.findUniqueOrThrow({ where: { ticketId: closed.id } })).staffUserId, MOD1);
+  assert.equal((await prisma.ticketFeedback.findUniqueOrThrow({ where: { ticketId: unclaimed.id } })).staffUserId, null);
+  assert.equal((await prisma.ticket.findUniqueOrThrow({ where: { id: closed.id } })).handledById, MOD1);
+  assert.equal((await prisma.ticket.findUniqueOrThrow({ where: { id: open.id } })).handledById, null);
+  assert.equal((await prisma.ticket.findUniqueOrThrow({ where: { id: unclaimed.id } })).handledById, null);
+
+  await assert.rejects(prisma.$executeRaw`UPDATE "GuildSettings" SET "leaderboardSize" = 2 WHERE "guildId" = ${G}`);
+  await assert.rejects(prisma.$executeRaw`UPDATE "GuildSettings" SET "leaderboardMinRatings" = 51 WHERE "guildId" = ${G}`);
+  await assert.rejects(prisma.$executeRaw`UPDATE "GuildSettings" SET "leaderboardWeekday" = 0 WHERE "guildId" = ${G}`);
+  await assert.rejects(prisma.$executeRaw`UPDATE "GuildSettings" SET "leaderboardHour" = 24 WHERE "guildId" = ${G}`);
+  await assert.rejects(prisma.$executeRaw`UPDATE "GuildSettings" SET "leaderboardLastWeekly" = '2026-41' WHERE "guildId" = ${G}`);
+  await assert.rejects(prisma.$executeRaw`UPDATE "GuildSettings" SET "leaderboardChannelId" = 'nope' WHERE "guildId" = ${G}`);
+  await assert.rejects(prisma.$executeRaw`UPDATE "Ticket" SET "staffThreadId" = 'nope' WHERE "id" = ${open.id}`);
+  await assert.rejects(prisma.$executeRaw`UPDATE "TicketFeedback" SET "staffUserId" = '<@1>' WHERE "ticketId" = ${closed.id}`);
+});
+
+test('feedback is attributed to the claimer, otherwise to the staff closer, never to the opener or the auto-close', async () => {
+  const cat = await category({ staffRoleIds: [STAFF_ROLE_X] });
+  const submitFeedback = async (mock: Client, ticketId: string) => {
+    await handleTicketInteraction({
+      customId: 'dispatch:feedback-modal:' + ticketId + ':4', guildId: G, channelId: '990000000000000998',
+      user: { id: U }, client: mock, fields: { getTextInputValue: () => '' },
+      isButton: () => false, isStringSelectMenu: () => false, isModalSubmit: () => true,
+      reply: async () => undefined
+    } as any);
+    return (await prisma.ticketFeedback.findUniqueOrThrow({ where: { ticketId } })).staffUserId;
+  };
+  const closeWith = async (extra: Record<string, unknown>, actorId: string, staffIds = [MOD1, MOD2]) => {
+    const row = await ticket(cat, { status: 'OPEN', closedAt: null, ...extra });
+    const { channel, state } = fakeTicketChannel(row, null);
+    const { client: mock } = guildClient({ [row.channelId]: channel }, staffIds);
+    await closeTicket(mock, G, row.id, actorId, null);
+    const stored = await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } });
+    const prompt = state.sent.find((payload) => payload.components);
+    return { row, stored, prompt, mock };
+  };
+
+  // Claimed by MOD1, closed by the staff member MOD2: MOD1 handled it.
+  const claimed = await closeWith({ status: 'IN_PROGRESS', claimedById: MOD1 }, MOD2);
+  assert.equal(claimed.stored.closedById, MOD2);
+  assert.equal(claimed.stored.handledById, MOD1);
+  assert.ok(claimed.prompt.content.includes('Valuta l’assistenza ricevuta da <@' + MOD1 + '>'));
+  assert.deepEqual(claimed.prompt.allowedMentions, { parse: [] });
+  assert.equal(await submitFeedback(claimed.mock, claimed.row.id), MOD1);
+  // The snapshot survives a later change of the claimer.
+  await prisma.ticket.update({ where: { id: claimed.row.id }, data: { claimedById: null } });
+  assert.equal((await prisma.ticketFeedback.findUniqueOrThrow({ where: { ticketId: claimed.row.id } })).staffUserId, MOD1);
+
+  // Unclaimed, closed by staff: the closer.
+  const staffClosed = await closeWith({}, MOD2);
+  assert.equal(staffClosed.stored.handledById, MOD2);
+  assert.equal(await submitFeedback(staffClosed.mock, staffClosed.row.id), MOD2);
+
+  // Unclaimed, closed by the opener (even one with a staff role) or by the
+  // automatic close (the bot): unattributed, generic prompt.
+  for (const [actorId, staffIds] of [[U, [MOD1]], [U, [U]], [OTHER, [OTHER]]] as Array<[string, string[]]>) {
+    const result = await closeWith({}, actorId, staffIds);
+    assert.equal(result.stored.closedById, null);
+    assert.equal(result.stored.handledById, null);
+    assert.ok(result.prompt.content.includes('Puoi valutare l’assistenza ricevuta.'));
+    assert.equal(await submitFeedback(result.mock, result.row.id), null);
+  }
+
+  // A non-staff closer is never credited either.
+  const outsider = await closeWith({}, NON_STAFF);
+  assert.equal(outsider.stored.closedById, null);
+
+  // Reopen clears the attribution of the previous close.
+  await reopenTicket(staffClosed.mock, G, staffClosed.row.id, MOD2);
+  const reopened = await prisma.ticket.findUniqueOrThrow({ where: { id: staffClosed.row.id } });
+  assert.equal(reopened.closedById, null);
+  assert.equal(reopened.handledById, null);
+  assert.equal(await prisma.ticketFeedback.count({ where: { ticketId: staffClosed.row.id } }), 0);
+});
+
+test('leaderboard ranking: handled tickets, rating only above the minimum, rating count, shared ranks', () => {
+  const [A, B, C, D, E] = ['990000000000000021', '990000000000000022', '990000000000000023', '990000000000000024', '990000000000000025'];
+  const activity = {
+    handled: [A, A, A, B, B, B, C, C, D, 'not-a-snowflake'],
+    feedback: [
+      { staffId: A, rating: 3 }, { staffId: A, rating: 3 }, { staffId: A, rating: 3 },
+      { staffId: B, rating: 5 }, { staffId: B, rating: 5 },
+      { staffId: C, rating: 4 }, { staffId: C, rating: 4 }, { staffId: C, rating: 4 },
+      { staffId: D, rating: 5 }, { staffId: E, rating: 7 }
+    ],
+    firstResponses: [{ staffId: A, minutes: 10 }, { staffId: A, minutes: 30 }, { staffId: A, minutes: 20 }, { staffId: B, minutes: 5 }],
+    claims: [A, E, '<@1>']
+  };
+  const ranked = rankLeaderboard(activity, { minRatings: 3 });
+  assert.deepEqual(ranked.map((entry) => entry.userId), [A, B, C, D, E]);
+  assert.deepEqual(ranked.map((entry) => entry.rank), [1, 2, 3, 4, 5]);
+  assert.equal(ranked[0]!.averageRating, 3);
+  assert.equal(ranked[0]!.medianFirstResponseMinutes, 20);
+  assert.equal(ranked[0]!.claims, 1);
+  // B has two 5-star ratings: below the minimum, shown as "—" and ranked below A.
+  assert.equal(ranked[1]!.averageRating, null);
+  assert.equal(ranked[1]!.feedbackCount, 2);
+  assert.equal(ranked[2]!.averageRating, 4);
+  assert.equal(ranked[4]!.handled, 0);
+  assert.equal(ranked[4]!.feedbackCount, 0);
+  // Without a minimum B's average counts and wins the tie on handled tickets.
+  assert.deepEqual(rankLeaderboard(activity, { minRatings: 0 }).slice(0, 2).map((entry) => entry.userId), [B, A]);
+  assert.equal(rankLeaderboard(activity, { minRatings: 3, size: 2 }).length, 2);
+
+  // Full ties share the rank (ordered by id for a stable output).
+  const [X, Y, Z] = ['990000000000000031', '990000000000000032', '990000000000000033'];
+  const tied = rankLeaderboard({ handled: [Y, X], feedback: [], firstResponses: [], claims: [Z] }, { minRatings: 3 });
+  assert.deepEqual(tied.map((entry) => [entry.userId, entry.rank]), [[X, 1], [Y, 1], [Z, 3]]);
+
+  assert.equal(median([40, 10, 30, 20]), 25);
+  assert.equal(median([]), null);
+  assert.equal(formatLeaderboardMinutes(null), '—');
+  assert.equal(formatLeaderboardMinutes(0.4), '<1 min');
+  assert.equal(formatLeaderboardMinutes(42), '42 min');
+  assert.equal(formatLeaderboardMinutes(185), '3 h 05 min');
+  assert.equal(formatLeaderboardMinutes(3000), '2 g 2 h');
+});
+
+test('leaderboard periods: ISO weeks and months in the guild timezone, DST and year boundaries', () => {
+  const rome = 'Europe/Rome';
+  const iso = (value: Date) => value.toISOString();
+
+  const week = leaderboardPeriod('week', new Date('2026-10-10T10:00:00Z'), rome);
+  assert.equal(week.key, '2026-W41');
+  assert.equal(iso(week.start), '2026-10-04T22:00:00.000Z');
+  assert.equal(iso(week.end), '2026-10-11T22:00:00.000Z');
+  assert.equal(week.label, 'settimana dal 5 all’11 ottobre 2026');
+  assert.equal(leaderboardTitle(week), 'Classifica moderatori — settimana dal 5 all’11 ottobre 2026');
+
+  // Autumn DST change (25 Oct 2026): the week lasts 7 days + 1 hour.
+  const autumn = leaderboardPeriod('week', new Date('2026-10-25T12:00:00Z'), rome);
+  assert.equal(autumn.key, '2026-W43');
+  assert.equal(iso(autumn.start), '2026-10-18T22:00:00.000Z');
+  assert.equal(iso(autumn.end), '2026-10-25T23:00:00.000Z');
+  // Spring DST change (29 Mar 2026): 7 days - 1 hour.
+  const spring = leaderboardPeriod('week', new Date('2026-03-29T12:00:00Z'), rome);
+  assert.equal(spring.key, '2026-W13');
+  assert.equal(iso(spring.start), '2026-03-22T23:00:00.000Z');
+  assert.equal(iso(spring.end), '2026-03-29T22:00:00.000Z');
+  // A wall time inside the spring-forward gap resolves after it.
+  assert.equal(iso(zonedTimeToUtc({ year: 2026, month: 3, day: 29 }, 2, 30, rome)), '2026-03-29T01:30:00.000Z');
+
+  // 2026 has 53 ISO weeks: 28 Dec 2026 - 3 Jan 2027 is 2026-W53, then 2027-W01.
+  const w53 = leaderboardPeriod('week', new Date('2027-01-02T12:00:00Z'), rome);
+  assert.equal(w53.key, '2026-W53');
+  assert.equal(iso(w53.start), '2026-12-27T23:00:00.000Z');
+  assert.equal(iso(w53.end), '2027-01-03T23:00:00.000Z');
+  assert.equal(w53.label, 'settimana dal 28 dicembre 2026 al 3 gennaio 2027');
+  assert.equal(leaderboardPeriod('week', new Date('2027-01-04T12:00:00Z'), rome).key, '2027-W01');
+  assert.equal(leaderboardPeriod('week', new Date('2027-01-04T12:00:00Z'), rome, 1).key, '2026-W53');
+  assert.deepEqual(isoWeek({ year: 2021, month: 1, day: 3 }), { year: 2020, week: 53 });
+  assert.deepEqual(isoWeek({ year: 2024, month: 12, day: 30 }), { year: 2025, week: 1 });
+
+  // The local date decides the period: Monday 01:30 in Rome is Sunday in UTC.
+  const instant = new Date('2026-10-11T23:30:00Z');
+  assert.equal(leaderboardPeriod('week', instant, rome).key, '2026-W42');
+  assert.equal(leaderboardPeriod('week', instant, 'UTC').key, '2026-W41');
+  assert.equal(leaderboardPeriod('week', instant, 'Not/AZone').key, '2026-W42');
+  assert.equal(safeTimeZone('Not/AZone'), rome);
+
+  const month = leaderboardPeriod('month', new Date('2026-10-10T10:00:00Z'), rome, 1);
+  assert.equal(month.key, '2026-09');
+  assert.equal(month.label, 'settembre 2026');
+  assert.equal(iso(month.start), '2026-08-31T22:00:00.000Z');
+  assert.equal(iso(month.end), '2026-09-30T22:00:00.000Z');
+  assert.equal(leaderboardPeriod('month', new Date('2027-01-15T10:00:00Z'), rome, 1).key, '2026-12');
+  // October contains the DST change: it ends at local midnight in CET.
+  const october = leaderboardPeriod('month', new Date('2026-10-10T10:00:00Z'), rome);
+  assert.equal(iso(october.end), '2026-10-31T23:00:00.000Z');
+});
+
+test('leaderboard schedule: due after the local weekday/hour slot and only for a new period key', () => {
+  const base = { timezone: 'Europe/Rome', weekly: true, monthly: false, weekday: 1, hour: 9, lastWeekly: null, lastMonthly: null };
+  const keys = (schedule: typeof base | Record<string, unknown>, now: string) =>
+    dueLeaderboardPeriods(schedule as typeof base, new Date(now)).map((period) => period.key);
+  assert.deepEqual(keys(base, '2026-10-12T06:59:00Z'), []); // Monday 08:59 in Rome
+  assert.deepEqual(keys(base, '2026-10-12T07:00:00Z'), ['2026-W41']);
+  assert.deepEqual(keys(base, '2026-10-15T20:00:00Z'), ['2026-W41']); // late (bot offline): still the previous week
+  assert.deepEqual(keys({ ...base, lastWeekly: '2026-W41' }, '2026-10-12T07:00:00Z'), []);
+  assert.deepEqual(keys({ ...base, weekday: 7, hour: 23 }, '2026-10-18T20:59:00Z'), []);
+  assert.deepEqual(keys({ ...base, weekday: 7, hour: 23 }, '2026-10-18T21:00:00Z'), ['2026-W41']);
+  // After the autumn DST change 09:00 in Rome is 08:00 UTC.
+  assert.deepEqual(keys({ ...base, lastWeekly: '2026-W42' }, '2026-10-26T07:59:00Z'), []);
+  assert.deepEqual(keys({ ...base, lastWeekly: '2026-W42' }, '2026-10-26T08:00:00Z'), ['2026-W43']);
+
+  const monthly = { ...base, weekly: false, monthly: true };
+  assert.deepEqual(keys(monthly, '2026-10-01T06:59:00Z'), []);
+  assert.deepEqual(keys(monthly, '2026-10-01T07:00:00Z'), ['2026-09']);
+  assert.deepEqual(keys({ ...monthly, lastMonthly: '2026-09' }, '2026-10-20T07:00:00Z'), []);
+  assert.deepEqual(keys({ ...monthly, weekly: true }, '2027-01-04T08:00:00Z'), ['2026-W53', '2026-12']);
+});
+
+test('leaderboard posting is claimed once per period, even with concurrent workers, and released on failure', async () => {
+  const claims = await Promise.all(Array.from({ length: 6 }, () => claimLeaderboardPeriod(G, 'week', null, '2026-W41')));
+  assert.equal(claims.filter(Boolean).length, 1);
+  assert.equal(await claimLeaderboardPeriod(G, 'week', null, '2026-W41'), false);
+  await releaseLeaderboardPeriod(G, 'week', '2026-W41', null);
+  assert.equal((await prisma.guildSettings.findUniqueOrThrow({ where: { guildId: G } })).leaderboardLastWeekly, null);
+  assert.equal(await claimLeaderboardPeriod(G, 'month', null, '2026-09'), true);
+
+  await prisma.guildSettings.update({ where: { guildId: G }, data: {
+    leaderboardLastMonthly: null, leaderboardChannelId: LB_CHANNEL, leaderboardWeekly: true, leaderboardMinRatings: 1
+  } });
+  const cat = await category();
+  const handled = await ticket(cat, { closedAt: new Date('2026-10-08T10:00:00Z'), claimedById: MOD1, handledById: MOD1 });
+  await prisma.ticketFeedback.create({ data: {
+    ticketId: handled.id, guildId: G, userId: U, rating: 5, staffUserId: MOD1, createdAt: new Date('2026-10-08T11:00:00Z')
+  } });
+  const sent: any[] = [];
+  const { client: mock } = guildClient({ [LB_CHANNEL]: textChannel(LB_CHANNEL, sent) });
+
+  // Monday 10:00 in Rome: two workers race, one post.
+  const now = new Date('2026-10-12T08:00:00Z');
+  const results = await Promise.all([runLeaderboardCycle(mock, now), runLeaderboardCycle(mock, now)]);
+  assert.equal(results.reduce((sum, result) => sum + result.posted, 0), 1);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].allowedMentions, { parse: [] });
+  const embed = sent[0].embeds[0].toJSON();
+  assert.equal(embed.title, 'Classifica moderatori — settimana dal 5 all’11 ottobre 2026');
+  assert.ok(embed.description.includes('🥇 <@' + MOD1 + '> · 1 ticket · ⭐ 5.00 (1)'));
+  assert.equal((await prisma.guildSettings.findUniqueOrThrow({ where: { guildId: G } })).leaderboardLastWeekly, '2026-W41');
+
+  // Restart later in the same week: nothing new.
+  await runLeaderboardCycle(mock, new Date('2026-10-14T08:00:00Z'));
+  assert.equal(sent.length, 1);
+
+  // Empty period: short message, still marked as done.
+  await runLeaderboardCycle(mock, new Date('2026-10-19T08:00:00Z'));
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].embeds[0].toJSON().description, 'Nessun ticket gestito in questo periodo.');
+  assert.equal((await prisma.guildSettings.findUniqueOrThrow({ where: { guildId: G } })).leaderboardLastWeekly, '2026-W42');
+
+  // Discord refuses the post: the key is released for the next cycle.
+  const failing = guildClient({ [LB_CHANNEL]: { ...textChannel(LB_CHANNEL, sent), send: async () => {
+    throw Object.assign(new Error('Missing Access'), { code: 50001 });
+  } } }).client;
+  const failed = await runLeaderboardCycle(failing, new Date('2026-10-26T08:00:00Z'));
+  assert.equal(failed.failed, 1);
+  assert.equal((await prisma.guildSettings.findUniqueOrThrow({ where: { guildId: G } })).leaderboardLastWeekly, '2026-W42');
+  await runLeaderboardCycle(mock, new Date('2026-10-26T08:00:00Z'));
+  assert.equal((await prisma.guildSettings.findUniqueOrThrow({ where: { guildId: G } })).leaderboardLastWeekly, '2026-W43');
+});
+
+test('new ticket channels deny threads to opener and participants; staff may only write in them', () => {
+  const base = { guildId: G, botId: OTHER, openerId: U, staffRoleIds: [STAFF_ROLE_X] };
+  const has = (bits: bigint[] | undefined, flag: bigint) => Boolean(bits?.includes(flag));
+  for (const threadsAllowed of [true, false]) {
+    const [everyone, bot, opener, staff] = ticketChannelOverwrites({ ...base, threadsAllowed }) as Array<{ id: string; allow?: bigint[]; deny?: bigint[] }>;
+    assert.equal(everyone!.id, G);
+    assert.ok(has(everyone!.deny, PermissionFlagsBits.CreatePrivateThreads));
+    assert.ok(has(everyone!.deny, PermissionFlagsBits.SendMessagesInThreads));
+    assert.equal(opener!.id, U);
+    assert.ok(!has(opener!.allow, PermissionFlagsBits.SendMessagesInThreads));
+    assert.ok(!has(opener!.allow, PermissionFlagsBits.CreatePrivateThreads));
+    assert.ok(has(staff!.deny, PermissionFlagsBits.CreatePrivateThreads));
+    assert.ok(has(staff!.deny, PermissionFlagsBits.CreatePublicThreads));
+    assert.equal(has(staff!.allow, PermissionFlagsBits.SendMessagesInThreads), threadsAllowed);
+    assert.equal(has(bot!.allow, PermissionFlagsBits.ManageThreads), threadsAllowed);
+    assert.equal(has(bot!.allow, PermissionFlagsBits.CreatePrivateThreads), threadsAllowed);
+  }
+});
+
+test('staff thread button: staff only (never the opener), active tickets only, one thread per ticket', async () => {
+  const cat = await category({ staffRoleIds: [STAFF_ROLE_X] });
+  const row = await ticket(cat, { status: 'OPEN', closedAt: null });
+  const { channel, edits, created } = threadedChannel(row);
+  const channels: Record<string, unknown> = { [row.channelId]: channel };
+  // U opened the ticket and also holds the staff role: still refused.
+  const { client: mock, guild } = guildClient(channels, [MOD1, MOD2, U]);
+  const replies: any[] = [];
+  const press = (userId: string, target: Client = mock, targetGuild: unknown = guild, ticketId = row.id, channelId = row.channelId) =>
+    handleTicketInteraction({
+      customId: 'dispatch:staff-thread:' + ticketId, guildId: G, channelId, user: { id: userId },
+      client: target, guild: targetGuild,
+      isButton: () => true, isStringSelectMenu: () => false, isModalSubmit: () => false,
+      reply: async (payload: unknown) => { replies.push(payload); },
+      deferReply: async () => undefined,
+      editReply: async (payload: unknown) => { replies.push(payload); }
+    } as any);
+
+  await press(U);
+  assert.match(replies.at(-1).content, /Solo lo staff/);
+  await press(NON_STAFF);
+  assert.match(replies.at(-1).content, /Solo lo staff/);
+  assert.equal(created.length, 0);
+  assert.equal((await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } })).staffThreadId, null);
+
+  await press(MOD1);
+  assert.equal(created.length, 1);
+  const options = created[0]!.options;
+  assert.equal(options.name, 'staff-' + String(row.ticketNumber).padStart(4, '0'));
+  assert.equal(options.type, ChannelType.PrivateThread);
+  assert.equal(options.invitable, false);
+  assert.equal(options.autoArchiveDuration, 10080);
+  const thread = created[0]!.thread;
+  assert.deepEqual(thread.state.added, [MOD1]);
+  assert.deepEqual(thread.state.sent[0].allowedMentions, { parse: [] });
+  assert.deepEqual(edits.find((edit) => edit.id === OTHER)?.options, {
+    CreatePrivateThreads: true, SendMessagesInThreads: true, ManageThreads: true
+  });
+  assert.deepEqual(edits.find((edit) => edit.id === STAFF_ROLE_X)?.options, {
+    SendMessagesInThreads: true, CreatePublicThreads: false, CreatePrivateThreads: false
+  });
+  assert.ok(!edits.some((edit) => edit.id === U));
+  assert.equal((await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } })).staffThreadId, THREAD_ID);
+  assert.ok(replies.at(-1).content.includes('<#' + THREAD_ID + '>'));
+  assert.equal(await prisma.ticketAudit.count({ where: { ticketId: row.id, action: 'ticket.staff_thread.create' } }), 1);
+
+  // Another staff member joins the same thread; the opener is never added.
+  channels[THREAD_ID] = thread.thread;
+  await press(MOD2);
+  assert.equal(created.length, 1);
+  assert.deepEqual(thread.state.added, [MOD1, MOD2]);
+  await press(U);
+  assert.deepEqual(thread.state.added, [MOD1, MOD2]);
+
+  // Closed: the thread is locked/archived and the button is refused.
+  await closeTicket(mock, G, row.id, MOD1, null);
+  assert.equal(thread.state.locked, true);
+  assert.equal(thread.state.archived, true);
+  await press(MOD1);
+  assert.match(replies.at(-1).content, /ticket attivi/);
+  assert.deepEqual(thread.state.added, [MOD1, MOD2]);
+
+  // Reopen unlocks it.
+  await reopenTicket(mock, G, row.id, MOD1);
+  assert.equal(thread.state.locked, false);
+  assert.equal(thread.state.archived, false);
+
+  // Bot role without thread permissions: clear message and audit, no thread.
+  const other = await ticket(cat, { status: 'OPEN', closedAt: null });
+  const otherChannel = threadedChannel(other);
+  const limited = guildClient({ [other.channelId]: otherChannel.channel }, [MOD1], false);
+  await press(MOD1, limited.client, limited.guild, other.id, other.channelId);
+  assert.match(replies.at(-1).content, /Il bot non ha i permessi per creare thread privati: aggiorna i permessi del suo ruolo/);
+  assert.equal(otherChannel.created.length, 0);
+  assert.equal(await prisma.ticketAudit.count({ where: { ticketId: other.id, action: 'ticket.staff_thread.missing_permissions' } }), 1);
+});
+
+test('staff thread messages are neither ticket activity nor a first staff response', async () => {
+  const cat = await category({ staffRoleIds: [STAFF_ROLE_X] });
+  const lastActivityAt = new Date(Date.now() - DAY);
+  const row = await ticket(cat, { status: 'OPEN', closedAt: null, lastActivityAt, staffThreadId: THREAD_ID });
+  await recordTicketMessage({
+    guildId: G, channelId: THREAD_ID, id: '990000000000009601', author: { id: MOD1, bot: false },
+    channel: { type: ChannelType.PrivateThread, topic: null }, member: memberFor(true)
+  } as any);
+  const after = await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } });
+  assert.equal(after.firstStaffResponseAt, null);
+  assert.equal(after.lastActivityAt.getTime(), lastActivityAt.getTime());
+});
+
+test('staff thread transcript goes to the archive channel, else the log channel, else nowhere; never to the opener', async () => {
+  assert.deepEqual(staffThreadTranscriptDestination(ARCHIVE, LOG_CHANNEL), { channelId: ARCHIVE, source: 'archive' });
+  assert.deepEqual(staffThreadTranscriptDestination(null, LOG_CHANNEL), { channelId: LOG_CHANNEL, source: 'log' });
+  assert.deepEqual(staffThreadTranscriptDestination('nope', LOG_CHANNEL), { channelId: LOG_CHANNEL, source: 'log' });
+  assert.equal(staffThreadTranscriptDestination(null, null), null);
+
+  const message = {
+    id: '990000000000009500', content: 'nota interna <b>', createdTimestamp: 1, createdAt: new Date('2026-10-10T10:00:00Z'),
+    author: { tag: 'moderatore' }, attachments: new Map(), embeds: []
+  };
+  const closeWithThread = async (categoryExtra: Record<string, unknown>, logChannelId: string | null) => {
+    await prisma.guildSettings.update({ where: { guildId: G }, data: { ticketLogChannelId: logChannelId, ticketLogEvents: [] } });
+    invalidateTicketLogSettings(G);
+    const cat = await category({ staffRoleIds: [STAFF_ROLE_X], ...categoryExtra });
+    const row = await ticket(cat, { status: 'OPEN', closedAt: null, staffThreadId: THREAD_ID });
+    const { channel } = fakeTicketChannel(row, null);
+    const { thread, state } = fakeThread(row.channelId, THREAD_ID, [message]);
+    const sent: Record<string, any[]> = { [ARCHIVE]: [], [LOG_CHANNEL]: [] };
+    const { client: mock } = guildClient({
+      [row.channelId]: channel,
+      [THREAD_ID]: thread,
+      [ARCHIVE]: textChannel(ARCHIVE, sent[ARCHIVE]!),
+      [LOG_CHANNEL]: textChannel(LOG_CHANNEL, sent[LOG_CHANNEL]!)
+    }, [MOD1]);
+    await closeTicket(mock, G, row.id, MOD1, null);
+    // The staff copy never names or pings the opener (the user transcript of
+    // the archive channel keeps its existing opener reference).
+    for (const payload of [...sent[ARCHIVE]!, ...sent[LOG_CHANNEL]!]) {
+      if ((payload.files ?? []).some((file: any) => String(file.name).endsWith('-staff.html'))) {
+        assert.ok(!String(payload.content ?? '').includes(U));
+        assert.deepEqual(payload.allowedMentions, { parse: [] });
+      }
+    }
+    return { row, sent, state };
+  };
+  const staffFile = (payloads: any[], row: { ticketNumber: number }) =>
+    payloads.flatMap((payload) => payload.files ?? []).find((file: any) => file.name === `dispatch-ticket-${row.ticketNumber}-staff.html`);
+
+  try {
+    // Archive channel configured: the staff copy goes there, next to the user
+    // transcript, which never contains the thread.
+    const archived = await closeWithThread({ transcriptChannelId: ARCHIVE, transcriptAutoGenerate: true, transcriptRetain: false }, LOG_CHANNEL);
+    assert.equal(archived.sent[LOG_CHANNEL]!.length, 0);
+    assert.equal(archived.sent[ARCHIVE]!.length, 2);
+    const staffCopy = staffFile(archived.sent[ARCHIVE]!, archived.row);
+    assert.ok(staffCopy);
+    assert.ok(staffCopy.attachment.toString('utf8').includes('nota interna &lt;b&gt;'));
+    const userCopy = archived.sent[ARCHIVE]!.flatMap((payload) => payload.files ?? [])
+      .find((file: any) => file.name === `dispatch-ticket-${archived.row.ticketNumber}.html`);
+    assert.ok(userCopy);
+    assert.ok(!userCopy.attachment.toString('utf8').includes('nota interna'));
+    assert.ok(archived.sent[ARCHIVE]!.every((payload) => Array.isArray(payload.allowedMentions?.parse) && payload.allowedMentions.parse.length === 0));
+    assert.equal(archived.state.locked, true);
+    assert.equal(archived.state.archived, true);
+    const delivered = await prisma.ticketAudit.findFirstOrThrow({ where: { ticketId: archived.row.id, action: 'ticket.staff_thread.transcript' } });
+    assert.equal((delivered.details as { destination?: unknown }).destination, 'archive');
+    assert.equal((delivered.details as { delivered?: unknown }).delivered, true);
+
+    // No archive channel: the server ticket log channel.
+    const logged = await closeWithThread({}, LOG_CHANNEL);
+    assert.equal(logged.sent[ARCHIVE]!.length, 0);
+    assert.equal(logged.sent[LOG_CHANNEL]!.length, 1);
+    assert.ok(staffFile(logged.sent[LOG_CHANNEL]!, logged.row));
+
+    // Nothing configured: skipped and audited, the thread is still locked.
+    const skipped = await closeWithThread({}, null);
+    assert.equal(skipped.sent[ARCHIVE]!.length + skipped.sent[LOG_CHANNEL]!.length, 0);
+    assert.equal(await prisma.ticketAudit.count({ where: { ticketId: skipped.row.id, action: 'ticket.staff_thread.transcript_skipped' } }), 1);
+    assert.equal(skipped.state.locked, true);
+
+    // Channel deletion after a delivered close does not send it twice.
+    const { channel: logChannelTicket } = fakeTicketChannel(logged.row, null);
+    const { thread } = fakeThread(logged.row.channelId, THREAD_ID, [message]);
+    const resent: any[] = [];
+    const { client: deleter } = guildClient({
+      [logged.row.channelId]: logChannelTicket, [THREAD_ID]: thread, [LOG_CHANNEL]: textChannel(LOG_CHANNEL, resent)
+    }, [MOD1]);
+    await deleteTicketChannel(deleter, G, logged.row.id, MOD1);
+    assert.equal(resent.length, 0);
+  } finally {
+    invalidateTicketLogSettings();
+  }
 });
