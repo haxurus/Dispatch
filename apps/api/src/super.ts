@@ -33,7 +33,10 @@ const OPEN_TICKET_STATUSES: string[] = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOL
 /*
  * Permissions requested when the hosted bot is installed. Must stay in sync
  * with docs/DEPLOYMENT.md: View Channels, Manage Channels, Manage Roles,
- * Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History.
+ * Send Messages, Manage Messages, Embed Links, Attach Files, Read Message
+ * History, Manage Threads, Create Private Threads, Send Messages in Threads
+ * (private staff threads: the bot can only grant in channel overwrites what
+ * it has itself). Bitfield 361045814288.
  */
 const INSTALL_PERMISSIONS = [
   1n << 10n, // View Channels
@@ -43,7 +46,10 @@ const INSTALL_PERMISSIONS = [
   1n << 13n, // Manage Messages
   1n << 14n, // Embed Links
   1n << 15n, // Attach Files
-  1n << 16n // Read Message History
+  1n << 16n, // Read Message History
+  1n << 34n, // Manage Threads
+  1n << 36n, // Create Private Threads
+  1n << 38n // Send Messages in Threads
 ].reduce((all, flag) => all | flag, 0n);
 
 const botInstallUrl = () =>
