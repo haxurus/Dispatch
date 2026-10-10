@@ -619,6 +619,65 @@ details > summary { cursor: pointer; }
 hr { border: 0; border-top: 1px solid var(--line); margin: 20px 0; }
 
 /* ==========================================================================
+   Resource picker (searchable combobox: _components/ResourcePicker.tsx)
+   ========================================================================== */
+.picker { position: relative; display: flex; flex-direction: column; gap: 7px; margin: 14px 0; min-width: 0; }
+.form .picker, .shell .picker, .panel-editor .picker { margin: 0; }
+.picker > .picker-label { display: block; margin: 0; }
+.picker-control {
+  position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  min-height: 38px; padding: 4px 6px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--bg-raised);
+  cursor: text; transition: border-color .15s ease, box-shadow .15s ease;
+}
+.picker-control:hover { border-color: var(--line-hover); }
+.picker-control:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.picker.is-disabled .picker-control { cursor: not-allowed; opacity: .6; }
+.picker-control input[role="combobox"] {
+  flex: 1 1 120px; width: auto; min-width: 90px; min-height: 28px; padding: 2px 4px;
+  border: 0; border-radius: 0; background: transparent; box-shadow: none;
+}
+.picker-control input[role="combobox"]:hover, .picker-control input[role="combobox"]:focus { border: 0; box-shadow: none; }
+.picker-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-height: 26px; padding: 0 4px 0 9px;
+  border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface-3);
+  color: var(--text); font-size: .8rem; line-height: 1.2;
+}
+.picker-chip.is-single { padding-right: 9px; border-color: var(--accent-line); background: var(--accent-soft); }
+.picker-chip.is-missing { border-color: var(--warn-line); background: var(--warn-soft); color: var(--warn); }
+.picker-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-chip .role-dot { margin-right: 2px; }
+.picker-chip-remove, .picker-clear, :where(.shell) .picker-chip-remove, :where(.shell) .picker-clear {
+  display: inline-grid; place-items: center; width: 20px; height: 20px; min-height: 20px; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 1rem; line-height: 1; box-shadow: none;
+}
+.picker-chip-remove:hover:not(:disabled), .picker-clear:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.picker-clear { margin-left: auto; }
+.picker-required { position: absolute; left: 12px; bottom: 0; width: 1px; min-height: 1px; height: 1px; padding: 0; border: 0; opacity: 0; pointer-events: none; }
+.picker-hint { color: var(--faint); font-size: .74rem; }
+.picker-list {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 60; max-height: 300px; overflow-y: auto;
+  margin: 4px 0 0; padding: 4px; list-style: none;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); box-shadow: var(--shadow);
+}
+.picker-list[hidden] { display: none; }
+.picker-option {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 8px;
+  padding: 7px 9px; border-radius: 4px; color: var(--text-2); font-size: .85rem; cursor: pointer;
+}
+.picker-option .role-dot { margin: 0; }
+.picker-option:not(:has(.role-dot)) { grid-template-columns: minmax(0, 1fr) auto; }
+.picker-option-label { overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.picker-option-meta { grid-column: -2 / -1; grid-row: 1; color: var(--muted); font-size: .74rem; white-space: nowrap; }
+.picker-option-id { grid-column: 1 / -1; color: var(--faint); font-size: .68rem; }
+.picker-option.is-active { background: var(--surface-2); }
+.picker-option.is-selected { box-shadow: inset 2px 0 0 var(--accent); }
+.picker-option.is-selected .picker-option-label::after { content: "  ✓"; color: var(--accent); }
+.picker-option[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+.picker-empty, .picker-more { padding: 8px 9px; color: var(--muted); font-size: .8rem; }
+.picker-more { border-top: 1px solid var(--line); margin-top: 4px; }
+
+/* ==========================================================================
    Responsive
    ========================================================================== */
 @media (max-width: 1100px) {

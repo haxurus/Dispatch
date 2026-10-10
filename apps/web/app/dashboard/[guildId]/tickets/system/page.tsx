@@ -2,11 +2,14 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import ResourcePicker, { CHANNEL_TYPES } from '../../../../_components/ResourcePicker';
 
 type Channel = {
   id: string;
   name: string;
   type: number;
+  parentId: string | null;
+  position: number;
 };
 
 type Category = {
@@ -161,7 +164,6 @@ export default function TicketSystemPage() {
     );
   }
 
-  const textChannels = channels.filter((channel) => channel.type === 0 || channel.type === 5);
   const enabledCategories = categories.filter((category) => category.enabled);
 
   return (
@@ -337,21 +339,18 @@ export default function TicketSystemPage() {
             Abilita menu principale
           </label>
 
-          <label>
-            Canale Discord
-            <select
-              value={settings.mainMenuChannelId ?? ''}
-              onChange={(event) => setSettings({
-                ...settings,
-                mainMenuChannelId: event.target.value || null
-              })}
-            >
-              <option value="">Seleziona...</option>
-              {textChannels.map((channel) => (
-                <option value={channel.id} key={channel.id}>#{channel.name}</option>
-              ))}
-            </select>
-          </label>
+          <ResourcePicker
+            label="Canale Discord"
+            kind="channel"
+            channels={channels}
+            channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]}
+            placeholder="Seleziona..."
+            value={settings.mainMenuChannelId ?? ''}
+            onChange={(channelId) => setSettings({
+              ...settings,
+              mainMenuChannelId: channelId || null
+            })}
+          />
 
           <label>
             Titolo
@@ -391,21 +390,16 @@ export default function TicketSystemPage() {
             />
           </label>
 
-          <label>
-            Richieste disponibili nel menu
-            <select
-              multiple
-              value={settings.mainMenuCategoryIds}
-              onChange={(event) => setSettings({
-                ...settings,
-                mainMenuCategoryIds: [...event.target.selectedOptions].map((option) => option.value)
-              })}
-            >
-              {enabledCategories.map((category) => (
-                <option value={category.id} key={category.id}>{category.name}</option>
-              ))}
-            </select>
-          </label>
+          <ResourcePicker
+            label="Richieste disponibili nel menu"
+            kind="item"
+            items={enabledCategories}
+            multiple
+            max={25}
+            hint="Massimo 25. L'ordine di selezione è l'ordine del menu."
+            value={settings.mainMenuCategoryIds}
+            onChange={(mainMenuCategoryIds) => setSettings({ ...settings, mainMenuCategoryIds })}
+          />
 
           <div className="actions">
             <button disabled={busy === 'save'} type="submit">

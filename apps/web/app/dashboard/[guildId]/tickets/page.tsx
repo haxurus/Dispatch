@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import ResourcePicker, { CHANNEL_TYPES } from '../../../_components/ResourcePicker';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
 
@@ -16,6 +17,8 @@ type DiscordRole = {
   id: string;
   name: string;
   position: number;
+  color?: number;
+  managed?: boolean;
 };
 
 type FormField = {
@@ -56,17 +59,6 @@ type Category = {
   enabled: boolean;
 };
 
-type Panel = {
-  id: string;
-  name: string;
-  channelId: string;
-  messageId: string | null;
-  title: string;
-  description: string | null;
-  categoryIds: string[];
-  enabled: boolean;
-};
-
 type ResponseTemplate = {
   id: string;
   name: string;
@@ -98,15 +90,6 @@ const newCategory = () => ({
   enabled: true
 });
 
-const emptyPanel = {
-  name: '',
-  channelId: '',
-  title: 'Apri un ticket',
-  description: 'Seleziona la categoria più adatta alla tua richiesta.',
-  categoryIds: [] as string[],
-  enabled: true
-};
-
 function nullableNumber(value: string) {
   return value === '' ? null : Number(value);
 }
@@ -132,14 +115,12 @@ export default function TicketConfigurationPage() {
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
   const [roles, setRoles] = useState<DiscordRole[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [panels, setPanels] = useState<Panel[]>([]);
   const [templates, setTemplates] = useState<ResponseTemplate[]>([]);
   const [categoryForm, setCategoryForm] = useState(newCategory);
   // Raw option editor text per field ID: parsed on blur and before save, so
   // typing "Etichetta|" is not normalised away mid-keystroke.
   const [optionDrafts, setOptionDrafts] = useState<Record<string, string>>({});
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
-  const [panelForm, setPanelForm] = useState(emptyPanel);
   const [templateName, setTemplateName] = useState('');
   const [templateContent, setTemplateContent] = useState('');
   const [busy, setBusy] = useState('');
@@ -149,11 +130,10 @@ export default function TicketConfigurationPage() {
   const load = async () => {
     setError('');
 
-    const [accessResponse, resourcesResponse, categoriesResponse, panelsResponse, templatesResponse] = await Promise.all([
+    const [accessResponse, resourcesResponse, categoriesResponse, templatesResponse] = await Promise.all([
       fetch(`/backend/api/guilds/${guildId}/access`),
       fetch(`/backend/api/guilds/${guildId}/resources`),
       fetch(`/backend/api/guilds/${guildId}/categories`),
-      fetch(`/backend/api/guilds/${guildId}/panels`),
       fetch(`/backend/api/guilds/${guildId}/response-templates`)
     ]);
 
@@ -162,7 +142,7 @@ export default function TicketConfigurationPage() {
       return;
     }
 
-    if (![accessResponse, resourcesResponse, categoriesResponse, panelsResponse, templatesResponse].every((response) => response.ok)) {
+    if (![accessResponse, resourcesResponse, categoriesResponse, templatesResponse].every((response) => response.ok)) {
       setError('Impossibile caricare la configurazione ticket.');
       return;
     }
@@ -174,7 +154,6 @@ export default function TicketConfigurationPage() {
     setChannels(resources.channels);
     setRoles(resources.roles);
     setCategories(await categoriesResponse.json());
-    setPanels(await panelsResponse.json());
     setTemplates(await templatesResponse.json());
   };
 
@@ -350,82 +329,6 @@ export default function TicketConfigurationPage() {
     }
   };
 
-  const createPanel = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy('panel');
-    setError('');
-    setNotice('');
-
-    try {
-      const response = await fetch(`/backend/api/guilds/${guildId}/panels`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...panelForm,
-          description: panelForm.description || null
-        })
-      });
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        setError(`Creazione pannello fallita: ${body.error ?? response.status}`);
-        return;
-      }
-
-      setPanelForm(emptyPanel);
-      setNotice('Pannello creato. Ora puoi pubblicarlo su Discord.');
-      await load();
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const publish = async (panelId: string) => {
-    setBusy(`publish:${panelId}`);
-    setError('');
-    setNotice('');
-
-    try {
-      const response = await fetch(`/backend/api/guilds/${guildId}/panels/${panelId}/publish`, {
-        method: 'POST'
-      });
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        setError(`Pubblicazione fallita: ${body.error ?? response.status}`);
-        return;
-      }
-
-      setNotice('Pannello pubblicato o aggiornato su Discord.');
-      await load();
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const deletePanel = async (panelId: string) => {
-    setBusy(`panel:${panelId}`);
-    setError('');
-    setNotice('');
-
-    try {
-      const response = await fetch(`/backend/api/guilds/${guildId}/panels/${panelId}`, {
-        method: 'DELETE'
-      });
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        setError(`Eliminazione pannello fallita: ${body.error ?? response.status}`);
-        return;
-      }
-
-      setNotice('Pannello eliminato dalla configurazione.');
-      await load();
-    } finally {
-      setBusy('');
-    }
-  };
-
   const createTemplate = async (event: FormEvent) => {
     event.preventDefault();
     setBusy('template');
@@ -489,19 +392,17 @@ export default function TicketConfigurationPage() {
     );
   }
 
-  const categoryChannels = channels.filter((channel) => channel.type === 4);
-  const textChannels = channels.filter((channel) => channel.type === 0 || channel.type === 5);
-
   return (
     <main className="shell">
       <div className="row">
         <div>
           <p className="eyebrow">Dispatch</p>
           <h1>Configurazione ticket</h1>
-          <p className="muted">Categorie, form, SLA, automazioni e pannelli di apertura.</p>
+          <p className="muted">Categorie, form, SLA, automazioni e risposte rapide.</p>
         </div>
         <div className="actions">
           <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/panels`}>Pannelli</a>
           <a className="button secondary" href={`/dashboard/${guildId}/forms`}>Form</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/system`}>Sistema</a>
           <a className="button secondary" href={`/dashboard/${guildId}/tickets/analytics`}>Analytics</a>
@@ -541,34 +442,25 @@ export default function TicketConfigurationPage() {
             />
           </label>
 
-          <label>
-            Categoria Discord
-            <select
-              value={categoryForm.discordCategoryId}
-              onChange={(event) => setCategoryForm({ ...categoryForm, discordCategoryId: event.target.value })}
-            >
-              <option value="">Nessuna</option>
-              {categoryChannels.map((channel) => (
-                <option value={channel.id} key={channel.id}>{channel.name}</option>
-              ))}
-            </select>
-          </label>
+          <ResourcePicker
+            label="Categoria Discord"
+            kind="channel"
+            channels={channels}
+            channelTypes={[CHANNEL_TYPES.category]}
+            placeholder="Nessuna"
+            value={categoryForm.discordCategoryId}
+            onChange={(discordCategoryId) => setCategoryForm({ ...categoryForm, discordCategoryId })}
+          />
 
-          <label>
-            Ruoli staff
-            <select
-              multiple
-              value={categoryForm.staffRoleIds}
-              onChange={(event) => setCategoryForm({
-                ...categoryForm,
-                staffRoleIds: [...event.target.selectedOptions].map((option) => option.value)
-              })}
-            >
-              {roles
-                .filter((role) => role.id !== guildId)
-                .map((role) => <option value={role.id} key={role.id}>{role.name}</option>)}
-            </select>
-          </label>
+          <ResourcePicker
+            label="Ruoli staff"
+            kind="role"
+            roles={roles}
+            guildId={guildId}
+            multiple
+            value={categoryForm.staffRoleIds}
+            onChange={(staffRoleIds) => setCategoryForm({ ...categoryForm, staffRoleIds })}
+          />
 
           <label>
             Massimo ticket aperti per utente
@@ -812,21 +704,15 @@ export default function TicketConfigurationPage() {
               </label>
             </div>
 
-            <label>
-              Ruoli escalation
-              <select
-                multiple
-                value={categoryForm.escalationRoleIds}
-                onChange={(event) => setCategoryForm({
-                  ...categoryForm,
-                  escalationRoleIds: [...event.target.selectedOptions].map((option) => option.value)
-                })}
-              >
-                {roles
-                  .filter((role) => role.id !== guildId)
-                  .map((role) => <option value={role.id} key={role.id}>{role.name}</option>)}
-              </select>
-            </label>
+            <ResourcePicker
+              label="Ruoli escalation"
+              kind="role"
+              roles={roles}
+              guildId={guildId}
+              multiple
+              value={categoryForm.escalationRoleIds}
+              onChange={(escalationRoleIds) => setCategoryForm({ ...categoryForm, escalationRoleIds })}
+            />
 
             <label className="checkbox-row">
               <input
@@ -869,21 +755,15 @@ export default function TicketConfigurationPage() {
                   Invia il file HTML in DM all'utente che ha aperto il ticket
                 </label>
 
-                <label>
-                  Canale archivio transcript
-                  <select
-                    value={categoryForm.transcriptChannelId}
-                    onChange={(event) => setCategoryForm({
-                      ...categoryForm,
-                      transcriptChannelId: event.target.value
-                    })}
-                  >
-                    <option value="">Non inviare in un canale</option>
-                    {textChannels.map((channel) => (
-                      <option value={channel.id} key={channel.id}>#{channel.name}</option>
-                    ))}
-                  </select>
-                </label>
+                <ResourcePicker
+                  label="Canale archivio transcript"
+                  kind="channel"
+                  channels={channels}
+                  channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]}
+                  placeholder="Non inviare in un canale"
+                  value={categoryForm.transcriptChannelId}
+                  onChange={(transcriptChannelId) => setCategoryForm({ ...categoryForm, transcriptChannelId })}
+                />
 
               </div>
             )}
@@ -912,73 +792,16 @@ export default function TicketConfigurationPage() {
           </button>
         </form>
 
-        <form className="card form" onSubmit={createPanel}>
-          <h2>Nuovo pannello</h2>
-
-          <label>
-            Nome interno
-            <input
-              required
-              maxLength={80}
-              value={panelForm.name}
-              onChange={(event) => setPanelForm({ ...panelForm, name: event.target.value })}
-            />
-          </label>
-
-          <label>
-            Canale Discord
-            <select
-              required
-              value={panelForm.channelId}
-              onChange={(event) => setPanelForm({ ...panelForm, channelId: event.target.value })}
-            >
-              <option value="">Seleziona...</option>
-              {textChannels.map((channel) => (
-                <option value={channel.id} key={channel.id}>#{channel.name}</option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Titolo
-            <input
-              required
-              maxLength={256}
-              value={panelForm.title}
-              onChange={(event) => setPanelForm({ ...panelForm, title: event.target.value })}
-            />
-          </label>
-
-          <label>
-            Descrizione
-            <textarea
-              maxLength={2000}
-              value={panelForm.description}
-              onChange={(event) => setPanelForm({ ...panelForm, description: event.target.value })}
-            />
-          </label>
-
-          <label>
-            Categorie disponibili
-            <select
-              required
-              multiple
-              value={panelForm.categoryIds}
-              onChange={(event) => setPanelForm({
-                ...panelForm,
-                categoryIds: [...event.target.selectedOptions].map((option) => option.value)
-              })}
-            >
-              {categories
-                .filter((category) => category.enabled)
-                .map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}
-            </select>
-          </label>
-
-          <button disabled={busy === 'panel'} type="submit">
-            {busy === 'panel' ? 'Creazione...' : 'Crea pannello'}
-          </button>
-        </form>
+        <article className="card">
+          <h2>Pannelli di apertura</h2>
+          <p className="muted">
+            I pannelli ticket e form (menu a tendina o pulsanti, embed, emoji e ordine delle categorie) si gestiscono
+            nella sezione dedicata.
+          </p>
+          <div className="actions">
+            <a className="button" href={`/dashboard/${guildId}/panels`}>Vai ai pannelli</a>
+          </div>
+        </article>
       </section>
 
       <section>
@@ -1003,36 +826,6 @@ export default function TicketConfigurationPage() {
                   className="danger"
                   disabled={busy === `category:${category.id}`}
                   onClick={() => void deleteCategory(category.id)}
-                >
-                  Elimina
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section>
-        <h2>Pannelli</h2>
-        <div className="grid">
-          {panels.map((panel) => (
-            <article className="card" key={panel.id}>
-              <h3>{panel.name}</h3>
-              <p>{panel.title}</p>
-              <p className="muted">
-                Categorie: {panel.categoryIds.length} · {panel.messageId ? 'Pubblicato' : 'Non pubblicato'}
-              </p>
-              <div className="actions">
-                <button
-                  disabled={busy === `publish:${panel.id}`}
-                  onClick={() => void publish(panel.id)}
-                >
-                  {panel.messageId ? 'Aggiorna su Discord' : 'Pubblica su Discord'}
-                </button>
-                <button
-                  className="danger"
-                  disabled={busy === `panel:${panel.id}`}
-                  onClick={() => void deletePanel(panel.id)}
                 >
                   Elimina
                 </button>
