@@ -32,6 +32,11 @@ model GuildSettings {
   mainMenuButtonLabel  String   @default("Apri un ticket")
   mainMenuCategoryIds  String[] @default([])
 
+  // Ticket log channel (text/announcement) and the enabled event keys
+  // (TICKET_LOG_EVENTS in @dispatch/shared).
+  ticketLogChannelId String?
+  ticketLogEvents    String[] @default([])
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -58,6 +63,8 @@ model TicketCategory {
   name              String
   description       String?
   discordCategoryId String?
+  // Discord category the channel moves to when the ticket is closed.
+  closedParentCategoryId String?
   staffRoleIds      String[] @default([])
   maxOpenPerUser           Int      @default(1)
   openCooldownSeconds      Int      @default(60)
@@ -137,12 +144,19 @@ model Ticket {
   slaResolutionBreachedAt DateTime?
   escalatedAt              DateTime?
   feedbackRequestedAt      DateTime?
+  // Form that created the ticket (closed category override).
+  sourceFormId             String?
+  // Discord parent before the move to the closed category, restored on reopen.
+  openParentId             String?
+  // Channel deleted by staff: the row stays for history until retention.
+  channelDeletedAt         DateTime?
   createdAt                DateTime @default(now())
   updatedAt              DateTime @updatedAt
   closedAt               DateTime?
 
   guild      GuildSettings  @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
   category   TicketCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  sourceForm FormDefinition? @relation(fields: [sourceFormId], references: [id], onDelete: SetNull)
   members    TicketMember[]
   audit      TicketAudit[]
   transcript Transcript?
@@ -155,6 +169,7 @@ model Ticket {
   @@index([claimedById, status])
   @@index([status, id])
   @@index([guildId, status, closedAt])
+  @@index([sourceFormId])
 }
 
 model TicketMember {
@@ -366,6 +381,8 @@ model FormDefinition {
   createTicketOnSubmit   Boolean  @default(false)
   ticketCategoryId       String?
   ticketParentCategoryId String?
+  // Overrides TicketCategory.closedParentCategoryId for tickets of this form.
+  ticketClosedParentCategoryId String?
   ticketStaffRoleIds     String[] @default([])
   ticketPrefix           String   @default("form")
   createdAt              DateTime @default(now())
@@ -376,6 +393,7 @@ model FormDefinition {
   submissions FormSubmission[]
   sessions    FormSession[]
   permissions FormPermissionBinding[]
+  tickets     Ticket[]
 
   @@index([guildId, enabled])
   @@index([guildId, createdAt])

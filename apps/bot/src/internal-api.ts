@@ -3,10 +3,13 @@ import http from 'node:http';
 import type { Client } from 'discord.js';
 import { publishMainMenu, publishTicketPanel } from './tickets.js';
 import { publishFormPanel } from './forms.js';
+import { parseBlacklistLogPayload } from '@dispatch/shared';
+import { logBlacklistEvent, sendTicketLogTest } from './ticket-log.js';
 import {
   addTicketMember,
   assignTicket,
   closeTicket,
+  deleteTicketChannel,
   generateTranscript,
   removeTicketMember,
   reopenTicket,
@@ -204,7 +207,29 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
       }
 
 
-      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/tickets\/([a-z0-9]{20,32})\/(unclaim|assign|transfer|member-add|member-remove|close|reopen|transcript|status|priority|reply)$/i);
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/ticket-log\/test$/);
+      if (req.method === 'POST' && match) {
+        const guildId = match[1]!;
+        if (!SNOWFLAKE.test(guildId)) throw new Error('INVALID_ID');
+        const body = await readJson(req);
+        const result = await sendTicketLogTest(client, guildId, bodySnowflake(body, 'actorId'));
+        res.end(JSON.stringify(result));
+        return;
+      }
+
+      // Events that happen only in the API (BLACKLIST). Structured payload
+      // only: no free text ever reaches the log channel through this route.
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/ticket-log\/event$/);
+      if (req.method === 'POST' && match) {
+        const guildId = match[1]!;
+        if (!SNOWFLAKE.test(guildId)) throw new Error('INVALID_ID');
+        const payload = parseBlacklistLogPayload(await readJson(req));
+        const sent = await logBlacklistEvent(client, guildId, payload);
+        res.end(JSON.stringify({ ok: true, sent }));
+        return;
+      }
+
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/tickets\/([a-z0-9]{20,32})\/(unclaim|assign|transfer|member-add|member-remove|close|reopen|transcript|status|priority|reply|delete-channel)$/i);
       if (req.method === 'POST' && match) {
         const guildId = match[1]!;
         const ticketId = match[2]!;
@@ -245,6 +270,9 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
             break;
           case 'transcript':
             result = await generateTranscript(client, guildId, ticketId, actorId);
+            break;
+          case 'delete-channel':
+            result = await deleteTicketChannel(client, guildId, ticketId, actorId);
             break;
           case 'status': {
             const status = body.status;
@@ -315,7 +343,8 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
       const message = /^[A-Z][A-Z0-9_]{1,63}$/.test(raw) ? raw : 'INTERNAL_ERROR';
       res.statusCode = message.endsWith('_NOT_FOUND') ? 404
         : message === 'TICKET_CLOSED' || message === 'TICKET_NOT_CLOSED' || message === 'TICKET_REOPENING'
-          || message === 'CANNOT_REMOVE_OPENER' ? 409
+          || message === 'CANNOT_REMOVE_OPENER' || message === 'TICKET_CHANNEL_DELETED'
+          || message === 'TICKET_STATE_CONFLICT' ? 409
         : 400;
       res.end(JSON.stringify({ error: message }));
     }

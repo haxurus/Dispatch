@@ -81,6 +81,7 @@ Si configurano:
 
 - categoria ticket Dispatch;
 - eventuale categoria Discord alternativa;
+- eventuale categoria Discord per i ticket chiusi (override di quella della categoria ticket);
 - eventuali ruoli staff alternativi.
 
 Il ticket creato:
@@ -91,7 +92,10 @@ Il ticket creato:
 - concede accesso ai ruoli staff configurati;
 - contiene il report del form;
 - dispone dei normali controlli Claim, Unclaim, stato e chiusura;
-- compare nella dashboard e negli audit.
+- compare nella dashboard e negli audit;
+- ricorda il form di origine (`Ticket.sourceFormId`): alla chiusura viene spostato nella **Categoria Discord per i ticket chiusi (override)** del form (`ticketClosedParentCategoryId`), se impostata, altrimenti in quella della categoria ticket. Vedi [TICKET_PROTECTIONS.md](TICKET_PROTECTIONS.md#ticket-chiusi-categoria-dedicata-riapertura-ed-eliminazione-del-canale).
+
+Ogni invio genera l'evento di log `FORM_SUBMISSION` (nome del form, utente, ID invio ed eventuale ticket, mai le risposte) quando il canale log ticket è configurato.
 
 ## Permessi
 
@@ -108,7 +112,7 @@ Restano riservati a Owner/Admin:
 
 - creazione ed eliminazione dei form;
 - modifica dei binding (`PUT`/`DELETE /api/guilds/:guildId/forms/:formId/permissions/:roleId`): un manager delegato non può concedersi altri permessi;
-- canale risultati, ruoli da notificare, ticket automatico (`createTicketOnSubmit`, `ticketCategoryId`, `ticketParentCategoryId`, `ticketStaffRoleIds`). Un `PUT` di un manager delegato che cambia uno di questi campi riceve `403 FORM_FIELD_ADMIN_ONLY`;
+- canale risultati, ruoli da notificare, ticket automatico (`createTicketOnSubmit`, `ticketCategoryId`, `ticketParentCategoryId`, `ticketClosedParentCategoryId`, `ticketStaffRoleIds`). Un `PUT` di un manager delegato che cambia uno di questi campi riceve `403 FORM_FIELD_ADMIN_ONLY`;
 - tutta la gestione dei pannelli (elenco, creazione, modifica, pubblicazione ed eliminazione): vedi [PANELS.md](PANELS.md);
 - eliminazione di un singolo invio (`DELETE /api/guilds/:guildId/forms/:formId/submissions/:submissionId`, registrata nell'audit del pannello come `form.submission.delete`).
 

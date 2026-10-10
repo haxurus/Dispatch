@@ -149,6 +149,9 @@ export const closeTicket = (guildId: string, ticketId: string, actorId: string, 
 export const reopenTicket = (guildId: string, ticketId: string, actorId: string) =>
   ticketAction(guildId, ticketId, 'reopen', { actorId });
 
+export const deleteTicketChannel = (guildId: string, ticketId: string, actorId: string) =>
+  ticketAction<{ ok: true; channelDeletedAt: string }>(guildId, ticketId, 'delete-channel', { actorId });
+
 export const generateTranscript = (guildId: string, ticketId: string, actorId: string) =>
   ticketAction<{ ok: true; messageCount: number }>(
     guildId,
@@ -189,5 +192,31 @@ export async function publishFormPanel(guildId: string, panelId: string) {
   return api<{ ok: true; messageId: string }>(
     `/guilds/${id(guildId)}/form-panels/${cuid(panelId)}/publish`,
     'POST'
+  );
+}
+
+export async function sendTicketLogTest(guildId: string, actorId: string) {
+  return api<{ ok: true; channelId: string }>(
+    `/guilds/${id(guildId)}/ticket-log/test`,
+    'POST',
+    { actorId: id(actorId) }
+  );
+}
+
+// Structured BLACKLIST event only: the bot rejects any other key or free text.
+export async function logBlacklistEvent(
+  guildId: string,
+  event: { action: 'add' | 'remove'; targetUserId: string; actorId: string; expiresAt: string | null }
+) {
+  return api<{ ok: true; sent: boolean }>(
+    `/guilds/${id(guildId)}/ticket-log/event`,
+    'POST',
+    {
+      event: 'BLACKLIST',
+      action: event.action,
+      targetUserId: id(event.targetUserId),
+      actorId: id(event.actorId),
+      expiresAt: event.expiresAt
+    }
   );
 }

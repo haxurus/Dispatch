@@ -880,3 +880,12 @@ input[aria-invalid="true"] { border-color: var(--danger-line-strong); }
   .form.form-columns { column-count: 1; }
 }
 @media (max-width: 700px) { .field-row { grid-template-columns: 1fr; } }
+
+/* Ticket log events (tickets/system): checkbox cards with label and description. */
+.log-event-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.log-event { align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg-raised); cursor: pointer; }
+.log-event:hover { border-color: var(--line-strong); }
+.log-event input { margin-top: 3px; }
+.log-event > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.log-event strong { font-weight: 600; }
+.log-event .muted { font-size: .8rem; line-height: 1.45; }

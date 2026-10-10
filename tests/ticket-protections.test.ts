@@ -10,10 +10,13 @@ import {
   getTicketOpenReservation, commitTicketOpen, formVersion, allowOpeningInteraction
 } from '../apps/bot/src/open-guard.js';
 import { retentionDue, runTicketRetention } from '../apps/bot/src/retention.js';
-import { reopenTicket } from '../apps/bot/src/ticket-operations.js';
+import { closeTicket, deleteTicketChannel, reopenTicket } from '../apps/bot/src/ticket-operations.js';
 import { handleTicketInteraction, publishMainMenu } from '../apps/bot/src/tickets.js';
 import { panelComponents } from '../apps/bot/src/panels.js';
-import { isHttpsUrl, layoutPanelButtons, normalizePanelItems, parsePanelEmoji } from '@dispatch/shared';
+import { invalidateTicketLogSettings, logTicketEvent } from '../apps/bot/src/ticket-log.js';
+import {
+  isHttpsUrl, layoutPanelButtons, normalizePanelItems, normalizeTicketLogEvents, parseBlacklistLogPayload, parsePanelEmoji
+} from '@dispatch/shared';
 
 const db = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid/invalid');
 assert.equal(process.env.DISPATCH_TEST_DATABASE, '1', 'Explicit test database opt-in required');
@@ -493,4 +496,254 @@ test('ticket panel buttons re-check panel message and category before opening', 
   await handleTicketInteraction(interaction(included.id) as any);
   assert.match(replies.at(-1).content, /non e piu disponibile/);
   assert.equal(await prisma.ticketUserGuard.count({ where: { guildId: G, userId: user } }), 0);
+});
+
+// Ticket log channel, closed category and staff channel deletion
+// (migration 20261011100000_logs_closed_category).
+const OPEN_PARENT = '990000000000007100';
+const CLOSED_PARENT = '990000000000007101';
+const FORM_PARENT = '990000000000007102';
+
+// Minimal simulated Discord ticket channel: records moves, renames, messages
+// and deletion. setParentHook can make the move fail like Discord would.
+function fakeTicketChannel(
+  row: { channelId: string; ticketNumber: number },
+  parentId: string | null,
+  setParentHook?: (parent: string | null) => Promise<void>
+) {
+  const state = {
+    parentId,
+    name: '',
+    deleted: false,
+    moves: [] as Array<{ parent: string | null; options: unknown }>,
+    sent: [] as any[]
+  };
+  const channel = {
+    id: row.channelId,
+    guildId: G,
+    type: ChannelType.GuildText,
+    topic: 'Dispatch ticket #' + row.ticketNumber + ' - ' + U + ' - Support',
+    get parentId() { return state.parentId; },
+    permissionOverwrites: { edit: async () => undefined, delete: async () => undefined },
+    setName: async (name: string) => { state.name = name; },
+    setParent: async (parent: string | null, options: unknown) => {
+      if (setParentHook) await setParentHook(parent);
+      state.moves.push({ parent, options });
+      state.parentId = parent;
+    },
+    send: async (payload: unknown) => { state.sent.push(payload); return { id: '990000000000008999' }; },
+    delete: async () => { state.deleted = true; },
+    messages: { fetch: async () => new Map() }
+  };
+  return { channel, state };
+}
+const channelClient = (channel: { id: string }) => client(async (id) => (id === channel.id ? channel : null));
+
+test('log/closed-category migration keeps the previous behaviour by default', async () => {
+  const cat = await category();
+  const definition = await form();
+  const row = await ticket(cat, { status: 'OPEN', closedAt: null });
+  const settings = await prisma.guildSettings.findUniqueOrThrow({ where: { guildId: G } });
+  assert.equal(settings.ticketLogChannelId, null);
+  assert.deepEqual(settings.ticketLogEvents, []);
+  assert.equal(cat.closedParentCategoryId, null);
+  assert.equal(definition.ticketClosedParentCategoryId, null);
+  assert.equal(row.sourceFormId, null);
+  assert.equal(row.openParentId, null);
+  assert.equal(row.channelDeletedAt, null);
+  await assert.rejects(prisma.$executeRaw`UPDATE "GuildSettings" SET "ticketLogChannelId" = 'nope' WHERE "guildId" = ${G}`);
+  await assert.rejects(prisma.$executeRaw`UPDATE "TicketCategory" SET "closedParentCategoryId" = 'nope' WHERE "id" = ${cat.id}`);
+  // Deleting the source form keeps the ticket and only clears the link.
+  const linked = await ticket(cat, { sourceFormId: definition.id });
+  await prisma.formDefinition.delete({ where: { id: definition.id } });
+  assert.equal((await prisma.ticket.findUniqueOrThrow({ where: { id: linked.id } })).sourceFormId, null);
+});
+
+test('close moves the channel to the closed category keeping its overwrites, reopen moves it back', async () => {
+  const cat = await category({ discordCategoryId: OPEN_PARENT, closedParentCategoryId: CLOSED_PARENT });
+  const row = await ticket(cat, { status: 'OPEN', closedAt: null });
+  const { channel, state } = fakeTicketChannel(row, OPEN_PARENT);
+  const mock = channelClient(channel);
+  await closeTicket(mock, G, row.id, OTHER, null);
+  assert.deepEqual(state.moves, [{ parent: CLOSED_PARENT, options: { lockPermissions: false } }]);
+  assert.equal(state.name, 'closed-' + String(row.ticketNumber).padStart(4, '0'));
+  const closed = await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } });
+  assert.equal(closed.status, 'CLOSED');
+  assert.equal(closed.openParentId, OPEN_PARENT);
+  const customIds = state.sent.flatMap((payload) => (payload.components ?? [])
+    .flatMap((component: any) => component.toJSON().components.map((button: any) => button.custom_id)));
+  assert.ok(customIds.includes('dispatch:reopen:' + row.id));
+  assert.ok(customIds.includes('dispatch:delete-channel:' + row.id));
+
+  await reopenTicket(mock, G, row.id, OTHER);
+  assert.deepEqual(state.moves.at(-1), { parent: OPEN_PARENT, options: { lockPermissions: false } });
+  const reopened = await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } });
+  assert.equal(reopened.status, 'OPEN');
+  assert.equal(reopened.openParentId, null);
+});
+
+test('the form closed-category override wins over the ticket category', async () => {
+  const cat = await category({ discordCategoryId: OPEN_PARENT, closedParentCategoryId: CLOSED_PARENT });
+  const definition = await prisma.formDefinition.create({ data: {
+    guildId: G, name: 'Candidature', questions: [], ticketClosedParentCategoryId: FORM_PARENT
+  } });
+  const row = await ticket(cat, { status: 'OPEN', closedAt: null, sourceFormId: definition.id });
+  const { channel, state } = fakeTicketChannel(row, OPEN_PARENT);
+  await closeTicket(channelClient(channel), G, row.id, OTHER, null);
+  assert.deepEqual(state.moves, [{ parent: FORM_PARENT, options: { lockPermissions: false } }]);
+});
+
+test('a failed move (category full, missing permission) never blocks the close', async () => {
+  const cat = await category({ discordCategoryId: OPEN_PARENT, closedParentCategoryId: CLOSED_PARENT });
+  const row = await ticket(cat, { status: 'OPEN', closedAt: null });
+  const { channel, state } = fakeTicketChannel(row, OPEN_PARENT, async () => {
+    throw Object.assign(new Error('Maximum number of channels in category reached'), { code: 50035 });
+  });
+  const mock = channelClient(channel);
+  assert.equal((await closeTicket(mock, G, row.id, OTHER, null)).status, 'CLOSED');
+  assert.equal(state.moves.length, 0);
+  assert.equal(state.parentId, OPEN_PARENT);
+  assert.equal(state.name, 'closed-' + String(row.ticketNumber).padStart(4, '0'));
+  assert.equal((await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } })).status, 'CLOSED');
+  const failure = await prisma.ticketAudit.findFirstOrThrow({ where: { ticketId: row.id, action: 'ticket.close.move_failed' } });
+  assert.equal((failure.details as { code?: unknown }).code, 50035);
+  // The channel never left its parent: reopening does not try to move it.
+  await reopenTicket(mock, G, row.id, OTHER);
+  assert.equal(state.moves.length, 0);
+});
+
+test('staff channel deletion secures the transcript, keeps the row and blocks reopening', async () => {
+  const cat = await category({ reopenWindowHours: 24 });
+  const row = await ticket(cat, { closedAt: new Date(Date.now() - 60_000) });
+  const { channel, state } = fakeTicketChannel(row, null);
+  const mock = channelClient(channel);
+  await deleteTicketChannel(mock, G, row.id, OTHER);
+  assert.equal(state.deleted, true);
+  const stored = await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } });
+  assert.ok(stored.channelDeletedAt);
+  assert.equal(stored.status, 'CLOSED');
+  // transcriptRetain (default) keeps a copy: deleting the channel loses nothing.
+  assert.ok(await prisma.transcript.findUnique({ where: { ticketId: row.id } }));
+  assert.equal(await prisma.ticketAudit.count({ where: { ticketId: row.id, action: 'ticket.channel.delete' } }), 1);
+  await assert.rejects(deleteTicketChannel(mock, G, row.id, OTHER), /TICKET_CHANNEL_DELETED/);
+  await assert.rejects(reopenTicket(mock, G, row.id, OTHER), /TICKET_CHANNEL_DELETED/);
+  await assert.rejects(reopenTicket(mock, G, row.id, U, true), /TICKET_CHANNEL_DELETED/);
+
+  const open = await ticket(cat, { status: 'OPEN', closedAt: null });
+  const openChannel = fakeTicketChannel(open, null);
+  await assert.rejects(deleteTicketChannel(channelClient(openChannel.channel), G, open.id, OTHER), /TICKET_NOT_CLOSED/);
+  assert.equal(openChannel.state.deleted, false);
+
+  // Retention treats a staff-deleted channel as already absent.
+  await prisma.ticket.update({ where: { id: row.id }, data: { closedAt: new Date(Date.now() - 4 * DAY) } });
+  await prisma.guildSettings.update({ where: { guildId: G }, data: { closedTicketRetentionDays: 1, retentionDeleteDiscordChannel: true } });
+  let fetched = false;
+  await runTicketRetention(client(async () => { fetched = true; return null; }));
+  assert.equal(fetched, false);
+  assert.equal(await prisma.ticket.findUnique({ where: { id: row.id } }), null);
+});
+
+test('only staff can delete a closed ticket channel from Discord, with an expiring confirmation', async () => {
+  const STAFF_ROLE = '990000000000007201';
+  const cat = await category({ staffRoleIds: [STAFF_ROLE] });
+  const row = await ticket(cat, { closedAt: new Date(Date.now() - 60_000) });
+  const { channel, state } = fakeTicketChannel(row, null);
+  const replies: any[] = [];
+  const member = (staff: boolean) => ({
+    permissions: { has: () => false },
+    roles: { cache: { has: (roleId: string) => staff && roleId === STAFF_ROLE } }
+  });
+  const interaction = (customId: string, staff: boolean) => ({
+    customId, guildId: G, channelId: row.channelId, user: { id: U }, client: channelClient(channel),
+    guild: { members: { fetch: async () => member(staff) } },
+    isButton: () => true, isStringSelectMenu: () => false, isModalSubmit: () => false,
+    reply: async (payload: unknown) => { replies.push(payload); },
+    update: async (payload: unknown) => { replies.push(payload); },
+    editReply: async (payload: unknown) => { replies.push(payload); }
+  });
+  // The opener without staff roles can neither ask nor confirm.
+  await handleTicketInteraction(interaction('dispatch:delete-channel:' + row.id, false) as any);
+  assert.match(replies.at(-1).content, /permessi/);
+  const expiry = (Date.now() + 60_000).toString(36);
+  await handleTicketInteraction(interaction('dispatch:delete-confirm:' + row.id + ':' + expiry, false) as any);
+  assert.match(replies.at(-1).content, /permessi/);
+  await handleTicketInteraction(interaction('dispatch:delete-confirm:' + row.id + ':' + (Date.now() - 1).toString(36), true) as any);
+  assert.match(replies.at(-1).content, /scaduta/);
+  assert.equal(state.deleted, false);
+
+  await handleTicketInteraction(interaction('dispatch:delete-channel:' + row.id, true) as any);
+  const prompt = replies.at(-1);
+  assert.equal(prompt.ephemeral, true);
+  const confirmId: string = prompt.components[0].toJSON().components[0].custom_id;
+  assert.ok(confirmId.startsWith('dispatch:delete-confirm:' + row.id + ':'));
+  assert.ok(confirmId.length <= 100);
+  await handleTicketInteraction(interaction(confirmId, true) as any);
+  assert.equal(state.deleted, true);
+  assert.ok((await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } })).channelDeletedAt);
+});
+
+test('ticket log posts only enabled events, never throws and never includes encrypted content', async () => {
+  const LOG = '990000000000007301';
+  const sent: any[] = [];
+  const logChannel = { id: LOG, guildId: G, type: ChannelType.GuildText, send: async (payload: unknown) => { sent.push(payload); } };
+  const cat = await category({ name: 'Supporto' });
+  const row = await ticket(cat, { status: 'OPEN', closedAt: null });
+  const { channel } = fakeTicketChannel(row, null);
+  const mock = client(async (id) => (id === LOG ? logChannel : id === row.channelId ? channel : null));
+  try {
+    await prisma.guildSettings.update({ where: { guildId: G }, data: { ticketLogChannelId: LOG, ticketLogEvents: ['TICKET_CLOSE'] } });
+    invalidateTicketLogSettings(G);
+    assert.equal(await logTicketEvent(mock, G, 'TICKET_OPEN', { ticket: row }), false);
+    assert.equal(sent.length, 0);
+
+    await closeTicket(mock, G, row.id, OTHER, 'segreto-di-chiusura');
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0].allowedMentions, { parse: [] });
+    const embed = sent[0].embeds[0].toJSON();
+    assert.equal(embed.title, 'Ticket chiuso');
+    assert.ok(!JSON.stringify(embed).includes('segreto-di-chiusura'));
+
+    // Discord failures, foreign or wrong-type channels and a missing guild are swallowed.
+    const failing = client(async () => ({ ...logChannel, send: async () => { throw Object.assign(new Error('Missing Access'), { code: 50001 }); } }));
+    assert.equal(await logTicketEvent(failing, G, 'TICKET_CLOSE', { ticket: row }), false);
+    const foreign = client(async () => ({ ...logChannel, guildId: '990000000000000099' }));
+    assert.equal(await logTicketEvent(foreign, G, 'TICKET_CLOSE', { ticket: row }), false);
+    const voice = client(async () => ({ ...logChannel, type: ChannelType.GuildVoice }));
+    assert.equal(await logTicketEvent(voice, G, 'TICKET_CLOSE'), false);
+    assert.equal(await logTicketEvent({ guilds: { cache: new Map() } } as unknown as Client, G, 'TICKET_CLOSE'), false);
+    assert.equal(sent.length, 1);
+
+    await prisma.guildSettings.update({ where: { guildId: G }, data: { ticketLogEvents: [] } });
+    invalidateTicketLogSettings(G);
+    assert.equal(await logTicketEvent(mock, G, 'TICKET_CLOSE', { ticket: row }), false);
+    assert.equal(sent.length, 1);
+  } finally {
+    invalidateTicketLogSettings();
+  }
+});
+
+test('BLACKLIST log RPC payload accepts only structured fields', () => {
+  const base = { event: 'BLACKLIST', action: 'add', targetUserId: U, actorId: OTHER };
+  assert.deepEqual(parseBlacklistLogPayload(base), { ...base, expiresAt: null });
+  assert.equal(
+    parseBlacklistLogPayload({ ...base, expiresAt: '2026-10-12T10:00:00.000Z' }).expiresAt,
+    '2026-10-12T10:00:00.000Z'
+  );
+  assert.equal(parseBlacklistLogPayload({ ...base, action: 'remove' }).action, 'remove');
+  for (const invalid of [
+    { ...base, reason: 'testo libero' },
+    { ...base, content: '@everyone' },
+    { ...base, event: 'TICKET_OPEN' },
+    { ...base, action: 'ban' },
+    { ...base, targetUserId: 'abc' },
+    { ...base, actorId: '<@990000000000000002>' },
+    { ...base, expiresAt: 'domani' },
+    { ...base, action: 'remove', expiresAt: '2026-10-12T10:00:00.000Z' },
+    null,
+    [],
+    'BLACKLIST'
+  ]) {
+    assert.throws(() => parseBlacklistLogPayload(invalid), /INVALID_TICKET_LOG_EVENT/);
+  }
+  assert.deepEqual(normalizeTicketLogEvents(['BLACKLIST', 'NOPE', 'TICKET_OPEN', 'BLACKLIST']), ['TICKET_OPEN', 'BLACKLIST']);
 });

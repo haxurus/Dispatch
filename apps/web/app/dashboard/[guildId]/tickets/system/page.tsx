@@ -34,6 +34,24 @@ type Settings = {
   mainMenuDescription: string;
   mainMenuButtonLabel: string;
   mainMenuCategoryIds: string[];
+  ticketLogChannelId: string | null;
+  ticketLogEvents: string[];
+};
+
+// Event keys, labels and descriptions are defined once in @dispatch/shared
+// and served by the API together with the settings.
+type LogEventInfo = { key: string; label: string; description: string };
+
+const logTestErrors: Record<string, string> = {
+  TICKET_LOG_CHANNEL_REQUIRED: 'Seleziona un canale log prima di inviare il messaggio di prova.',
+  TICKET_LOG_CHANNEL_INVALID: 'Il canale log non esiste più oppure non è un canale testuale o di annunci di questo server.',
+  TICKET_LOG_SEND_FAILED: 'Discord ha rifiutato il messaggio: controlla che il bot possa vedere il canale, scrivere e inviare embed.',
+  GUILD_NOT_FOUND: 'Il bot non è presente nel server.'
+};
+
+const saveErrors: Record<string, string> = {
+  TICKET_LOG_CHANNEL_NOT_FOUND: 'Il canale log selezionato non è un canale testuale o di annunci del server.',
+  MAIN_MENU_CHANNEL_NOT_FOUND: 'Il canale del menu principale non è un canale testuale o di annunci del server.'
 };
 
 function nullableNumber(value: string) {
@@ -47,6 +65,7 @@ export default function TicketSystemPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [logCatalog, setLogCatalog] = useState<LogEventInfo[]>([]);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -74,7 +93,32 @@ export default function TicketSystemPage() {
     const resources = await resourcesResponse.json();
     setChannels(resources.channels);
     setCategories(await categoriesResponse.json());
-    setSettings(await settingsResponse.json());
+    applySettings(await settingsResponse.json());
+  };
+
+  // The catalogue travels with the settings but is never sent back.
+  const applySettings = (body: Settings & { ticketLogEventCatalog?: LogEventInfo[] }) => {
+    const { ticketLogEventCatalog, ...rest } = body;
+    if (ticketLogEventCatalog) setLogCatalog(ticketLogEventCatalog);
+    setSettings({ ...rest, ticketLogEvents: rest.ticketLogEvents ?? [], ticketLogChannelId: rest.ticketLogChannelId ?? null });
+  };
+
+  const putSettings = async (current: Settings) => {
+    const response = await fetch(
+      `/backend/api/guilds/${guildId}/ticket-system-settings`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(current)
+      }
+    );
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      setError(saveErrors[body.error] ?? `Salvataggio fallito: ${body.error ?? response.status}`);
+      return false;
+    }
+    applySettings(await response.json());
+    return true;
   };
 
   useEffect(() => {
@@ -90,26 +134,43 @@ export default function TicketSystemPage() {
     setNotice('');
 
     try {
-      const response = await fetch(
-        `/backend/api/guilds/${guildId}/ticket-system-settings`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(settings)
-        }
-      );
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        setError(`Salvataggio fallito: ${body.error ?? response.status}`);
-        return;
-      }
-
-      setSettings(await response.json());
-      setNotice('Impostazioni salvate.');
+      if (await putSettings(settings)) setNotice('Impostazioni salvate.');
     } finally {
       setBusy('');
     }
+  };
+
+  // Saves first, so the test always uses what the page shows.
+  const sendLogTest = async () => {
+    if (!settings) return;
+
+    setBusy('log-test');
+    setError('');
+    setNotice('');
+
+    try {
+      if (!(await putSettings(settings))) return;
+      const response = await fetch(`/backend/api/guilds/${guildId}/ticket-log/test`, { method: 'POST' });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        setError(logTestErrors[body.error] ?? `Invio di prova fallito: ${body.error ?? response.status}`);
+        return;
+      }
+      setNotice('Impostazioni salvate e messaggio di prova inviato nel canale log.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const toggleLogEvent = (key: string, checked: boolean) => {
+    if (!settings) return;
+    const selected = new Set(settings.ticketLogEvents);
+    if (checked) selected.add(key);
+    else selected.delete(key);
+    setSettings({
+      ...settings,
+      ticketLogEvents: logCatalog.map((event) => event.key).filter((event) => selected.has(event))
+    });
   };
 
   const publish = async () => {
@@ -120,23 +181,7 @@ export default function TicketSystemPage() {
     setNotice('');
 
     try {
-      const saveResponse = await fetch(
-        `/backend/api/guilds/${guildId}/ticket-system-settings`,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(settings)
-        }
-      );
-
-      if (!saveResponse.ok) {
-        const body = await saveResponse.json().catch(() => ({}));
-        setError(`Salvataggio fallito: ${body.error ?? saveResponse.status}`);
-        return;
-      }
-
-      const saved = await saveResponse.json();
-      setSettings(saved);
+      if (!(await putSettings(settings))) return;
 
       const response = await fetch(
         `/backend/api/guilds/${guildId}/main-menu/publish`,
@@ -171,7 +216,7 @@ export default function TicketSystemPage() {
       <div className="row">
         <div>
           <p className="eyebrow">Dispatch System</p>
-          <h1>Anti-spam, retention e menu principale</h1>
+          <h1>Anti-spam, retention, log e menu principale</h1>
           <p className="muted">Impostazioni server-wide del sistema ticket.</p>
         </div>
         <div className="actions">
@@ -312,6 +357,87 @@ export default function TicketSystemPage() {
               Il worker viene eseguito all’avvio del bot e poi ogni 6 ore.
             </p>
           </article>
+        </section>
+
+        <section className="card form">
+          <div className="row">
+            <div>
+              <h2>Log ticket</h2>
+              <p className="muted">
+                Canale in cui Dispatch registra gli eventi selezionati con un breve embed. Non vengono mai pubblicati
+                motivi di chiusura, risposte ai form, note interne o commenti dei feedback.
+              </p>
+            </div>
+            <span className="badge">
+              {settings.ticketLogChannelId
+                ? `${settings.ticketLogEvents.length} ${settings.ticketLogEvents.length === 1 ? 'evento attivo' : 'eventi attivi'}`
+                : 'Disattivato'}
+            </span>
+          </div>
+
+          <ResourcePicker
+            label="Canale log"
+            kind="channel"
+            channels={channels}
+            channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]}
+            placeholder="Nessun canale (log disattivato)"
+            hint="Canale testuale o di annunci. Il bot deve poter vedere il canale, scrivere e inviare embed."
+            value={settings.ticketLogChannelId ?? ''}
+            onChange={(channelId) => setSettings({
+              ...settings,
+              ticketLogChannelId: channelId || null
+            })}
+          />
+
+          <div className="row">
+            <strong>Eventi registrati</strong>
+            <div className="actions">
+              <button
+                type="button"
+                className="secondary button-sm"
+                onClick={() => setSettings({ ...settings, ticketLogEvents: logCatalog.map((event) => event.key) })}
+              >
+                Seleziona tutti
+              </button>
+              <button
+                type="button"
+                className="secondary button-sm"
+                onClick={() => setSettings({ ...settings, ticketLogEvents: [] })}
+              >
+                Nessuno
+              </button>
+            </div>
+          </div>
+
+          <div className="log-event-grid">
+            {logCatalog.map((event) => (
+              <label className="checkbox-row log-event" key={event.key}>
+                <input
+                  type="checkbox"
+                  checked={settings.ticketLogEvents.includes(event.key)}
+                  onChange={(change) => toggleLogEvent(event.key, change.target.checked)}
+                />
+                <span>
+                  <strong>{event.label}</strong>
+                  <span className="muted">{event.description}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+
+          <div className="actions">
+            <button disabled={Boolean(busy)} type="submit">
+              {busy === 'save' ? 'Salvataggio...' : 'Salva impostazioni'}
+            </button>
+            <button
+              disabled={Boolean(busy) || !settings.ticketLogChannelId}
+              type="button"
+              className="secondary"
+              onClick={() => void sendLogTest()}
+            >
+              {busy === 'log-test' ? 'Invio...' : 'Invia messaggio di prova'}
+            </button>
+          </div>
         </section>
 
         <section className="card form">
