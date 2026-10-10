@@ -1174,7 +1174,8 @@ test('staff thread button: staff only (never the opener), active tickets only, o
   assert.equal(options.autoArchiveDuration, 10080);
   const thread = created[0]!.thread;
   assert.deepEqual(thread.state.added, [MOD1]);
-  assert.deepEqual(thread.state.sent[0].allowedMentions, { parse: [] });
+  // The intro mentions (pings) the moderators added to the thread, nobody else.
+  assert.deepEqual(thread.state.sent[0].allowedMentions, { parse: [], users: [MOD1] });
   assert.deepEqual(edits.find((edit) => edit.id === OTHER)?.options, {
     CreatePrivateThreads: true, SendMessagesInThreads: true, ManageThreads: true
   });
