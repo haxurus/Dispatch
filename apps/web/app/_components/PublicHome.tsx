@@ -1,6 +1,44 @@
 import { Icon } from './Brand';
 import { SiteFooter, SiteHeader } from './SiteChrome';
 import { chromeCopy, homeCopy, inviteHref, loginHref, type Locale } from '../i18n';
+import { SITE_NAME, SITE_URL } from '../site';
+
+/** schema.org data for search engines: the bot as a web application, plus its FAQ. */
+function structuredData(locale: Locale) {
+  const c = homeCopy[locale];
+  const url = `${SITE_URL}/${locale}`;
+  return [
+    {
+      '@context': 'https://schema.org',
+      '@type': 'WebApplication',
+      name: SITE_NAME,
+      url,
+      description: c.meta.description,
+      applicationCategory: 'CommunicationApplication',
+      applicationSubCategory: 'Discord bot',
+      operatingSystem: 'Discord',
+      browserRequirements: 'Requires a Discord account',
+      inLanguage: locale,
+      availableLanguage: ['en', 'it'],
+      featureList: c.features.cards.map((card) => card.title),
+      image: `${url}/opengraph-image`,
+      publisher: { '@type': 'Organization', name: 'Haxurus', url: SITE_URL }
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      inLanguage: locale,
+      mainEntity: c.faq.items.map(([question, answer]) => ({
+        '@type': 'Question',
+        name: question,
+        acceptedAnswer: { '@type': 'Answer', text: answer }
+      }))
+    }
+  ];
+}
+
+// JSON inside <script> must not be able to close the tag.
+const jsonLd = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c');
 
 export default function PublicHome({ locale }: { locale: Locale }) {
   const c = homeCopy[locale];
@@ -9,6 +47,7 @@ export default function PublicHome({ locale }: { locale: Locale }) {
 
   return (
     <main className="public-site" lang={locale}>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd(structuredData(locale)) }} />
       <SiteHeader
         locale={locale}
         itHref="/it"
@@ -16,7 +55,8 @@ export default function PublicHome({ locale }: { locale: Locale }) {
         links={[
           { href: '#features', label: c.nav.features },
           { href: '#flow', label: c.nav.flow },
-          { href: '#security', label: c.nav.security }
+          { href: '#security', label: c.nav.security },
+          { href: '#faq', label: c.nav.faq }
         ]}
         actions={<>
           <a className="button button-ghost" href={loginHref}>{chrome.signIn}</a>
@@ -131,6 +171,23 @@ export default function PublicHome({ locale }: { locale: Locale }) {
               <div key={title}><dt><Icon name="check" size={16} />{title}</dt><dd>{text}</dd></div>
             ))}
           </dl>
+        </div>
+      </section>
+
+      <section className="section" id="faq">
+        <div className="site-container faq-layout">
+          <div className="section-head">
+            <span className="kicker">{c.faq.kicker}</span>
+            <h2>{c.faq.title}</h2>
+          </div>
+          <div className="faq-list">
+            {c.faq.items.map(([question, answer]) => (
+              <details key={question}>
+                <summary>{question}</summary>
+                <p>{answer}</p>
+              </details>
+            ))}
+          </div>
         </div>
       </section>
 

@@ -5,7 +5,8 @@ import { developmentCopy } from '../../i18n';
 export const metadata: Metadata = {
   title: developmentCopy.en.meta.title,
   description: developmentCopy.en.meta.description,
-  robots: { index: false, follow: true }
+  robots: { index: false, follow: true },
+  alternates: { canonical: '/en/development' }
 };
 
 export default function Page() {

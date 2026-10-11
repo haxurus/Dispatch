@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from 'next';
 import localFont from 'next/font/local';
+import { headers } from 'next/headers';
 import type { ReactNode } from 'react';
+import { isLocale } from './i18n';
+import { LOCALE_HEADER, SITE_NAME, SITE_URL } from './site';
 import './globals.css';
 
 // Geist and Geist Mono (SIL OFL 1.1, see ./fonts/OFL.txt) are committed and
@@ -23,12 +26,17 @@ const mono = localFont({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: {
-    default: 'Dispatch | Ticket Discord',
+    default: 'Dispatch | Discord ticket bot with forms and transcripts',
     template: '%s | Dispatch'
   },
-  description: 'Dispatch è un sistema self-hosted di ticketing per Discord: pannelli, form, SLA, transcript, analytics e dashboard con permessi a ruoli.',
-  applicationName: 'Dispatch'
+  description: 'Dispatch is a Discord ticket bot: ticket panels, forms and applications, claims, SLAs, transcripts, staff leaderboards and a web dashboard with role-based access.',
+  applicationName: SITE_NAME,
+  category: 'technology',
+  creator: 'Haxurus',
+  formatDetection: { telephone: false, email: false, address: false },
+  robots: { index: true, follow: true, 'max-image-preview': 'large', 'max-snippet': -1 }
 };
 
 export const viewport: Viewport = {
@@ -36,9 +44,11 @@ export const viewport: Viewport = {
   colorScheme: 'dark'
 };
 
-export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  const requested = (await headers()).get(LOCALE_HEADER);
+  const lang = isLocale(requested) ? requested : 'it';
   return (
-    <html lang="it" className={`${sans.variable} ${mono.variable}`}>
+    <html lang={lang} className={`${sans.variable} ${mono.variable}`}>
       <body>{children}</body>
     </html>
   );

@@ -55,8 +55,8 @@ export const chromeCopy: Record<Locale, ChromeCopy> = { it: chromeIt, en: chrome
 export type StreamState = 'ok' | 'info' | 'accent' | 'warn';
 
 type HomeCopy = {
-  meta: { title: string; description: string };
-  nav: { features: string; flow: string; security: string };
+  meta: { title: string; description: string; keywords: string[] };
+  nav: { features: string; flow: string; security: string; faq: string };
   hero: {
     kicker: string;
     title: [string, string, string];
@@ -77,18 +77,20 @@ type HomeCopy = {
   flow: { kicker: string; title: string; steps: Array<{ icon: IconName; title: string; text: string }> };
   how: { kicker: string; title: string; steps: Array<[string, string]> };
   security: { kicker: string; title: string; text: string; items: Array<[string, string]> };
+  faq: { kicker: string; title: string; items: Array<[string, string]> };
   cta: { title: string; text: string };
   footer: string;
 };
 
 const homeIt: HomeCopy = {
   meta: {
-    title: 'Dispatch | Ticket e form per Discord',
-    description: 'Ticketing self-hosted per server Discord: pannelli e menu, form e questionari, claim e priorità, SLA, transcript, analytics e dashboard con permessi a ruoli.'
+    title: 'Dispatch | Bot ticket per Discord con form, transcript e dashboard',
+    description: 'Bot ticket per server Discord: pannelli e menu, form e candidature, claim e valutazioni dello staff, SLA, transcript, classifica moderatori e dashboard web con permessi a ruoli.',
+    keywords: ['bot ticket Discord', 'ticket Discord', 'sistema ticket Discord', 'bot supporto Discord', 'form Discord', 'candidature staff Discord', 'transcript ticket', 'modmail Discord', 'dashboard bot Discord']
   },
-  nav: { features: 'Funzioni', flow: 'Flusso', security: 'Sicurezza' },
+  nav: { features: 'Funzioni', flow: 'Flusso', security: 'Sicurezza', faq: 'FAQ' },
   hero: {
-    kicker: 'Ticketing per Discord',
+    kicker: 'Bot ticket per Discord',
     title: ['Ogni richiesta', 'del tuo server,', 'presa in carico.'],
     text: 'Dispatch apre i ticket da pannelli e menu, raccoglie le informazioni con form e questionari, assegna lo staff giusto e tiene d’occhio gli SLA. A chiusura, transcript e feedback restano archiviati e cifrati.',
     note: 'Self-hosted · dati cifrati · permessi minimi',
@@ -156,18 +158,31 @@ const homeIt: HomeCopy = {
       ['Rete segmentata', 'Database, Redis e API interna del bot non sono esposti; ogni container vede solo ciò che gli serve.']
     ]
   },
+  faq: {
+    kicker: 'FAQ',
+    title: 'Domande frequenti.',
+    items: [
+      ['Cos’è Dispatch?', 'Dispatch è un bot ticket per Discord: gli utenti aprono richieste da un pannello o da un menu, lo staff le gestisce in canali privati e alla chiusura il transcript viene archiviato. Tutto si configura da una dashboard web.'],
+      ['Come aggiungo un sistema di ticket al mio server Discord?', 'Aggiungi il bot con il pulsante “Aggiungi a Discord”, accedi alla dashboard con il tuo account Discord, crea una categoria con i ruoli staff e pubblica un pannello nel canale che preferisci.'],
+      ['Dispatch richiede il permesso Administrator?', 'No. Il bot chiede solo i permessi necessari a creare e gestire i canali, i thread e i messaggi dei ticket.'],
+      ['Posso creare form e candidature per lo staff?', 'Sì. I form raccolgono risposte validate, possono essere inviati in DM o in modo effimero, limitati per ruolo e, se vuoi, aprire automaticamente un ticket.'],
+      ['I transcript dei ticket vengono salvati?', 'Sì. Alla chiusura Dispatch genera un transcript HTML, lo invia al canale archivio (e all’utente se lo abiliti) e lo conserva cifrato con una retention configurabile.'],
+      ['Lo staff può valutare e premiare i moderatori?', 'Gli utenti valutano il ticket con le stelle, il voto va al moderatore che lo ha preso in carico e Dispatch può pubblicare una classifica settimanale o mensile.']
+    ]
+  },
   cta: { title: 'Porta ordine nel supporto del tuo server.', text: 'Aggiungi il bot, accedi con Discord e pubblica il primo pannello in pochi minuti.' },
-  footer: 'Ticketing self-hosted per server Discord.'
+  footer: 'Bot ticket per server Discord, con form, transcript e dashboard.'
 };
 
 const homeEn: HomeCopy = {
   meta: {
-    title: 'Dispatch | Tickets and forms for Discord',
-    description: 'Self-hosted ticketing for Discord servers: panels and menus, forms and questionnaires, claims and priorities, SLAs, transcripts, analytics and a role-aware dashboard.'
+    title: 'Dispatch | Discord ticket bot with forms, transcripts and dashboard',
+    description: 'Discord ticket bot for support teams: ticket panels and menus, forms and staff applications, claims and ratings, SLAs, transcripts, moderator leaderboards and a web dashboard with role-based access.',
+    keywords: ['Discord ticket bot', 'Discord ticket system', 'Discord support bot', 'ticket tool for Discord', 'Discord forms bot', 'Discord staff applications', 'ticket transcripts', 'Discord modmail', 'Discord bot dashboard']
   },
-  nav: { features: 'Features', flow: 'Flow', security: 'Security' },
+  nav: { features: 'Features', flow: 'Flow', security: 'Security', faq: 'FAQ' },
   hero: {
-    kicker: 'Ticketing for Discord',
+    kicker: 'Discord ticket bot',
     title: ['Every request', 'on your server,', 'taken care of.'],
     text: 'Dispatch opens tickets from panels and menus, collects details with forms and questionnaires, routes them to the right staff and keeps an eye on SLAs. On close, transcripts and feedback are archived and encrypted.',
     note: 'Self-hosted · encrypted data · least privilege',
@@ -235,8 +250,20 @@ const homeEn: HomeCopy = {
       ['Segmented network', 'Database, Redis and the bot internal API are never exposed; each container reaches only what it needs.']
     ]
   },
+  faq: {
+    kicker: 'FAQ',
+    title: 'Frequently asked questions.',
+    items: [
+      ['What is Dispatch?', 'Dispatch is a Discord ticket bot: members open requests from a panel or menu, staff handle them in private channels and transcripts are archived on close. Everything is configured from a web dashboard.'],
+      ['How do I add a ticket system to my Discord server?', 'Add the bot with the “Add to Discord” button, sign in to the dashboard with your Discord account, create a category with its staff roles and publish a panel in any channel.'],
+      ['Does Dispatch need Administrator permission?', 'No. The bot only asks for the permissions needed to create and manage ticket channels, threads and messages.'],
+      ['Can I build forms and staff applications?', 'Yes. Forms collect validated answers, can be sent by DM or as ephemeral messages, restricted by role and, if you want, open a ticket automatically.'],
+      ['Are ticket transcripts saved?', 'Yes. On close Dispatch generates an HTML transcript, sends it to your archive channel (and to the user if enabled) and keeps it encrypted with configurable retention.'],
+      ['Can members rate the staff?', 'Members rate each ticket with stars, the rating goes to the moderator who claimed it, and Dispatch can post a weekly or monthly moderator leaderboard.']
+    ]
+  },
   cta: { title: 'Bring order to your server support.', text: 'Add the bot, sign in with Discord and publish your first panel in minutes.' },
-  footer: 'Self-hosted ticketing for Discord servers.'
+  footer: 'Discord ticket bot with forms, transcripts and a web dashboard.'
 };
 
 export const homeCopy: Record<Locale, HomeCopy> = { it: homeIt, en: homeEn };

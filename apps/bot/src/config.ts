@@ -11,5 +11,7 @@ export const config = {
   discordToken: required('DISCORD_TOKEN'),
   internalApiKey: required('BOT_INTERNAL_API_KEY'),
   internalApiPort: Number(process.env.BOT_INTERNAL_PORT ?? 3002),
-  logLevel: process.env.LOG_LEVEL ?? 'info'
+  logLevel: process.env.LOG_LEVEL ?? 'info',
+  // Empty BOT_STATUS_TEXT disables the custom status.
+  statusText: (process.env.BOT_STATUS_TEXT ?? 'Discord tickets · dispatch.haxurus.com').trim().slice(0, 128)
 };
