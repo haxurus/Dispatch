@@ -1,4 +1,4 @@
-import { Client, Events, GatewayIntentBits } from 'discord.js';
+import { ActivityType, Client, Events, GatewayIntentBits } from 'discord.js';
 import pino from 'pino';
 import { prisma } from '@dispatch/db';
 import { config } from './config.js';
@@ -21,7 +21,11 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent
-  ]
+  ],
+  // Custom status in the member list: points people who see the bot to the site.
+  presence: config.statusText
+    ? { activities: [{ name: 'Custom Status', type: ActivityType.Custom, state: config.statusText }] }
+    : undefined
 });
 
 async function ensureGuild(guild: { id: string; name: string }) {
