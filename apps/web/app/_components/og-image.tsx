@@ -40,7 +40,9 @@ export function renderOgImage(locale: Locale) {
           flexDirection: 'column',
           justifyContent: 'space-between',
           padding: '72px 80px',
-          background: `radial-gradient(circle at 85% 10%, rgba(56, 189, 248, 0.22), transparent 55%), ${colors.bg}`,
+          // Satori rejects a plain colour layer inside `background`: keep it separate.
+          backgroundColor: colors.bg,
+          backgroundImage: 'radial-gradient(circle at 85% 10%, rgba(56, 189, 248, 0.22), transparent 55%)',
           color: colors.text
         }}
       >
