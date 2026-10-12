@@ -342,17 +342,17 @@ function reportMessages(
     value: displayAnswer(answer, questions.find((question) => question.id === answer.id), locale).slice(0, 1024) ||
       m.common.noAnswer
   }));
-  const messages: EmbedBuilder[][] = [];
+  const batches: EmbedBuilder[][] = [];
   const state = { embeds: [] as EmbedBuilder[], used: 0, fieldCount: 0 };
   const startEmbed = (reserve: number) => {
-    const first = !messages.length && !state.embeds.length;
+    const first = !batches.length && !state.embeds.length;
     const embedTitle = first ? title.slice(0, 256) : `${title.slice(0, 230)} - ${m.forms.continued}`;
     const description = first
       ? (answers.length ? m.forms.filledBy(userId) : m.forms.filledByEmpty(userId))
       : '';
     const cost = embedTitle.length + description.length + footer.length;
     if (state.embeds.length >= 10 || (state.embeds.length && state.used + cost + reserve > REPORT_MESSAGE_BUDGET)) {
-      messages.push(state.embeds);
+      batches.push(state.embeds);
       state.embeds = [];
       state.used = 0;
     }
@@ -372,8 +372,8 @@ function reportMessages(
     state.used += cost;
     state.fieldCount++;
   }
-  if (state.embeds.length) messages.push(state.embeds);
-  return messages;
+  if (state.embeds.length) batches.push(state.embeds);
+  return batches;
 }
 
 type FormTicketSource = {
