@@ -1,0 +1,82 @@
+name: Bug report
+description: Something in Dispatch does not work as expected.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem.
+
+        - **Security vulnerability?** Do not open a public issue: use [private vulnerability reporting](https://github.com/haxurus/Dispatch/security/advisories/new).
+        - **Question or help with setup?** Ask in the [Discord server](https://discord.gg/DDBGWP5fMX).
+        - Never paste tokens, passwords, `.env` files, database dumps, ticket transcripts or other people's messages.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched the [existing issues](https://github.com/haxurus/Dispatch/issues?q=is%3Aissue) and this has not been reported yet.
+          required: true
+        - label: This report contains no secrets, tokens or personal data of other users.
+          required: true
+  - type: dropdown
+    id: instance
+    attributes:
+      label: Where does it happen?
+      options:
+        - Hosted instance (dispatch.haxurus.com)
+        - Self-hosted instance
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Bot — tickets in Discord (opening, claim, close, transcripts, threads)
+        - Bot — forms and applications
+        - Dashboard — categories, panels, forms, logs, analytics
+        - Website — home, legal pages
+        - Self-hosting — Docker, deployment, migrations
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: A clear description of the problem. Include the exact error message if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Publish a ticket panel with the "Support" category
+        2. Open a ticket from the panel
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: input
+    id: ticket
+    attributes:
+      label: Ticket or form
+      description: If the problem concerns a specific ticket or form, its number or name as shown in the dashboard (never its content).
+  - type: input
+    id: version
+    attributes:
+      label: Version (self-hosted only)
+      description: Commit SHA or image digest you are running.
+  - type: textarea
+    id: context
+    attributes:
+      label: Screenshots, logs and environment
+      description: Browser and operating system for dashboard issues; redacted logs for self-hosting issues. You can drag images here.

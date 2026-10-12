@@ -1,0 +1,57 @@
+name: Dependabot safe auto-merge
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Merge verified minor or patch Dependabot update
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          pr_number="$(jq -r '.workflow_run.pull_requests[0].number // empty' "$GITHUB_EVENT_PATH")"
+          if [ -z "$pr_number" ]; then
+            echo "No pull request associated with this CI run."
+            exit 0
+          fi
+
+          pr_json="$(gh api "repos/$REPO/pulls/$pr_number")"
+          author="$(jq -r '.user.login' <<<"$pr_json")"
+          head_ref="$(jq -r '.head.ref' <<<"$pr_json")"
+          state="$(jq -r '.state' <<<"$pr_json")"
+          body="$(jq -r '.body // ""' <<<"$pr_json")"
+
+          if [ "$state" != "open" ] || [ "$author" != "dependabot[bot]" ]; then
+            echo "Not an open Dependabot PR."
+            exit 0
+          fi
+
+          case "$head_ref" in
+            dependabot/*) ;;
+            *) echo "Unexpected head branch."; exit 1 ;;
+          esac
+
+          if ! grep -Eq 'update-type: version-update:semver-(minor|patch)' <<<"$body"; then
+            echo "Major or unclassified update - not auto-merging."
+            exit 0
+          fi
+
+          gh pr merge "$pr_number" --repo "$REPO" --squash --delete-branch

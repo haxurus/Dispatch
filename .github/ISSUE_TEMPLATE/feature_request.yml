@@ -1,0 +1,66 @@
+name: Feature request
+description: Propose a new feature or an improvement.
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Good proposals start from a problem, not from a solution. Please read the [scope rules](https://github.com/haxurus/Dispatch/blob/main/.github/CONTRIBUTING.md#project-scope) first: some features are out of scope by design.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you start
+      options:
+        - label: I searched the [existing issues](https://github.com/haxurus/Dispatch/issues?q=is%3Aissue) and this has not been proposed yet.
+          required: true
+        - label: The feature respects Discord's Terms of Service and Developer Policy and the project scope (no moderation actions, no tracking of people).
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Tickets — opening, panels, categories
+        - Tickets — staff tools (claim, priority, threads, transfers)
+        - SLAs, automations and logs
+        - Transcripts and retention
+        - Forms and applications
+        - Ratings and leaderboards
+        - Dashboard and analytics
+        - Self-hosting and deployment
+        - Website and documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would it solve?
+      description: Who needs it and in which situation. Example — "As a moderator I can't see which tickets are waiting for the user".
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How you imagine it working, from the point of view of the user.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you use today or other approaches you thought about.
+  - type: textarea
+    id: data
+    attributes:
+      label: Data and privacy
+      description: Does it require new data from Discord, new permissions or new privileged intents? What would be stored, and for how long?
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to work on it?
+      options:
+        - No, I'm only proposing it
+        - Yes, I'd like to open a pull request
