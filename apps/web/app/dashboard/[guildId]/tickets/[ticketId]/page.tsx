@@ -2,6 +2,8 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import { useCopy, useLocale } from '../../../../_components/locale-context';
+import { format, type Locale } from '../../../../i18n';
 
 type Category = {
   id: string;
@@ -51,21 +53,232 @@ type FormAnswer = {
   value: string | string[] | boolean | null;
 };
 
+const it = {
+  noAnswer: 'Nessuna risposta',
+  yes: 'Sì',
+  no: 'No',
+  loadError: 'Impossibile caricare il ticket.',
+  actionFailed: 'Operazione fallita: {code}',
+  actionDone: 'Operazione completata.',
+  downloadFailed: 'Download fallito: {code}',
+  transcriptConsumed: 'Transcript scaricato e rimosso dal database (copia monouso).',
+  transcriptDownloaded: 'Transcript scaricato.',
+  loading: 'Caricamento ticket...',
+  deleteChannelConfirm: 'Eliminare definitivamente il canale Discord del ticket #{number}? Il transcript viene prima generato o consegnato secondo le impostazioni della categoria. Il ticket resta nello storico ma non potrà più essere riaperto.',
+  eyebrow: 'Dispatch Ticket',
+  summary: 'Stato: {status} · Priorità: {priority} · Utente: {user}',
+  channelDeletedSuffix: ' · Canale eliminato',
+  allTickets: 'Tutti i ticket',
+  openDiscord: 'Apri Discord',
+  statusPriorityTitle: 'Stato e priorità',
+  statusLabel: 'Stato',
+  statusOpen: 'Aperto',
+  statusWaiting: 'In attesa',
+  statusInProgress: 'In lavorazione',
+  statusResolved: 'Risolto',
+  statusReopening: 'Ripristino permessi da completare',
+  statusClosed: 'Chiuso',
+  priorityLabel: 'Priorità',
+  priorityLow: 'Bassa',
+  priorityNormal: 'Normale',
+  priorityHigh: 'Alta',
+  priorityUrgent: 'Urgente',
+  assignmentTitle: 'Assegnazione',
+  assigned: 'Assegnato:',
+  nobody: 'Nessuno',
+  handledBy: 'Gestito da:',
+  notCredited: 'Non attribuito',
+  staffThread: 'Thread staff:',
+  openStaffThread: 'Apri il thread privato',
+  threadDeleted: 'Eliminato con il canale',
+  claim: 'Prendi in carico',
+  unclaim: 'Unclaim',
+  assignTo: 'Assegna a staff ID',
+  userIdPlaceholder: 'Discord User ID',
+  assign: 'Assegna',
+  categoryTitle: 'Categoria',
+  transfer: 'Trasferisci',
+  slaTitle: 'SLA',
+  created: 'Creato',
+  lastActivity: 'Ultima attività',
+  firstStaffResponse: 'Prima risposta staff',
+  notYet: 'Non ancora',
+  slaFirstResponse: 'SLA prima risposta',
+  slaResolution: 'SLA risoluzione',
+  breached: 'Superato',
+  minutes: '{count} min',
+  hours: '{count} ore',
+  disabledMasc: 'Disattivato',
+  disabledFem: 'Disattivata',
+  autoClose: 'Auto-chiusura',
+  escalation: 'Escalation',
+  userReopen: 'Riapertura utente',
+  initialAnswersTitle: 'Risposte iniziali',
+  noForm: 'Nessun form configurato per questo ticket.',
+  transcriptTitle: 'Transcript',
+  transcriptInfo: '{count} messaggi · {date}',
+  autoDeliveryRetained: 'La consegna automatica avviene alla chiusura; una copia cifrata viene conservata.',
+  autoDeliveryNotRetained: 'La consegna automatica avviene alla chiusura. Nessuna copia viene conservata.',
+  notGenerated: 'Non ancora generato',
+  generate: 'Genera/Aggiorna',
+  downloadHtml: 'Scarica HTML',
+  singleUseCopy: 'Questa copia è monouso: al primo download viene rimossa dal database. In ogni caso viene eliminata insieme al ticket.',
+  staffReplyTitle: 'Risposta staff',
+  templateLabel: 'Template',
+  customMessage: 'Messaggio personalizzato',
+  messageLabel: 'Messaggio',
+  sendToTicket: 'Invia nel ticket',
+  internalNoteTitle: 'Nota interna',
+  notePlaceholder: 'Visibile solo nel pannello staff.',
+  addNote: 'Aggiungi nota',
+  delete: 'Elimina',
+  noNotes: 'Nessuna nota interna.',
+  membersTitle: 'Membri',
+  add: 'Aggiungi',
+  remove: 'Rimuovi',
+  reopenTitle: 'Riapertura',
+  closeTitle: 'Chiusura',
+  reason: 'Motivo:',
+  noReason: 'Nessun motivo indicato.',
+  channelDeletedNotice: 'Canale eliminato il {date}: il ticket resta nello storico fino alla retention ma non può più essere riaperto.',
+  reopen: 'Riapri ticket',
+  deleting: 'Eliminazione...',
+  deleteChannel: 'Elimina canale',
+  closeReasonLabel: 'Motivo chiusura',
+  optional: 'Opzionale',
+  closeTicket: 'Chiudi ticket',
+  feedbackTitle: 'Feedback utente',
+  rating: 'Valutazione:',
+  ratedModerator: 'Moderatore valutato:',
+  noComment: 'Nessun commento.',
+  noFeedback: 'Nessun feedback ricevuto.',
+  feedbackDisabled: 'Feedback disattivato per questa categoria.',
+  auditTitle: 'Audit',
+  system: 'sistema'
+};
+
+const en: typeof it = {
+  noAnswer: 'No answer',
+  yes: 'Yes',
+  no: 'No',
+  loadError: 'The ticket could not be loaded.',
+  actionFailed: 'Action failed: {code}',
+  actionDone: 'Action completed.',
+  downloadFailed: 'Download failed: {code}',
+  transcriptConsumed: 'Transcript downloaded and removed from the database (single-use copy).',
+  transcriptDownloaded: 'Transcript downloaded.',
+  loading: 'Loading ticket...',
+  deleteChannelConfirm: 'Permanently delete the Discord channel of ticket #{number}? The transcript is generated or delivered first, according to the category settings. The ticket stays in the history but can no longer be reopened.',
+  eyebrow: 'Dispatch Ticket',
+  summary: 'Status: {status} · Priority: {priority} · User: {user}',
+  channelDeletedSuffix: ' · Channel deleted',
+  allTickets: 'All tickets',
+  openDiscord: 'Open Discord',
+  statusPriorityTitle: 'Status and priority',
+  statusLabel: 'Status',
+  statusOpen: 'Open',
+  statusWaiting: 'Waiting',
+  statusInProgress: 'In progress',
+  statusResolved: 'Resolved',
+  statusReopening: 'Permission restore pending',
+  statusClosed: 'Closed',
+  priorityLabel: 'Priority',
+  priorityLow: 'Low',
+  priorityNormal: 'Normal',
+  priorityHigh: 'High',
+  priorityUrgent: 'Urgent',
+  assignmentTitle: 'Assignment',
+  assigned: 'Assigned:',
+  nobody: 'Nobody',
+  handledBy: 'Handled by:',
+  notCredited: 'Not credited',
+  staffThread: 'Staff thread:',
+  openStaffThread: 'Open the private thread',
+  threadDeleted: 'Deleted with the channel',
+  claim: 'Claim',
+  unclaim: 'Unclaim',
+  assignTo: 'Assign to staff ID',
+  userIdPlaceholder: 'Discord User ID',
+  assign: 'Assign',
+  categoryTitle: 'Category',
+  transfer: 'Transfer',
+  slaTitle: 'SLA',
+  created: 'Created',
+  lastActivity: 'Last activity',
+  firstStaffResponse: 'First staff response',
+  notYet: 'Not yet',
+  slaFirstResponse: 'First response SLA',
+  slaResolution: 'Resolution SLA',
+  breached: 'Breached',
+  minutes: '{count} min',
+  hours: '{count} hours',
+  disabledMasc: 'Off',
+  disabledFem: 'Off',
+  autoClose: 'Auto-close',
+  escalation: 'Escalation',
+  userReopen: 'User reopening',
+  initialAnswersTitle: 'Initial answers',
+  noForm: 'No form configured for this ticket.',
+  transcriptTitle: 'Transcript',
+  transcriptInfo: '{count} messages · {date}',
+  autoDeliveryRetained: 'Automatic delivery happens on close; an encrypted copy is kept.',
+  autoDeliveryNotRetained: 'Automatic delivery happens on close. No copy is kept.',
+  notGenerated: 'Not generated yet',
+  generate: 'Generate/Update',
+  downloadHtml: 'Download HTML',
+  singleUseCopy: 'This copy is single-use: it is removed from the database on the first download. In any case it is deleted together with the ticket.',
+  staffReplyTitle: 'Staff reply',
+  templateLabel: 'Template',
+  customMessage: 'Custom message',
+  messageLabel: 'Message',
+  sendToTicket: 'Send to ticket',
+  internalNoteTitle: 'Internal note',
+  notePlaceholder: 'Visible only in the staff dashboard.',
+  addNote: 'Add note',
+  delete: 'Delete',
+  noNotes: 'No internal notes.',
+  membersTitle: 'Members',
+  add: 'Add',
+  remove: 'Remove',
+  reopenTitle: 'Reopening',
+  closeTitle: 'Closing',
+  reason: 'Reason:',
+  noReason: 'No reason given.',
+  channelDeletedNotice: 'Channel deleted on {date}: the ticket stays in the history until retention but can no longer be reopened.',
+  reopen: 'Reopen ticket',
+  deleting: 'Deleting...',
+  deleteChannel: 'Delete channel',
+  closeReasonLabel: 'Closing reason',
+  optional: 'Optional',
+  closeTicket: 'Close ticket',
+  feedbackTitle: 'User feedback',
+  rating: 'Rating:',
+  ratedModerator: 'Rated moderator:',
+  noComment: 'No comment.',
+  noFeedback: 'No feedback received.',
+  feedbackDisabled: 'Feedback is off for this category.',
+  auditTitle: 'Audit',
+  system: 'system'
+};
+
+const copy: Record<Locale, typeof it> = { it, en };
+
 // Local mirror of @dispatch/shared displayAnswer (the web app does not depend on it).
 function formatAnswer(
   answer: FormAnswer,
+  c: typeof it,
   field?: { type?: string; options?: Array<{ label: string; value: string }> }
 ) {
   const labels = new Map((field?.options ?? []).map((option) => [option.value, option.label]));
   const value = answer.value;
   if (Array.isArray(value)) {
-    return value.map((item) => labels.get(item) ?? item).join(', ') || 'Nessuna risposta';
+    return value.map((item) => labels.get(item) ?? item).join(', ') || c.noAnswer;
   }
-  if (typeof value === 'boolean') return value ? 'Sì' : 'No';
+  if (typeof value === 'boolean') return value ? c.yes : c.no;
   if ((answer.type ?? field?.type) === 'BOOLEAN') {
-    return value === 'true' ? 'Sì' : value === 'false' ? 'No' : 'Nessuna risposta';
+    return value === 'true' ? c.yes : value === 'false' ? c.no : c.noAnswer;
   }
-  if (!value) return 'Nessuna risposta';
+  if (!value) return c.noAnswer;
   return labels.get(value) ?? value;
 }
 
@@ -121,6 +334,9 @@ type TicketFeedback = {
 export default function TicketDetailPage() {
   const params = useParams<{ guildId: string; ticketId: string }>();
   const { guildId, ticketId } = params;
+  const locale = useLocale();
+  const c = useCopy(copy);
+  const dateLocale = locale === 'it' ? 'it-IT' : 'en-US';
 
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -153,7 +369,7 @@ export default function TicketDetailPage() {
     }
 
     if (!ticketResponse.ok || !categoriesResponse.ok || !templatesResponse.ok || !meResponse.ok) {
-      setError('Impossibile caricare il ticket.');
+      setError(c.loadError);
       return;
     }
 
@@ -183,11 +399,11 @@ export default function TicketDetailPage() {
       const response = await fetch(path, options);
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setError(`Operazione fallita: ${body.error ?? response.status}`);
+        setError(format(c.actionFailed, { code: body.error ?? response.status }));
         return false;
       }
 
-      setNotice('Operazione completata.');
+      setNotice(c.actionDone);
       await load();
       return true;
     } finally {
@@ -212,7 +428,7 @@ export default function TicketDetailPage() {
         if (body.error === 'TRANSCRIPT_NOT_FOUND') {
           setTicket((current) => current ? { ...current, transcript: null } : current);
         }
-        setError(`Download fallito: ${body.error ?? response.status}`);
+        setError(format(c.downloadFailed, { code: body.error ?? response.status }));
         return;
       }
 
@@ -230,9 +446,9 @@ export default function TicketDetailPage() {
 
       if (consumed) {
         setTicket((current) => current ? { ...current, transcript: null } : current);
-        setNotice('Transcript scaricato e rimosso dal database (copia monouso).');
+        setNotice(c.transcriptConsumed);
       } else {
-        setNotice('Transcript scaricato.');
+        setNotice(c.transcriptDownloaded);
       }
     } finally {
       setBusy('');
@@ -314,7 +530,7 @@ export default function TicketDetailPage() {
   if (!ticket) {
     return (
       <main className="shell">
-        {error ? <p className="error">{error}</p> : <p className="muted">Caricamento ticket...</p>}
+        {error ? <p className="error">{error}</p> : <p className="muted">{c.loading}</p>}
       </main>
     );
   }
@@ -323,11 +539,7 @@ export default function TicketDetailPage() {
   const channelDeleted = Boolean(ticket.channelDeletedAt);
 
   const deleteChannel = async () => {
-    if (!window.confirm(
-      `Eliminare definitivamente il canale Discord del ticket #${ticket.ticketNumber}? ` +
-      'Il transcript viene prima generato o consegnato secondo le impostazioni della categoria. ' +
-      'Il ticket resta nello storico ma non potrà più essere riaperto.'
-    )) return;
+    if (!window.confirm(format(c.deleteChannelConfirm, { number: ticket.ticketNumber }))) return;
     await action('delete-channel', `/backend/api/guilds/${guildId}/tickets/${ticketId}/delete-channel`);
   };
 
@@ -335,15 +547,15 @@ export default function TicketDetailPage() {
     <main className="shell">
       <div className="row">
         <div>
-          <p className="eyebrow">Dispatch Ticket</p>
+          <p className="eyebrow">{c.eyebrow}</p>
           <h1>#{ticket.ticketNumber} · {ticket.category.name}</h1>
           <p className="muted">
-            Stato: {ticket.status} · Priorità: {ticket.priority} · Utente: {ticket.openerId}
-            {channelDeleted && ' · Canale eliminato'}
+            {format(c.summary, { status: ticket.status, priority: ticket.priority, user: ticket.openerId })}
+            {channelDeleted && c.channelDeletedSuffix}
           </p>
         </div>
         <div className="actions">
-          <a className="button secondary" href={`/dashboard/${guildId}/tickets/manage`}>Tutti i ticket</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets/manage`}>{c.allTickets}</a>
           {!channelDeleted && (
             <a
               className="button secondary"
@@ -351,7 +563,7 @@ export default function TicketDetailPage() {
               target="_blank"
               rel="noreferrer"
             >
-              Apri Discord
+              {c.openDiscord}
             </a>
           )}
         </div>
@@ -362,9 +574,9 @@ export default function TicketDetailPage() {
 
       <section className="grid settings-grid">
         <article className="card form">
-          <h2>Stato e priorità</h2>
+          <h2>{c.statusPriorityTitle}</h2>
           <label>
-            Stato
+            {c.statusLabel}
             <select
               value={ticket.status}
               disabled={closed || Boolean(busy)}
@@ -378,16 +590,16 @@ export default function TicketDetailPage() {
                 }
               )}
             >
-              <option value="OPEN">Aperto</option>
-              <option value="WAITING">In attesa</option>
-              <option value="IN_PROGRESS">In lavorazione</option>
-              <option value="RESOLVED">Risolto</option>
-              {closed && <option value={ticket.status}>{ticket.status === 'REOPENING' ? 'Ripristino permessi da completare' : 'Chiuso'}</option>}
+              <option value="OPEN">{c.statusOpen}</option>
+              <option value="WAITING">{c.statusWaiting}</option>
+              <option value="IN_PROGRESS">{c.statusInProgress}</option>
+              <option value="RESOLVED">{c.statusResolved}</option>
+              {closed && <option value={ticket.status}>{ticket.status === 'REOPENING' ? c.statusReopening : c.statusClosed}</option>}
             </select>
           </label>
 
           <label>
-            Priorità
+            {c.priorityLabel}
             <select
               value={ticket.priority}
               disabled={closed || Boolean(busy)}
@@ -401,25 +613,25 @@ export default function TicketDetailPage() {
                 }
               )}
             >
-              <option value="LOW">Bassa</option>
-              <option value="NORMAL">Normale</option>
-              <option value="HIGH">Alta</option>
-              <option value="URGENT">Urgente</option>
+              <option value="LOW">{c.priorityLow}</option>
+              <option value="NORMAL">{c.priorityNormal}</option>
+              <option value="HIGH">{c.priorityHigh}</option>
+              <option value="URGENT">{c.priorityUrgent}</option>
             </select>
           </label>
         </article>
 
         <article className="card">
-          <h2>Assegnazione</h2>
-          <p><strong>Assegnato:</strong> {ticket.claimedById ?? 'Nessuno'}</p>
-          {closed && <p><strong>Gestito da:</strong> {ticket.handledById ?? 'Non attribuito'}</p>}
+          <h2>{c.assignmentTitle}</h2>
+          <p><strong>{c.assigned}</strong> {ticket.claimedById ?? c.nobody}</p>
+          {closed && <p><strong>{c.handledBy}</strong> {ticket.handledById ?? c.notCredited}</p>}
           <p>
-            <strong>Thread staff:</strong>{' '}
+            <strong>{c.staffThread}</strong>{' '}
             {ticket.staffThreadId && !channelDeleted ? (
               <a href={`https://discord.com/channels/${guildId}/${ticket.staffThreadId}`} target="_blank" rel="noreferrer">
-                Apri il thread privato
+                {c.openStaffThread}
               </a>
-            ) : ticket.staffThreadId ? 'Eliminato con il canale' : 'Nessuno'}
+            ) : ticket.staffThreadId ? c.threadDeleted : c.nobody}
           </p>
           <div className="actions">
             {!closed && me && (
@@ -435,7 +647,7 @@ export default function TicketDetailPage() {
                   }
                 )}
               >
-                Prendi in carico
+                {c.claim}
               </button>
             )}
             {!closed && ticket.claimedById && (
@@ -447,7 +659,7 @@ export default function TicketDetailPage() {
                   `/backend/api/guilds/${guildId}/tickets/${ticketId}/unclaim`
                 )}
               >
-                Unclaim
+                {c.unclaim}
               </button>
             )}
           </div>
@@ -455,22 +667,22 @@ export default function TicketDetailPage() {
           {!closed && (
             <form className="form compact-form" onSubmit={assign}>
               <label>
-                Assegna a staff ID
+                {c.assignTo}
                 <input
                   required
                   pattern="[0-9]{17,20}"
                   value={assigneeId}
                   onChange={(event) => setAssigneeId(event.target.value)}
-                  placeholder="Discord User ID"
+                  placeholder={c.userIdPlaceholder}
                 />
               </label>
-              <button disabled={busy === 'assign'} type="submit">Assegna</button>
+              <button disabled={busy === 'assign'} type="submit">{c.assign}</button>
             </form>
           )}
         </article>
 
         <article className="card form">
-          <h2>Categoria</h2>
+          <h2>{c.categoryTitle}</h2>
           <select
             value={transferCategoryId}
             disabled={closed || Boolean(busy)}
@@ -495,7 +707,7 @@ export default function TicketDetailPage() {
                 }
               )}
             >
-              Trasferisci
+              {c.transfer}
             </button>
           )}
         </article>
@@ -503,47 +715,50 @@ export default function TicketDetailPage() {
 
       <section className="grid settings-grid">
         <article className="card">
-          <h2>SLA</h2>
+          <h2>{c.slaTitle}</h2>
           <dl className="facts">
-            <div><dt>Creato</dt><dd>{new Date(ticket.createdAt).toLocaleString()}</dd></div>
-            <div><dt>Ultima attività</dt><dd>{new Date(ticket.lastActivityAt).toLocaleString()}</dd></div>
-            <div><dt>Prima risposta staff</dt><dd>{ticket.firstStaffResponseAt ? new Date(ticket.firstStaffResponseAt).toLocaleString() : 'Non ancora'}</dd></div>
-            <div><dt>SLA prima risposta</dt><dd>{ticket.slaFirstBreachedAt ? 'Superato' : ticket.category.slaFirstResponseMinutes ? `${ticket.category.slaFirstResponseMinutes} min` : 'Disattivato'}</dd></div>
-            <div><dt>SLA risoluzione</dt><dd>{ticket.slaResolutionBreachedAt ? 'Superato' : ticket.category.slaResolutionMinutes ? `${ticket.category.slaResolutionMinutes} min` : 'Disattivato'}</dd></div>
-            <div><dt>Auto-chiusura</dt><dd>{ticket.category.inactivityCloseHours ? `${ticket.category.inactivityCloseHours} ore` : 'Disattivata'}</dd></div>
-            <div><dt>Escalation</dt><dd>{ticket.category.escalationMinutes ? `${ticket.category.escalationMinutes} min` : 'Disattivata'}</dd></div>
-            <div><dt>Riapertura utente</dt><dd>{ticket.category.reopenWindowHours ? `${ticket.category.reopenWindowHours} ore` : 'Disattivata'}</dd></div>
+            <div><dt>{c.created}</dt><dd>{new Date(ticket.createdAt).toLocaleString(dateLocale)}</dd></div>
+            <div><dt>{c.lastActivity}</dt><dd>{new Date(ticket.lastActivityAt).toLocaleString(dateLocale)}</dd></div>
+            <div><dt>{c.firstStaffResponse}</dt><dd>{ticket.firstStaffResponseAt ? new Date(ticket.firstStaffResponseAt).toLocaleString(dateLocale) : c.notYet}</dd></div>
+            <div><dt>{c.slaFirstResponse}</dt><dd>{ticket.slaFirstBreachedAt ? c.breached : ticket.category.slaFirstResponseMinutes ? format(c.minutes, { count: ticket.category.slaFirstResponseMinutes }) : c.disabledMasc}</dd></div>
+            <div><dt>{c.slaResolution}</dt><dd>{ticket.slaResolutionBreachedAt ? c.breached : ticket.category.slaResolutionMinutes ? format(c.minutes, { count: ticket.category.slaResolutionMinutes }) : c.disabledMasc}</dd></div>
+            <div><dt>{c.autoClose}</dt><dd>{ticket.category.inactivityCloseHours ? format(c.hours, { count: ticket.category.inactivityCloseHours }) : c.disabledFem}</dd></div>
+            <div><dt>{c.escalation}</dt><dd>{ticket.category.escalationMinutes ? format(c.minutes, { count: ticket.category.escalationMinutes }) : c.disabledFem}</dd></div>
+            <div><dt>{c.userReopen}</dt><dd>{ticket.category.reopenWindowHours ? format(c.hours, { count: ticket.category.reopenWindowHours }) : c.disabledFem}</dd></div>
           </dl>
         </article>
 
         <article className="card">
-          <h2>Risposte iniziali</h2>
+          <h2>{c.initialAnswersTitle}</h2>
           {ticket.formData?.length ? (
             <dl className="facts">
               {ticket.formData.map((answer) => (
                 <div key={answer.id}>
                   <dt>{answer.label}</dt>
                   <dd className="preserve">
-                    {formatAnswer(answer, ticket.category.formFields?.find((field) => field.id === answer.id))}
+                    {formatAnswer(answer, c, ticket.category.formFields?.find((field) => field.id === answer.id))}
                   </dd>
                 </div>
               ))}
             </dl>
           ) : (
-            <p className="muted">Nessun form configurato per questo ticket.</p>
+            <p className="muted">{c.noForm}</p>
           )}
         </article>
 
         <article className="card">
-          <h2>Transcript</h2>
+          <h2>{c.transcriptTitle}</h2>
           <p className="muted">
             {ticket.transcript
-              ? `${ticket.transcript.messageCount} messaggi · ${new Date(ticket.transcript.createdAt).toLocaleString()}`
+              ? format(c.transcriptInfo, {
+                count: ticket.transcript.messageCount,
+                date: new Date(ticket.transcript.createdAt).toLocaleString(dateLocale)
+              })
               : ticket.category.transcriptAutoGenerate
                 ? ticket.category.transcriptRetain
-                  ? 'La consegna automatica avviene alla chiusura; una copia cifrata viene conservata.'
-                  : 'La consegna automatica avviene alla chiusura. Nessuna copia viene conservata.'
-                : 'Non ancora generato'}
+                  ? c.autoDeliveryRetained
+                  : c.autoDeliveryNotRetained
+                : c.notGenerated}
           </p>
           <div className="actions">
             <button
@@ -553,7 +768,7 @@ export default function TicketDetailPage() {
                 `/backend/api/guilds/${guildId}/tickets/${ticketId}/transcript`
               )}
             >
-              Genera/Aggiorna
+              {c.generate}
             </button>
             {ticket.transcript && (
               <button
@@ -561,14 +776,13 @@ export default function TicketDetailPage() {
                 disabled={Boolean(busy)}
                 onClick={() => void downloadTranscript()}
               >
-                Scarica HTML
+                {c.downloadHtml}
               </button>
             )}
           </div>
           {!ticket.category.transcriptRetain && ticket.transcript && (
             <p className="muted">
-              Questa copia è monouso: al primo download viene rimossa dal database. In ogni caso viene eliminata
-              insieme al ticket.
+              {c.singleUseCopy}
             </p>
           )}
         </article>
@@ -576,9 +790,9 @@ export default function TicketDetailPage() {
 
       <section className="grid settings-grid">
         <form className="card form" onSubmit={sendReply}>
-          <h2>Risposta staff</h2>
+          <h2>{c.staffReplyTitle}</h2>
           <label>
-            Template
+            {c.templateLabel}
             <select
               value={templateId}
               disabled={closed}
@@ -587,7 +801,7 @@ export default function TicketDetailPage() {
                 if (event.target.value) setReplyContent('');
               }}
             >
-              <option value="">Messaggio personalizzato</option>
+              <option value="">{c.customMessage}</option>
               {templates.map((template) => (
                 <option value={template.id} key={template.id}>{template.name}</option>
               ))}
@@ -596,7 +810,7 @@ export default function TicketDetailPage() {
 
           {!templateId && (
             <label>
-              Messaggio
+              {c.messageLabel}
               <textarea
                 required
                 maxLength={2000}
@@ -613,19 +827,19 @@ export default function TicketDetailPage() {
             </p>
           )}
 
-          <button disabled={closed || busy === 'reply'} type="submit">Invia nel ticket</button>
+          <button disabled={closed || busy === 'reply'} type="submit">{c.sendToTicket}</button>
         </form>
 
         <form className="card form" onSubmit={addNote}>
-          <h2>Nota interna</h2>
+          <h2>{c.internalNoteTitle}</h2>
           <textarea
             required
             maxLength={4000}
             value={noteContent}
             onChange={(event) => setNoteContent(event.target.value)}
-            placeholder="Visibile solo nel pannello staff."
+            placeholder={c.notePlaceholder}
           />
-          <button disabled={busy === 'note'} type="submit">Aggiungi nota</button>
+          <button disabled={busy === 'note'} type="submit">{c.addNote}</button>
 
           <div className="audit-list">
             {ticket.notes.map((note) => (
@@ -633,7 +847,7 @@ export default function TicketDetailPage() {
                 <div className="row">
                   <div>
                     <strong>{note.authorId}</strong>
-                    <div className="muted">{new Date(note.createdAt).toLocaleString()}</div>
+                    <div className="muted">{new Date(note.createdAt).toLocaleString(dateLocale)}</div>
                   </div>
                   <button
                     className="danger"
@@ -645,19 +859,19 @@ export default function TicketDetailPage() {
                       { method: 'DELETE' }
                     )}
                   >
-                    Elimina
+                    {c.delete}
                   </button>
                 </div>
                 <p className="preserve">{note.content}</p>
               </div>
             ))}
-            {ticket.notes.length === 0 && <p className="muted">Nessuna nota interna.</p>}
+            {ticket.notes.length === 0 && <p className="muted">{c.noNotes}</p>}
           </div>
         </form>
       </section>
 
       <section className="card">
-        <h2>Membri</h2>
+        <h2>{c.membersTitle}</h2>
         {!closed && (
           <form className="row member-form" onSubmit={addMember}>
             <input
@@ -665,9 +879,9 @@ export default function TicketDetailPage() {
               pattern="[0-9]{17,20}"
               value={memberId}
               onChange={(event) => setMemberId(event.target.value)}
-              placeholder="Discord User ID"
+              placeholder={c.userIdPlaceholder}
             />
-            <button disabled={busy === 'member-add'} type="submit">Aggiungi</button>
+            <button disabled={busy === 'member-add'} type="submit">{c.add}</button>
           </form>
         )}
 
@@ -688,7 +902,7 @@ export default function TicketDetailPage() {
                     { method: 'DELETE' }
                   )}
                 >
-                  Rimuovi
+                  {c.remove}
                 </button>
               )}
             </div>
@@ -697,15 +911,14 @@ export default function TicketDetailPage() {
       </section>
 
       <section className="card">
-        <h2>{closed ? 'Riapertura' : 'Chiusura'}</h2>
+        <h2>{closed ? c.reopenTitle : c.closeTitle}</h2>
 
         {closed ? (
           <>
-            <p><strong>Motivo:</strong> {ticket.closeReason || 'Nessun motivo indicato.'}</p>
+            <p><strong>{c.reason}</strong> {ticket.closeReason || c.noReason}</p>
             {channelDeleted ? (
               <p className="notice notice-warn">
-                Canale eliminato il {new Date(ticket.channelDeletedAt!).toLocaleString()}: il ticket resta nello
-                storico fino alla retention ma non può più essere riaperto.
+                {format(c.channelDeletedNotice, { date: new Date(ticket.channelDeletedAt!).toLocaleString(dateLocale) })}
               </p>
             ) : (
               <div className="actions">
@@ -716,7 +929,7 @@ export default function TicketDetailPage() {
                     `/backend/api/guilds/${guildId}/tickets/${ticketId}/reopen`
                   )}
                 >
-                  Riapri ticket
+                  {c.reopen}
                 </button>
                 {ticket.status === 'CLOSED' && (
                   <button
@@ -724,7 +937,7 @@ export default function TicketDetailPage() {
                     disabled={Boolean(busy)}
                     onClick={() => void deleteChannel()}
                   >
-                    {busy === 'delete-channel' ? 'Eliminazione...' : 'Elimina canale'}
+                    {busy === 'delete-channel' ? c.deleting : c.deleteChannel}
                   </button>
                 )}
               </div>
@@ -733,12 +946,12 @@ export default function TicketDetailPage() {
         ) : (
           <>
             <label className="form">
-              Motivo chiusura
+              {c.closeReasonLabel}
               <textarea
                 maxLength={1000}
                 value={closeReason}
                 onChange={(event) => setCloseReason(event.target.value)}
-                placeholder="Opzionale"
+                placeholder={c.optional}
               />
             </label>
             <button
@@ -754,38 +967,38 @@ export default function TicketDetailPage() {
                 }
               )}
             >
-              Chiudi ticket
+              {c.closeTicket}
             </button>
           </>
         )}
       </section>
 
       <section className="card">
-        <h2>Feedback utente</h2>
+        <h2>{c.feedbackTitle}</h2>
         {ticket.feedback ? (
           <>
-            <p><strong>Valutazione:</strong> {'★'.repeat(ticket.feedback.rating)}{'☆'.repeat(5 - ticket.feedback.rating)} ({ticket.feedback.rating}/5)</p>
-            <p><strong>Moderatore valutato:</strong> {ticket.feedback.staffUserId ?? 'Non attribuito'}</p>
-            <p className="muted">{new Date(ticket.feedback.updatedAt).toLocaleString()}</p>
-            <p className="preserve">{ticket.feedback.comment || 'Nessun commento.'}</p>
+            <p><strong>{c.rating}</strong> {'★'.repeat(ticket.feedback.rating)}{'☆'.repeat(5 - ticket.feedback.rating)} ({ticket.feedback.rating}/5)</p>
+            <p><strong>{c.ratedModerator}</strong> {ticket.feedback.staffUserId ?? c.notCredited}</p>
+            <p className="muted">{new Date(ticket.feedback.updatedAt).toLocaleString(dateLocale)}</p>
+            <p className="preserve">{ticket.feedback.comment || c.noComment}</p>
           </>
         ) : (
           <p className="muted">
             {ticket.category.feedbackEnabled
-              ? 'Nessun feedback ricevuto.'
-              : 'Feedback disattivato per questa categoria.'}
+              ? c.noFeedback
+              : c.feedbackDisabled}
           </p>
         )}
       </section>
 
       <section className="card">
-        <h2>Audit</h2>
+        <h2>{c.auditTitle}</h2>
         <div className="audit-list">
           {ticket.audit.map((entry) => (
             <div className="list-item" key={entry.id}>
               <strong>{entry.action}</strong>
               <div className="muted">
-                {new Date(entry.createdAt).toLocaleString()} · {entry.actorId ?? 'sistema'}
+                {new Date(entry.createdAt).toLocaleString(dateLocale)} · {entry.actorId ?? c.system}
               </div>
             </div>
           ))}

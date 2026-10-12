@@ -2,6 +2,8 @@
 
 import { FormEvent, useEffect, useState, type CSSProperties } from 'react';
 import ResourcePicker, { CHANNEL_TYPES, type PickerChannel } from './ResourcePicker';
+import { useCopy } from './locale-context';
+import { format, type Locale } from '../i18n';
 
 /*
  * "Classifica moderatori" (Analytics page): preview of the current or previous
@@ -55,27 +57,139 @@ type SettingsResponse = Settings & {
   leaderboardLastMonthly: string | null;
 };
 
-const WEEKDAYS = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'];
 const MEDALS = ['🥇', '🥈', '🥉'];
 
-const errorMessages: Record<string, string> = {
-  INVALID_BODY: 'Controlla i valori: un canale è obbligatorio se la pubblicazione settimanale o mensile è attiva.',
-  LEADERBOARD_CHANNEL_NOT_FOUND: 'Il canale selezionato non è un canale testuale o di annunci del server.',
-  LEADERBOARD_CHANNEL_REQUIRED: 'Seleziona e salva un canale prima di inviare la classifica.',
-  LEADERBOARD_CHANNEL_INVALID: 'Il canale non esiste più oppure non è un canale testuale o di annunci di questo server.',
-  LEADERBOARD_SEND_FAILED: 'Discord ha rifiutato il messaggio: controlla che il bot possa vedere il canale, scrivere e inviare embed.',
-  GUILD_NOT_FOUND: 'Il bot non è presente nel server.'
+const it = {
+  weekdays: ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'],
+  errors: {
+    INVALID_BODY: 'Controlla i valori: un canale è obbligatorio se la pubblicazione settimanale o mensile è attiva.',
+    LEADERBOARD_CHANNEL_NOT_FOUND: 'Il canale selezionato non è un canale testuale o di annunci del server.',
+    LEADERBOARD_CHANNEL_REQUIRED: 'Seleziona e salva un canale prima di inviare la classifica.',
+    LEADERBOARD_CHANNEL_INVALID: 'Il canale non esiste più oppure non è un canale testuale o di annunci di questo server.',
+    LEADERBOARD_SEND_FAILED: 'Discord ha rifiutato il messaggio: controlla che il bot possa vedere il canale, scrivere e inviare embed.',
+    GUILD_NOT_FOUND: 'Il bot non è presente nel server.'
+  } as Record<string, string>,
+  minuteUnit: 'min',
+  hourUnit: 'h',
+  dayUnit: 'g',
+  previewError: 'Impossibile calcolare la classifica.',
+  settingsLoadError: 'Impossibile caricare le impostazioni della classifica.',
+  saveFailed: 'Salvataggio fallito: {code}',
+  sendFailed: 'Invio fallito: {code}',
+  saved: 'Impostazioni della classifica salvate.',
+  sent: 'Classifica inviata nel canale configurato.',
+  title: 'Classifica moderatori',
+  previewSubtitle: '{title}{progress} · fuso orario {timeZone}',
+  inProgress: ' (in corso)',
+  intro: 'Ticket gestiti, valutazioni e tempi di prima risposta per moderatore.',
+  week: 'Settimana',
+  month: 'Mese',
+  currentWeek: 'Settimana corrente',
+  currentMonth: 'Mese corrente',
+  previousWeek: 'Settimana precedente',
+  previousMonth: 'Mese precedente',
+  colModerator: 'Moderatore',
+  colHandled: 'Ticket gestiti',
+  colRating: 'Valutazione',
+  colFeedback: 'Feedback',
+  colFirstResponse: '1ª risposta (mediana)',
+  colClaims: 'Claim',
+  empty: 'Nessun ticket gestito in questo periodo.',
+  ordering: 'Ordine: ticket gestiti (chiusi nel periodo e attribuiti a chi li aveva in carico, altrimenti a chi li ha chiusi), poi valutazione media, mostrata solo con almeno {minRatings} valutazioni, poi numero di valutazioni. Primi {size} moderatori.',
+  publishTitle: 'Pubblicazione della classifica',
+  publishIntro: 'Il bot pubblica la classifica del periodo concluso nel canale scelto, menzionando i moderatori senza notificarli. Orari nel fuso del server ({timeZone}).',
+  weekly: 'Settimanale',
+  monthly: 'Mensile',
+  disabled: 'Disattivata',
+  channelLabel: 'Canale classifica',
+  channelPlaceholder: 'Nessun canale (pubblicazione disattivata)',
+  channelHint: 'Canale testuale o di annunci. Il bot deve poter vedere il canale, scrivere e inviare embed.',
+  weeklyLeaderboard: 'Classifica settimanale',
+  monthlyLeaderboard: 'Classifica mensile (il giorno 1)',
+  weekdayLabel: 'Giorno (settimanale)',
+  hourLabel: 'Ora',
+  sizeLabel: 'Moderatori mostrati',
+  minRatingsLabel: 'Valutazioni minime per la media',
+  lastPublished: 'Ultima settimana pubblicata: {week} · ultimo mese pubblicato: {month}. “Invia ora” pubblica il periodo selezionato sopra senza modificare la pianificazione.',
+  noWeek: 'nessuna',
+  noMonth: 'nessuno',
+  saving: 'Salvataggio...',
+  save: 'Salva impostazioni',
+  sending: 'Invio...',
+  sendNow: 'Invia ora'
 };
 
+const en: typeof it = {
+  weekdays: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+  errors: {
+    INVALID_BODY: 'Check the values: a channel is required when weekly or monthly publishing is on.',
+    LEADERBOARD_CHANNEL_NOT_FOUND: 'The selected channel is not a text or announcement channel of the server.',
+    LEADERBOARD_CHANNEL_REQUIRED: 'Select and save a channel before sending the leaderboard.',
+    LEADERBOARD_CHANNEL_INVALID: 'The channel no longer exists or is not a text or announcement channel of this server.',
+    LEADERBOARD_SEND_FAILED: 'Discord rejected the message: check that the bot can view the channel, send messages and embed links.',
+    GUILD_NOT_FOUND: 'The bot is not in the server.'
+  },
+  minuteUnit: 'min',
+  hourUnit: 'h',
+  dayUnit: 'd',
+  previewError: 'The leaderboard could not be calculated.',
+  settingsLoadError: 'The leaderboard settings could not be loaded.',
+  saveFailed: 'Save failed: {code}',
+  sendFailed: 'Send failed: {code}',
+  saved: 'Leaderboard settings saved.',
+  sent: 'Leaderboard sent to the configured channel.',
+  title: 'Moderator leaderboard',
+  previewSubtitle: '{title}{progress} · time zone {timeZone}',
+  inProgress: ' (in progress)',
+  intro: 'Tickets handled, ratings and first response times per moderator.',
+  week: 'Week',
+  month: 'Month',
+  currentWeek: 'Current week',
+  currentMonth: 'Current month',
+  previousWeek: 'Previous week',
+  previousMonth: 'Previous month',
+  colModerator: 'Moderator',
+  colHandled: 'Tickets handled',
+  colRating: 'Rating',
+  colFeedback: 'Feedback',
+  colFirstResponse: '1st response (median)',
+  colClaims: 'Claims',
+  empty: 'No tickets handled in this period.',
+  ordering: 'Order: tickets handled (closed in the period and credited to whoever had claimed them, otherwise to whoever closed them), then average rating, shown only with at least {minRatings} ratings, then number of ratings. Top {size} moderators.',
+  publishTitle: 'Leaderboard publishing',
+  publishIntro: 'The bot posts the leaderboard for the completed period in the chosen channel, mentioning moderators without notifying them. Times use the server time zone ({timeZone}).',
+  weekly: 'Weekly',
+  monthly: 'Monthly',
+  disabled: 'Off',
+  channelLabel: 'Leaderboard channel',
+  channelPlaceholder: 'No channel (publishing off)',
+  channelHint: 'Text or announcement channel. The bot must be able to view the channel, send messages and embed links.',
+  weeklyLeaderboard: 'Weekly leaderboard',
+  monthlyLeaderboard: 'Monthly leaderboard (on the 1st)',
+  weekdayLabel: 'Day (weekly)',
+  hourLabel: 'Hour',
+  sizeLabel: 'Moderators shown',
+  minRatingsLabel: 'Minimum ratings for the average',
+  lastPublished: 'Last week published: {week} · last month published: {month}. “Send now” posts the period selected above without changing the schedule.',
+  noWeek: 'none',
+  noMonth: 'none',
+  saving: 'Saving...',
+  save: 'Save settings',
+  sending: 'Sending...',
+  sendNow: 'Send now'
+};
+
+const copy: Record<Locale, typeof it> = { it, en };
+
 // Mirror of formatLeaderboardMinutes in @dispatch/shared (the web app does not depend on it).
-function duration(minutes: number | null) {
+function duration(minutes: number | null, c: typeof it) {
   if (minutes === null || !Number.isFinite(minutes)) return '—';
-  if (minutes < 1) return '<1 min';
-  if (minutes < 60) return `${Math.round(minutes)} min`;
+  if (minutes < 1) return `<1 ${c.minuteUnit}`;
+  if (minutes < 60) return `${Math.round(minutes)} ${c.minuteUnit}`;
   const total = Math.round(minutes);
-  if (total < 24 * 60) return `${Math.floor(total / 60)} h ${String(total % 60).padStart(2, '0')} min`;
+  if (total < 24 * 60) return `${Math.floor(total / 60)} ${c.hourUnit} ${String(total % 60).padStart(2, '0')} ${c.minuteUnit}`;
   const hours = Math.floor(total / 60);
-  return `${Math.floor(hours / 24)} g ${hours % 24} h`;
+  return `${Math.floor(hours / 24)} ${c.dayUnit} ${hours % 24} ${c.hourUnit}`;
 }
 
 function settingsBody(settings: Settings): Settings {
@@ -91,6 +205,7 @@ function settingsBody(settings: Settings): Settings {
 }
 
 export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
+  const c = useCopy(copy);
   const [kind, setKind] = useState<Kind>('week');
   const [offset, setOffset] = useState(0);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -112,7 +227,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
       if (cancelled) return;
       if (!response.ok) {
         setPreview(null);
-        setPreviewError('Impossibile calcolare la classifica.');
+        setPreviewError(c.previewError);
         return;
       }
       const body = await response.json() as Preview;
@@ -139,7 +254,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
         fetch(`/backend/api/guilds/${guildId}/resources`)
       ]);
       if (!settingsResponse.ok) {
-        setError('Impossibile caricare le impostazioni della classifica.');
+        setError(c.settingsLoadError);
         return;
       }
       applySettings(await settingsResponse.json() as SettingsResponse);
@@ -155,7 +270,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      setError(errorMessages[body.error] ?? `Salvataggio fallito: ${body.error ?? response.status}`);
+      setError(c.errors[body.error] ?? format(c.saveFailed, { code: body.error ?? response.status }));
       return false;
     }
     applySettings(await response.json() as SettingsResponse);
@@ -169,7 +284,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
     setError('');
     setNotice('');
     try {
-      if (await putSettings(settings)) setNotice('Impostazioni della classifica salvate.');
+      if (await putSettings(settings)) setNotice(c.saved);
     } finally {
       setBusy('');
     }
@@ -190,10 +305,10 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setError(errorMessages[body.error] ?? `Invio fallito: ${body.error ?? response.status}`);
+        setError(c.errors[body.error] ?? format(c.sendFailed, { code: body.error ?? response.status }));
         return;
       }
-      setNotice('Classifica inviata nel canale configurato.');
+      setNotice(c.sent);
     } finally {
       setBusy('');
     }
@@ -223,21 +338,25 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
       <section className="card">
         <div className="row">
           <div>
-            <h2>Classifica moderatori</h2>
+            <h2>{c.title}</h2>
             <p className="muted">
               {preview
-                ? `${preview.period.title}${preview.period.inProgress ? ' (in corso)' : ''} · fuso orario ${preview.period.timeZone}`
-                : 'Ticket gestiti, valutazioni e tempi di prima risposta per moderatore.'}
+                ? format(c.previewSubtitle, {
+                  title: preview.period.title,
+                  progress: preview.period.inProgress ? c.inProgress : '',
+                  timeZone: preview.period.timeZone
+                })
+                : c.intro}
             </p>
           </div>
           <div className="actions">
             <select value={kind} onChange={(event) => setKind(event.target.value === 'month' ? 'month' : 'week')}>
-              <option value="week">Settimana</option>
-              <option value="month">Mese</option>
+              <option value="week">{c.week}</option>
+              <option value="month">{c.month}</option>
             </select>
             <select value={offset} onChange={(event) => setOffset(Number(event.target.value))}>
-              <option value={0}>{kind === 'week' ? 'Settimana corrente' : 'Mese corrente'}</option>
-              <option value={1}>{kind === 'week' ? 'Settimana precedente' : 'Mese precedente'}</option>
+              <option value={0}>{kind === 'week' ? c.currentWeek : c.currentMonth}</option>
+              <option value={1}>{kind === 'week' ? c.previousWeek : c.previousMonth}</option>
             </select>
           </div>
         </div>
@@ -250,12 +369,12 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>Moderatore</th>
-                  <th>Ticket gestiti</th>
-                  <th>Valutazione</th>
-                  <th>Feedback</th>
-                  <th>1ª risposta (mediana)</th>
-                  <th>Claim</th>
+                  <th>{c.colModerator}</th>
+                  <th>{c.colHandled}</th>
+                  <th>{c.colRating}</th>
+                  <th>{c.colFeedback}</th>
+                  <th>{c.colFirstResponse}</th>
+                  <th>{c.colClaims}</th>
                 </tr>
               </thead>
               <tbody>
@@ -266,7 +385,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
                     <td>{entry.handled}</td>
                     <td>{entry.averageRating === null ? '—' : `${entry.averageRating.toFixed(2)}/5`}</td>
                     <td>{entry.feedbackCount}</td>
-                    <td>{duration(entry.medianFirstResponseMinutes)}</td>
+                    <td>{duration(entry.medianFirstResponseMinutes, c)}</td>
                     <td>{entry.claims}</td>
                   </tr>
                 ))}
@@ -274,14 +393,12 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
             </table>
           </div>
         ) : (
-          <p className="muted">Nessun ticket gestito in questo periodo.</p>
+          <p className="muted">{c.empty}</p>
         ))}
 
         {preview && (
           <p className="muted">
-            Ordine: ticket gestiti (chiusi nel periodo e attribuiti a chi li aveva in carico, altrimenti a chi li ha
-            chiusi), poi valutazione media, mostrata solo con almeno {preview.minRatings} valutazioni, poi numero di
-            valutazioni. Primi {preview.size} moderatori.
+            {format(c.ordering, { minRatings: preview.minRatings, size: preview.size })}
           </p>
         )}
       </section>
@@ -290,16 +407,15 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
         <form className="card form" onSubmit={save}>
           <div className="row">
             <div>
-              <h2>Pubblicazione della classifica</h2>
+              <h2>{c.publishTitle}</h2>
               <p className="muted">
-                Il bot pubblica la classifica del periodo concluso nel canale scelto, menzionando i moderatori senza
-                notificarli. Orari nel fuso del server ({meta?.timezone ?? 'Europe/Rome'}).
+                {format(c.publishIntro, { timeZone: meta?.timezone ?? 'Europe/Rome' })}
               </p>
             </div>
             <span className="badge">
               {settings.leaderboardChannelId && (settings.leaderboardWeekly || settings.leaderboardMonthly)
-                ? [settings.leaderboardWeekly ? 'Settimanale' : null, settings.leaderboardMonthly ? 'Mensile' : null].filter(Boolean).join(' + ')
-                : 'Disattivata'}
+                ? [settings.leaderboardWeekly ? c.weekly : null, settings.leaderboardMonthly ? c.monthly : null].filter(Boolean).join(' + ')
+                : c.disabled}
             </span>
           </div>
 
@@ -307,12 +423,12 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
           {notice && <p className="success">{notice}</p>}
 
           <ResourcePicker
-            label="Canale classifica"
+            label={c.channelLabel}
             kind="channel"
             channels={channels}
             channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]}
-            placeholder="Nessun canale (pubblicazione disattivata)"
-            hint="Canale testuale o di annunci. Il bot deve poter vedere il canale, scrivere e inviare embed."
+            placeholder={c.channelPlaceholder}
+            hint={c.channelHint}
             value={settings.leaderboardChannelId ?? ''}
             onChange={(channelId) => setSettings({ ...settings, leaderboardChannelId: channelId || null })}
           />
@@ -324,7 +440,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
                 checked={settings.leaderboardWeekly}
                 onChange={(event) => setSettings({ ...settings, leaderboardWeekly: event.target.checked })}
               />
-              Classifica settimanale
+              {c.weeklyLeaderboard}
             </label>
             <label className="checkbox-row">
               <input
@@ -332,22 +448,22 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
                 checked={settings.leaderboardMonthly}
                 onChange={(event) => setSettings({ ...settings, leaderboardMonthly: event.target.checked })}
               />
-              Classifica mensile (il giorno 1)
+              {c.monthlyLeaderboard}
             </label>
           </div>
 
           <div className="field-row" style={{ '--cols': 4 } as CSSProperties}>
             <label>
-              Giorno (settimanale)
+              {c.weekdayLabel}
               <select
                 value={settings.leaderboardWeekday}
                 onChange={(event) => setSettings({ ...settings, leaderboardWeekday: Number(event.target.value) })}
               >
-                {WEEKDAYS.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}
+                {c.weekdays.map((label, index) => <option key={label} value={index + 1}>{label}</option>)}
               </select>
             </label>
             <label>
-              Ora
+              {c.hourLabel}
               <select
                 value={settings.leaderboardHour}
                 onChange={(event) => setSettings({ ...settings, leaderboardHour: Number(event.target.value) })}
@@ -357,19 +473,20 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
                 ))}
               </select>
             </label>
-            {numberInput('leaderboardSize', 'Moderatori mostrati', 3, 25)}
-            {numberInput('leaderboardMinRatings', 'Valutazioni minime per la media', 0, 50)}
+            {numberInput('leaderboardSize', c.sizeLabel, 3, 25)}
+            {numberInput('leaderboardMinRatings', c.minRatingsLabel, 0, 50)}
           </div>
 
           <p className="muted">
-            Ultima settimana pubblicata: {meta?.leaderboardLastWeekly ?? 'nessuna'} · ultimo mese pubblicato:{' '}
-            {meta?.leaderboardLastMonthly ?? 'nessuno'}. “Invia ora” pubblica il periodo selezionato sopra senza
-            modificare la pianificazione.
+            {format(c.lastPublished, {
+              week: meta?.leaderboardLastWeekly ?? c.noWeek,
+              month: meta?.leaderboardLastMonthly ?? c.noMonth
+            })}
           </p>
 
           <div className="actions">
             <button disabled={Boolean(busy)} type="submit">
-              {busy === 'save' ? 'Salvataggio...' : 'Salva impostazioni'}
+              {busy === 'save' ? c.saving : c.save}
             </button>
             <button
               disabled={Boolean(busy) || !settings.leaderboardChannelId}
@@ -377,7 +494,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
               className="secondary"
               onClick={() => void sendNow()}
             >
-              {busy === 'send' ? 'Invio...' : 'Invia ora'}
+              {busy === 'send' ? c.sending : c.sendNow}
             </button>
           </div>
         </form>
