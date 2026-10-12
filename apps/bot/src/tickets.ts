@@ -26,6 +26,7 @@ import { reserveTicketOpen, getTicketOpenReservation, consumeTicketOpenReservati
   commitTicketOpen, releaseTicketOpenReservation, ticketOpenReservationMessage,
   formVersion, allowOpeningInteraction } from './open-guard.js';
 import { panelComponents, panelEmbed, panelStyle } from './panels.js';
+import { guildLocale, guildMessages, localizedMenuDefault, messages, type BotLocale, type BotMessages } from './i18n.js';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 const PANEL_SELECT_PREFIX = 'dispatch:open:';
@@ -117,44 +118,45 @@ function safeChannelPart(value: string) {
     .slice(0, 24) || 'user';
 }
 
-export function ticketControls(ticketId: string) {
+export function ticketControls(ticketId: string, locale: BotLocale) {
+  const m = messages[locale].buttons;
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${CLAIM_PREFIX}${ticketId}`)
-      .setLabel('Claim')
+      .setLabel(m.claim)
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId(`${UNCLAIM_PREFIX}${ticketId}`)
-      .setLabel('Unclaim')
+      .setLabel(m.unclaim)
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`${WAITING_PREFIX}${ticketId}`)
-      .setLabel('In attesa')
+      .setLabel(m.waiting)
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(`${RESOLVED_PREFIX}${ticketId}`)
-      .setLabel('Risolto')
+      .setLabel(m.resolved)
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId(`${CLOSE_PREFIX}${ticketId}`)
-      .setLabel('Chiudi')
+      .setLabel(m.close)
       .setStyle(ButtonStyle.Danger)
   );
 }
 
 // Second row of the ticket controls (the first one is full): staff-only tools.
-export function ticketStaffControls(ticketId: string) {
+export function ticketStaffControls(ticketId: string, locale: BotLocale) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
       .setCustomId(`${STAFF_THREAD_PREFIX}${ticketId}`)
-      .setLabel('Thread staff')
+      .setLabel(messages[locale].buttons.staffThread)
       .setStyle(ButtonStyle.Secondary)
   );
 }
 
 /** Every control row of the ticket introduction message. */
-export function ticketControlRows(ticketId: string) {
-  return [ticketControls(ticketId), ticketStaffControls(ticketId)];
+export function ticketControlRows(ticketId: string, locale: BotLocale) {
+  return [ticketControls(ticketId, locale), ticketStaffControls(ticketId, locale)];
 }
 
 function hasStaffAccess(member: GuildMember, staffRoleIds: string[]) {
@@ -205,15 +207,14 @@ export async function publishTicketPanel(client: Client, guildId: string, panelI
   }
 
   const style = panelStyle(panel.style, 'SELECT');
+  const m = await guildMessages(guildId);
   const payload = {
     allowedMentions: { parse: [] as never[] },
-    embeds: [panelEmbed(panel, style === 'BUTTONS'
-      ? 'Premi il pulsante del tipo di ticket da aprire.'
-      : 'Seleziona il tipo di ticket da aprire.')],
+    embeds: [panelEmbed(panel, style === 'BUTTONS' ? m.panel.buttonsHint : m.panel.selectHint)],
     components: panelComponents({
       style,
       placeholder: panel.placeholder,
-      defaultPlaceholder: 'Seleziona una categoria',
+      defaultPlaceholder: m.panel.selectPlaceholder,
       items: panel.items,
       entries: categories.map((category) => ({
         id: category.id,
@@ -283,14 +284,17 @@ export async function publishMainMenu(client: Client, guildId: string) {
       throw new Error('MAIN_MENU_CHANNEL_INVALID');
     }
   
+    const locale = await guildLocale(guildId);
     const embed = new EmbedBuilder()
-      .setTitle(settings.mainMenuTitle)
-      .setDescription(settings.mainMenuDescription || 'Seleziona il tipo di richiesta da aprire.')
+      .setTitle(localizedMenuDefault(settings.mainMenuTitle, 'defaultTitle', locale))
+      .setDescription(settings.mainMenuDescription
+        ? localizedMenuDefault(settings.mainMenuDescription, 'defaultDescription', locale)
+        : messages[locale].mainMenu.fallbackDescription)
       .setFooter({ text: 'Dispatch' });
   
     const button = new ButtonBuilder()
       .setCustomId(MAIN_MENU_BUTTON_PREFIX + guildId)
-      .setLabel(settings.mainMenuButtonLabel)
+      .setLabel(localizedMenuDefault(settings.mainMenuButtonLabel, 'defaultButton', locale))
       .setStyle(ButtonStyle.Primary);
   
     const payload = {
@@ -374,13 +378,15 @@ async function createTicket(
   if (!interaction.guild || !interaction.guildId) return;
   const guildId = interaction.guildId;
   const userId = interaction.user.id;
+  const locale = await guildLocale(guildId);
+  const m = messages[locale];
   const reservation = await getTicketOpenReservation(guildId, userId, token);
   const source = await resolveOpenSource(guildId, sourceKey, categoryId);
   const category = await prisma.ticketCategory.findFirst({ where: { id: categoryId, guildId, enabled: true } });
   if (!reservation || !source || !category || reservation.reservationCategoryId !== categoryId ||
       reservation.reservationSourceKey !== sourceKey || reservation.reservationFormVersion !== formVersion(category.formFields)) {
     await releaseTicketOpenReservation(guildId, userId, token);
-    await interaction.editReply('La richiesta e scaduta o e stata modificata. Apri nuovamente il menu.');
+    await interaction.editReply(m.open.expiredOrChanged);
     return;
   }
   const fields = parseFormFields(category.formFields);
@@ -392,11 +398,11 @@ async function createTicket(
   });
   if (invalid) {
     await releaseTicketOpenReservation(guildId, userId, token);
-    await interaction.editReply('Controlla i campi obbligatori e le lunghezze delle risposte.');
+    await interaction.editReply(m.open.checkFields);
     return;
   }
   if (!(await consumeTicketOpenReservation(guildId, userId, token))) {
-    await interaction.editReply('Richiesta gia utilizzata, scaduta o non piu consentita.');
+    await interaction.editReply(m.open.alreadyUsed);
     return;
   }
   let channel: import("discord.js").TextChannel | undefined;
@@ -426,14 +432,14 @@ async function createTicket(
       } } }
     } }));
     persisted = true;
-    const intro = new EmbedBuilder().setTitle('Ticket #' + number + ' - ' + category.name)
-      .setDescription('Descrivi qui la tua richiesta. Lo staff ti rispondera in questo canale.')
+    const intro = new EmbedBuilder().setTitle(m.ticket.introTitle(number, category.name).slice(0, 256))
+      .setDescription(m.ticket.introDescription)
       .addFields(...formAnswers.map((answer) => ({
-        name: answer.label.slice(0, 45), value: answer.value.trim().slice(0, 1024) || 'Nessuna risposta'
+        name: answer.label.slice(0, 45), value: answer.value.trim().slice(0, 1024) || m.common.noAnswer
       }))).setFooter({ text: 'Dispatch - ' + ticket.id }).setTimestamp();
     try {
       await createdChannel.send({
-        embeds: [intro], components: ticketControlRows(ticket.id),
+        embeds: [intro], components: ticketControlRows(ticket.id, locale),
         content: category.staffRoleIds.map((id) => '<@&' + id + '>').join(' ') || undefined,
         allowedMentions: { parse: [], roles: category.staffRoleIds, users: [] }
       });
@@ -443,13 +449,13 @@ async function createTicket(
       } }).catch(() => null);
     }
     // An expired interaction response must never delete a successfully created ticket.
-    await interaction.editReply('Ticket creato: <#' + createdChannel.id + '>').catch(() => null);
+    await interaction.editReply(m.open.created(createdChannel.id)).catch(() => null);
     await logTicketEvent(interaction.client, guildId, 'TICKET_OPEN', {
-      title: 'Ticket aperto',
+      title: m.log.ticketOpened,
       ticket,
       actorId: userId,
       categoryName: category.name,
-      fields: [{ name: 'Origine', value: source.kind === 'PANEL' ? 'Pannello' : 'Menu principale', inline: true }]
+      fields: [{ name: m.log.origin, value: source.kind === 'PANEL' ? m.log.originPanel : m.log.originMenu, inline: true }]
     });
   } catch (error) {
     if (!persisted) {
@@ -492,9 +498,9 @@ function ticketSelectRow(token: string, field: FormField) {
   );
 }
 
-function ticketTextModal(token: string, categoryName: string, fields: FormField[]) {
+function ticketTextModal(token: string, categoryName: string, fields: FormField[], m: BotMessages) {
   const modal = new ModalBuilder().setCustomId(OPEN_MODAL_PREFIX + token)
-    .setTitle(('Apri ticket - ' + categoryName).slice(0, 45));
+    .setTitle(m.open.modalTitle(categoryName).slice(0, 45));
   for (const [index, field] of fields.entries()) {
     const input = new TextInputBuilder().setCustomId('field_' + (index + 1)).setLabel(field.label)
       .setStyle(field.style === 'PARAGRAPH' ? TextInputStyle.Paragraph : TextInputStyle.Short)
@@ -512,18 +518,19 @@ async function beginTicketOpen(
   categoryId: string
 ) {
   if (!interaction.guildId) return;
+  const m = await guildMessages(interaction.guildId);
   const source = await resolveOpenSource(interaction.guildId, sourceKey, categoryId);
   const category = await prisma.ticketCategory.findFirst({
     where: { id: categoryId, guildId: interaction.guildId, enabled: true }
   });
   if (!source || !category) {
-    await interaction.reply({ content: 'Questa richiesta non e piu disponibile.', ephemeral: true });
+    await interaction.reply({ content: m.open.unavailable, ephemeral: true });
     return;
   }
   const reservation = await reserveTicketOpen(interaction.guildId, interaction.user.id, categoryId,
     sourceKey, formVersion(category.formFields));
   if (!reservation.ok) {
-    await interaction.reply({ content: ticketOpenReservationMessage(reservation), ephemeral: true });
+    await interaction.reply({ content: ticketOpenReservationMessage(reservation, m), ephemeral: true });
     return;
   }
   const fields = parseFormFields(category.formFields);
@@ -535,14 +542,14 @@ async function beginTicketOpen(
   const selects = fields.filter((field) => field.type === 'SINGLE_SELECT');
   if (selects.length) {
     await interaction.reply({
-      content: '**1/' + selects.length + ' - ' + selects[0]!.label + '**',
+      content: m.open.step(1, selects.length, selects[0]!.label),
       components: [ticketSelectRow(reservation.token, selects[0]!)],
       allowedMentions: { parse: [] },
       ephemeral: true
     });
     return;
   }
-  try { await interaction.showModal(ticketTextModal(reservation.token, category.name, fields)); }
+  try { await interaction.showModal(ticketTextModal(reservation.token, category.name, fields, m)); }
   catch (error) {
     await releaseTicketOpenReservation(interaction.guildId, interaction.user.id, reservation.token);
     throw error;
@@ -551,10 +558,11 @@ async function beginTicketOpen(
 
 async function submitOpenTicketSelect(interaction: StringSelectMenuInteraction) {
   if (!interaction.guildId) return;
+  const m = await guildMessages(interaction.guildId);
   const token = interaction.customId.slice(OPEN_SELECT_PREFIX.length);
   const reservation = await getTicketOpenReservation(interaction.guildId, interaction.user.id, token);
   if (!reservation?.reservationCategoryId || !reservation.reservationSourceKey) {
-    await interaction.reply({ content: 'Questa richiesta è scaduta.', ephemeral: true });
+    await interaction.reply({ content: m.open.expired, ephemeral: true });
     return;
   }
   const category = await prisma.ticketCategory.findFirst({ where: {
@@ -562,7 +570,7 @@ async function submitOpenTicketSelect(interaction: StringSelectMenuInteraction) 
   } });
   if (!category || formVersion(category.formFields) !== reservation.reservationFormVersion) {
     await releaseTicketOpenReservation(interaction.guildId, interaction.user.id, token);
-    await interaction.reply({ content: 'Il modulo è stato modificato. Riapri la richiesta.', ephemeral: true });
+    await interaction.reply({ content: m.open.formChanged, ephemeral: true });
     return;
   }
   const fields = parseFormFields(category.formFields);
@@ -572,7 +580,7 @@ async function submitOpenTicketSelect(interaction: StringSelectMenuInteraction) 
   const guildId = interaction.guildId;
   const categoryName = category.name;
   const showTextModal = async () => {
-    try { await interaction.showModal(ticketTextModal(token, categoryName, texts)); }
+    try { await interaction.showModal(ticketTextModal(token, categoryName, texts, m)); }
     catch (error) {
       await releaseTicketOpenReservation(guildId, interaction.user.id, token);
       throw error;
@@ -582,13 +590,13 @@ async function submitOpenTicketSelect(interaction: StringSelectMenuInteraction) 
   // instead of trapping the reservation until it expires.
   if (index >= selects.length) {
     if (texts.length) await showTextModal();
-    else await interaction.reply({ content: 'Questa richiesta è scaduta.', ephemeral: true });
+    else await interaction.reply({ content: m.open.expired, ephemeral: true });
     return;
   }
   const field = selects[index];
   const value = interaction.values[0];
   if (!field || !value || !field.options.some((option) => option.value === value)) {
-    await interaction.reply({ content: 'Selezione non valida.', ephemeral: true });
+    await interaction.reply({ content: m.open.invalidSelection, ephemeral: true });
     return;
   }
   const answers = storedTicketAnswers(reservation.reservationAnswersEncrypted);
@@ -606,13 +614,13 @@ async function submitOpenTicketSelect(interaction: StringSelectMenuInteraction) 
     }
   });
   if (advanced.count !== 1) {
-    await interaction.reply({ content: 'Questa selezione non è più valida.', ephemeral: true });
+    await interaction.reply({ content: m.open.selectionStale, ephemeral: true });
     return;
   }
   const next = selects[index + 1];
   if (next) {
     await interaction.update({
-      content: '**' + (index + 2) + '/' + selects.length + ' - ' + next.label + '**',
+      content: m.open.step(index + 2, selects.length, next.label),
       components: [ticketSelectRow(token, next)],
       allowedMentions: { parse: [] }
     });
@@ -631,10 +639,11 @@ async function submitOpenTicketSelect(interaction: StringSelectMenuInteraction) 
 async function openTicket(interaction: StringSelectMenuInteraction) {
   if (!interaction.guildId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const panelId = interaction.customId.slice(PANEL_SELECT_PREFIX.length);
   const categoryId = interaction.values[0];
   if (!categoryId) {
-    await interaction.reply({ content: 'Categoria non valida.', ephemeral: true });
+    await interaction.reply({ content: m.open.invalidCategory, ephemeral: true });
     return;
   }
 
@@ -643,7 +652,7 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
     messageId: interaction.message.id, enabled: true
   } });
   if (!panel) {
-    await interaction.reply({ content: 'Pannello scaduto o non valido.', ephemeral: true });
+    await interaction.reply({ content: m.open.panelExpired, ephemeral: true });
     return;
   }
   await beginTicketOpen(interaction, 'p_' + panelId, categoryId);
@@ -653,9 +662,10 @@ async function openTicket(interaction: StringSelectMenuInteraction) {
 async function openTicketFromButton(interaction: ButtonInteraction) {
   if (!interaction.guildId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const [panelId, categoryId, extra] = interaction.customId.slice(PANEL_BUTTON_PREFIX.length).split(':');
   if (!panelId || !categoryId || extra !== undefined || !CUID.test(panelId) || !CUID.test(categoryId)) {
-    await interaction.reply({ content: 'Pannello non valido.', ephemeral: true });
+    await interaction.reply({ content: m.open.invalidPanel, ephemeral: true });
     return;
   }
 
@@ -664,7 +674,7 @@ async function openTicketFromButton(interaction: ButtonInteraction) {
     messageId: interaction.message.id, enabled: true
   } });
   if (!panel) {
-    await interaction.reply({ content: 'Pannello scaduto o non valido.', ephemeral: true });
+    await interaction.reply({ content: m.open.panelExpired, ephemeral: true });
     return;
   }
   // resolveOpenSource re-checks that the category is still in this panel.
@@ -674,15 +684,16 @@ async function openTicketFromButton(interaction: ButtonInteraction) {
 async function openMainMenu(interaction: ButtonInteraction) {
   if (!interaction.guildId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const guildId = interaction.customId.slice(MAIN_MENU_BUTTON_PREFIX.length);
   if (guildId !== interaction.guildId) {
-    await interaction.reply({ content: 'Menu non valido per questo server.', ephemeral: true });
+    await interaction.reply({ content: m.mainMenu.invalidForServer, ephemeral: true });
     return;
   }
 
   if (await userIsBlacklisted(interaction.guildId, interaction.user.id)) {
     await interaction.reply({
-      content: 'Non puoi aprire ticket in questo server.',
+      content: m.open.cannotOpen,
       ephemeral: true
     });
     return;
@@ -704,7 +715,7 @@ async function openMainMenu(interaction: ButtonInteraction) {
     settings.mainMenuChannelId !== interaction.channelId ||
     settings.mainMenuMessageId !== interaction.message.id
   ) {
-    await interaction.reply({ content: 'Il menu ticket non è disponibile.', ephemeral: true });
+    await interaction.reply({ content: m.mainMenu.unavailable, ephemeral: true });
     return;
   }
 
@@ -718,13 +729,13 @@ async function openMainMenu(interaction: ButtonInteraction) {
   });
 
   if (!categories.length) {
-    await interaction.reply({ content: 'Non ci sono richieste disponibili.', ephemeral: true });
+    await interaction.reply({ content: m.mainMenu.noRequests, ephemeral: true });
     return;
   }
 
   const select = new StringSelectMenuBuilder()
     .setCustomId(MAIN_MENU_SELECT_PREFIX + guildId)
-    .setPlaceholder('Scegli il tipo di richiesta')
+    .setPlaceholder(m.mainMenu.chooseRequestPlaceholder)
     .setMinValues(1)
     .setMaxValues(1)
     .addOptions(categories.sort((a, b) => settings.mainMenuCategoryIds.indexOf(a.id) - settings.mainMenuCategoryIds.indexOf(b.id)).slice(0, 25).map((category) => ({
@@ -734,7 +745,7 @@ async function openMainMenu(interaction: ButtonInteraction) {
     })));
 
   await interaction.reply({
-    content: 'Seleziona la richiesta per cui vuoi aprire un ticket.',
+    content: m.mainMenu.chooseRequest,
     components: [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select)],
     ephemeral: true
   });
@@ -746,7 +757,7 @@ async function openMainMenuSelection(interaction: StringSelectMenuInteraction) {
   const guildId = interaction.customId.slice(MAIN_MENU_SELECT_PREFIX.length);
   const categoryId = interaction.values[0];
   if (guildId !== interaction.guildId || !categoryId) {
-    await interaction.reply({ content: 'Selezione non valida.', ephemeral: true });
+    await interaction.reply({ content: (await guildMessages(interaction.guildId)).open.invalidSelection, ephemeral: true });
     return;
   }
 
@@ -756,10 +767,11 @@ async function openMainMenuSelection(interaction: StringSelectMenuInteraction) {
 async function submitOpenTicket(interaction: ModalSubmitInteraction) {
   if (!interaction.guildId) return;
   await interaction.deferReply({ ephemeral: true });
+  const m = await guildMessages(interaction.guildId);
   const token = interaction.customId.slice(OPEN_MODAL_PREFIX.length);
   const reservation = await getTicketOpenReservation(interaction.guildId, interaction.user.id, token);
   if (!reservation?.reservationCategoryId || !reservation.reservationSourceKey) {
-    await interaction.editReply('Il modulo e scaduto o e gia stato utilizzato. Apri nuovamente il menu.');
+    await interaction.editReply(m.open.formExpiredOrUsed);
     return;
   }
   const category = await prisma.ticketCategory.findFirst({ where: {
@@ -767,7 +779,7 @@ async function submitOpenTicket(interaction: ModalSubmitInteraction) {
   } });
   if (!category || formVersion(category.formFields) !== reservation.reservationFormVersion) {
     await releaseTicketOpenReservation(interaction.guildId, interaction.user.id, token);
-    await interaction.editReply('Il modulo e stato modificato. Apri nuovamente la richiesta.');
+    await interaction.editReply(m.open.formChanged);
     return;
   }
   const fields = parseFormFields(category.formFields);
@@ -783,7 +795,7 @@ async function submitOpenTicket(interaction: ModalSubmitInteraction) {
     });
   } catch {
     await releaseTicketOpenReservation(interaction.guildId, interaction.user.id, token);
-    await interaction.editReply('Modulo non valido. Apri nuovamente la richiesta.');
+    await interaction.editReply(m.open.invalidForm);
     return;
   }
   const ordered = fields.map((field) => answers.find((answer) => answer.id === field.id)!)
@@ -794,6 +806,7 @@ async function submitOpenTicket(interaction: ModalSubmitInteraction) {
 async function claimTicket(interaction: ButtonInteraction) {
   if (!interaction.guild || !interaction.guildId || !interaction.channelId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const ticketId = interaction.customId.slice(CLAIM_PREFIX.length);
   const ticket = await prisma.ticket.findFirst({
     where: { id: ticketId, guildId: interaction.guildId, channelId: interaction.channelId },
@@ -801,14 +814,14 @@ async function claimTicket(interaction: ButtonInteraction) {
   });
 
   if (!ticket || !OPEN_STATUSES.includes(ticket.status)) {
-    await interaction.reply({ content: 'Ticket non disponibile.', ephemeral: true });
+    await interaction.reply({ content: m.ticket.unavailable, ephemeral: true });
     return;
   }
 
   const member = await interaction.guild.members.fetch(interaction.user.id);
   if (!hasStaffAccess(member, ticket.category.staffRoleIds)) {
     await interaction.reply({
-      content: 'Non hai i permessi per prendere in carico questo ticket.',
+      content: m.ticket.noClaimPermission,
       ephemeral: true
     });
     return;
@@ -816,7 +829,7 @@ async function claimTicket(interaction: ButtonInteraction) {
 
   if (ticket.claimedById && ticket.claimedById !== interaction.user.id) {
     await interaction.reply({
-      content: `Ticket già preso in carico da <@${ticket.claimedById}>.`,
+      content: m.ticket.alreadyClaimedBy(ticket.claimedById),
       ephemeral: true
     });
     return;
@@ -845,16 +858,16 @@ async function claimTicket(interaction: ButtonInteraction) {
     return true;
   });
   if (!claimed) {
-    await interaction.reply({ content: 'Ticket non disponibile o già preso in carico.', ephemeral: true });
+    await interaction.reply({ content: m.ticket.unavailableOrClaimed, ephemeral: true });
     return;
   }
 
   await interaction.reply({
-    content: `Ticket preso in carico da <@${interaction.user.id}>.`,
+    content: m.ticket.claimedBy(interaction.user.id),
     allowedMentions: { users: [interaction.user.id] }
   });
   await logTicketEvent(interaction.client, interaction.guildId, 'TICKET_CLAIM', {
-    title: 'Ticket preso in carico',
+    title: m.log.claimed,
     ticket,
     actorId: interaction.user.id,
     categoryName: ticket.category.name
@@ -864,6 +877,7 @@ async function claimTicket(interaction: ButtonInteraction) {
 async function unclaimTicketInteraction(interaction: ButtonInteraction) {
   if (!interaction.guildId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const ticketId = interaction.customId.slice(UNCLAIM_PREFIX.length);
   const ticket = await prisma.ticket.findFirst({
     where: { id: ticketId, guildId: interaction.guildId, channelId: interaction.channelId },
@@ -871,21 +885,21 @@ async function unclaimTicketInteraction(interaction: ButtonInteraction) {
   });
 
   if (!ticket) {
-    await interaction.reply({ content: 'Ticket non disponibile.', ephemeral: true });
+    await interaction.reply({ content: m.ticket.unavailable, ephemeral: true });
     return;
   }
 
   const member = await interaction.guild!.members.fetch(interaction.user.id);
   if (!hasStaffAccess(member, ticket.category.staffRoleIds)) {
     await interaction.reply({
-      content: 'Non hai i permessi per rilasciare questo ticket.',
+      content: m.ticket.noReleasePermission,
       ephemeral: true
     });
     return;
   }
 
   await unclaimTicket(interaction.client, interaction.guildId, ticketId, interaction.user.id);
-  await interaction.reply({ content: 'Ticket rilasciato.', ephemeral: true });
+  await interaction.reply({ content: m.ticket.released, ephemeral: true });
 }
 
 async function statusTicketInteraction(
@@ -894,6 +908,7 @@ async function statusTicketInteraction(
 ) {
   if (!interaction.guildId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const prefix = status === 'WAITING' ? WAITING_PREFIX : RESOLVED_PREFIX;
   const ticketId = interaction.customId.slice(prefix.length);
   const ticket = await prisma.ticket.findFirst({
@@ -901,14 +916,14 @@ async function statusTicketInteraction(
     include: { category: true }
   });
   if (!ticket || !OPEN_STATUSES.includes(ticket.status)) {
-    await interaction.reply({ content: 'Ticket non disponibile.', ephemeral: true });
+    await interaction.reply({ content: m.ticket.unavailable, ephemeral: true });
     return;
   }
 
   const member = await interaction.guild!.members.fetch(interaction.user.id);
   if (!hasStaffAccess(member, ticket.category.staffRoleIds)) {
     await interaction.reply({
-      content: 'Non hai i permessi per modificare lo stato.',
+      content: m.ticket.noStatusPermission,
       ephemeral: true
     });
     return;
@@ -916,7 +931,7 @@ async function statusTicketInteraction(
 
   await setTicketStatus(interaction.client, interaction.guildId, ticket.id, interaction.user.id, status);
   await interaction.reply({
-    content: status === 'WAITING' ? 'Ticket impostato in attesa.' : 'Ticket segnato come risolto.',
+    content: status === 'WAITING' ? m.ticket.setWaiting : m.ticket.setResolved,
     ephemeral: true
   });
 }
@@ -925,13 +940,14 @@ async function statusTicketInteraction(
 async function promptFeedback(interaction: ButtonInteraction) {
   if (!interaction.guildId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const raw = interaction.customId.slice(FEEDBACK_PREFIX.length);
   const separator = raw.lastIndexOf(':');
   const ticketId = separator > 0 ? raw.slice(0, separator) : '';
   const rating = Number(separator > 0 ? raw.slice(separator + 1) : '');
 
   if (!ticketId || !Number.isInteger(rating) || rating < 1 || rating > 5) {
-    await interaction.reply({ content: 'Feedback non valido.', ephemeral: true });
+    await interaction.reply({ content: m.feedback.invalid, ephemeral: true });
     return;
   }
 
@@ -946,21 +962,21 @@ async function promptFeedback(interaction: ButtonInteraction) {
     !ticket.category.feedbackEnabled ||
     ticket.openerId !== interaction.user.id
   ) {
-    await interaction.reply({ content: 'Non puoi inviare feedback per questo ticket.', ephemeral: true });
+    await interaction.reply({ content: m.feedback.notAllowed, ephemeral: true });
     return;
   }
 
   const comment = new TextInputBuilder()
     .setCustomId('comment')
-    .setLabel('Commento opzionale')
+    .setLabel(m.feedback.commentLabel)
     .setStyle(TextInputStyle.Paragraph)
     .setRequired(false)
     .setMaxLength(1500)
-    .setPlaceholder('Cosa è andato bene o cosa possiamo migliorare?');
+    .setPlaceholder(m.feedback.commentPlaceholder);
 
   const modal = new ModalBuilder()
     .setCustomId(FEEDBACK_MODAL_PREFIX + ticket.id + ':' + rating)
-    .setTitle('Feedback ticket - ' + rating + '/5')
+    .setTitle(m.feedback.modalTitle(rating))
     .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(comment));
 
   await interaction.showModal(modal);
@@ -969,13 +985,14 @@ async function promptFeedback(interaction: ButtonInteraction) {
 async function submitFeedback(interaction: ModalSubmitInteraction) {
   if (!interaction.guildId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const raw = interaction.customId.slice(FEEDBACK_MODAL_PREFIX.length);
   const separator = raw.lastIndexOf(':');
   const ticketId = separator > 0 ? raw.slice(0, separator) : '';
   const rating = Number(separator > 0 ? raw.slice(separator + 1) : '');
 
   if (!ticketId || !Number.isInteger(rating) || rating < 1 || rating > 5) {
-    await interaction.reply({ content: 'Feedback non valido.', ephemeral: true });
+    await interaction.reply({ content: m.feedback.invalid, ephemeral: true });
     return;
   }
 
@@ -990,7 +1007,7 @@ async function submitFeedback(interaction: ModalSubmitInteraction) {
     !ticket.category.feedbackEnabled ||
     ticket.openerId !== interaction.user.id
   ) {
-    await interaction.reply({ content: 'Non puoi inviare feedback per questo ticket.', ephemeral: true });
+    await interaction.reply({ content: m.feedback.notAllowed, ephemeral: true });
     return;
   }
 
@@ -1027,18 +1044,18 @@ async function submitFeedback(interaction: ModalSubmitInteraction) {
   ]);
 
   await interaction.reply({
-    content: 'Grazie. Il tuo feedback è stato registrato.',
+    content: m.feedback.thanks,
     ephemeral: true
   });
   // Rating only: the comment is encrypted and never leaves the database.
   await logTicketEvent(interaction.client, interaction.guildId, 'TICKET_FEEDBACK', {
-    title: 'Feedback ricevuto',
+    title: m.log.feedback,
     ticket,
     actorId: interaction.user.id,
     categoryName: ticket.category.name,
     fields: [
-      { name: 'Valutazione', value: '★'.repeat(rating) + '☆'.repeat(5 - rating) + ' (' + rating + '/5)', inline: true },
-      { name: 'Moderatore', value: staffUserId ? '<@' + staffUserId + '> (' + staffUserId + ')' : 'Non attribuito', inline: true }
+      { name: m.log.rating, value: '★'.repeat(rating) + '☆'.repeat(5 - rating) + ' (' + rating + '/5)', inline: true },
+      { name: m.log.moderator, value: staffUserId ? '<@' + staffUserId + '> (' + staffUserId + ')' : m.log.unattributed, inline: true }
     ]
   });
 }
@@ -1060,20 +1077,21 @@ export function feedbackStaffUserId(ticket: { claimedById: string | null; closed
 async function reopenTicketInteraction(interaction: ButtonInteraction) {
   if (!interaction.guild || !interaction.guildId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const ticketId = interaction.customId.slice(REOPEN_PREFIX.length);
   const ticket = await prisma.ticket.findFirst({
     where: { id: ticketId, guildId: interaction.guildId },
     include: { category: true }
   });
   if (!ticket) {
-    await interaction.reply({ content: 'Non puoi riaprire questo ticket.', ephemeral: true });
+    await interaction.reply({ content: m.reopen.notAllowed, ephemeral: true });
     return;
   }
 
   const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
   const staff = Boolean(member && hasStaffAccess(member, ticket.category.staffRoleIds));
   if (!staff && ticket.openerId !== interaction.user.id) {
-    await interaction.reply({ content: 'Non puoi riaprire questo ticket.', ephemeral: true });
+    await interaction.reply({ content: m.reopen.notAllowed, ephemeral: true });
     return;
   }
 
@@ -1086,24 +1104,24 @@ async function reopenTicketInteraction(interaction: ButtonInteraction) {
       interaction.user.id,
       !staff
     );
-    await interaction.editReply('Ticket riaperto.');
+    await interaction.editReply(m.reopen.done);
   } catch (error) {
     const code = error instanceof Error ? error.message : 'REOPEN_FAILED';
     const message = code === 'REOPEN_WINDOW_EXPIRED'
-      ? 'La finestra di riapertura è scaduta.'
+      ? m.reopen.windowExpired
       : code === 'REOPEN_DISABLED'
-        ? 'La riapertura utente non è abilitata per questa categoria.'
+        ? m.reopen.disabled
         : code === 'TICKET_CHANNEL_DELETED'
-          ? 'Il canale di questo ticket è stato eliminato: non può essere riaperto.'
-          : 'Non è possibile riaprire questo ticket.';
+          ? m.reopen.channelDeleted
+          : m.reopen.failed;
     await interaction.editReply(message).catch(() => null);
   }
 }
 
-async function closedTicketForStaff(interaction: ButtonInteraction, ticketId: string) {
+async function closedTicketForStaff(interaction: ButtonInteraction, ticketId: string, m: BotMessages) {
   if (!interaction.guild || !interaction.guildId) return null;
   if (!CUID.test(ticketId)) {
-    await interaction.reply({ content: 'Ticket non valido.', ephemeral: true });
+    await interaction.reply({ content: m.ticket.invalid, ephemeral: true });
     return null;
   }
   const ticket = await prisma.ticket.findFirst({
@@ -1111,32 +1129,31 @@ async function closedTicketForStaff(interaction: ButtonInteraction, ticketId: st
     include: { category: true }
   });
   if (!ticket || ticket.status !== 'CLOSED' || ticket.retentionPendingAt || ticket.channelDeletedAt) {
-    await interaction.reply({ content: 'Il canale di questo ticket non può essere eliminato.', ephemeral: true });
+    await interaction.reply({ content: m.deleteChannel.notAllowed, ephemeral: true });
     return null;
   }
   const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
   if (!member || !hasStaffAccess(member, ticket.category.staffRoleIds)) {
-    await interaction.reply({ content: 'Non hai i permessi per eliminare questo canale.', ephemeral: true });
+    await interaction.reply({ content: m.deleteChannel.noPermission, ephemeral: true });
     return null;
   }
   return ticket;
 }
 
 async function promptDeleteTicketChannel(interaction: ButtonInteraction) {
+  const m = await guildMessages(interaction.guildId);
   const ticketId = interaction.customId.slice(DELETE_CHANNEL_PREFIX.length);
-  const ticket = await closedTicketForStaff(interaction, ticketId);
+  const ticket = await closedTicketForStaff(interaction, ticketId, m);
   if (!ticket) return;
 
   const expiry = (Date.now() + DELETE_CONFIRM_TTL_MS).toString(36);
   await interaction.reply({
-    content: `Eliminare definitivamente il canale del ticket #${ticket.ticketNumber}? ` +
-      'Il transcript viene prima generato o consegnato secondo le impostazioni della categoria. ' +
-      'Il ticket resta nello storico della dashboard ma non potrà più essere riaperto.',
+    content: m.deleteChannel.prompt(ticket.ticketNumber),
     components: [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
           .setCustomId(DELETE_CONFIRM_PREFIX + ticket.id + ':' + expiry)
-          .setLabel('Conferma eliminazione')
+          .setLabel(m.buttons.confirmDelete)
           .setStyle(ButtonStyle.Danger)
       )
     ],
@@ -1147,50 +1164,51 @@ async function promptDeleteTicketChannel(interaction: ButtonInteraction) {
 
 async function confirmDeleteTicketChannel(interaction: ButtonInteraction) {
   if (!interaction.guildId) return;
+  const m = await guildMessages(interaction.guildId);
   const [ticketId, expiry, extra] = interaction.customId.slice(DELETE_CONFIRM_PREFIX.length).split(':');
   const expiresAt = expiry ? parseInt(expiry, 36) : NaN;
   if (!ticketId || extra !== undefined || !Number.isFinite(expiresAt) || Date.now() > expiresAt) {
-    await interaction.reply({ content: 'Conferma scaduta. Premi di nuovo “Elimina canale”.', ephemeral: true });
+    await interaction.reply({ content: m.deleteChannel.expired, ephemeral: true });
     return;
   }
   // Staff and ticket state are checked again: the confirmation is only a click.
-  const ticket = await closedTicketForStaff(interaction, ticketId);
+  const ticket = await closedTicketForStaff(interaction, ticketId, m);
   if (!ticket) return;
 
-  await interaction.update({ content: 'Eliminazione del canale in corso…', components: [] });
+  await interaction.update({ content: m.deleteChannel.deleting, components: [] });
   try {
     await deleteTicketChannel(interaction.client, interaction.guildId, ticket.id, interaction.user.id);
     // The ephemeral message lived in the deleted channel: a failed edit is fine.
-    await interaction.editReply({ content: 'Canale eliminato.', components: [] }).catch(() => null);
+    await interaction.editReply({ content: m.deleteChannel.deleted, components: [] }).catch(() => null);
   } catch (error) {
     const code = error instanceof Error ? error.message : 'DELETE_FAILED';
     const message = code === 'TICKET_TRANSCRIPT_FAILED'
-      ? 'Impossibile generare o consegnare il transcript: il canale non è stato eliminato.'
+      ? m.deleteChannel.transcriptFailed
       : code === 'TICKET_CHANNEL_DELETE_FAILED'
-        ? 'Discord ha rifiutato l’eliminazione del canale. Controlla i permessi del bot.'
-        : 'Il canale di questo ticket non può essere eliminato.';
+        ? m.deleteChannel.rejected
+        : m.deleteChannel.notAllowed;
     await interaction.editReply({ content: message, components: [] }).catch(() => null);
   }
 }
 
-const STAFF_THREAD_ERRORS: Record<string, string> = {
-  STAFF_THREAD_MISSING_PERMISSIONS: 'Il bot non ha i permessi per creare thread privati: aggiorna i permessi del suo ruolo ' +
-    '(Crea thread privati, Invia messaggi nei thread, Gestisci thread).',
-  STAFF_THREAD_BUSY: 'Il thread staff è in fase di creazione: riprova tra qualche secondo.',
-  STAFF_THREAD_FORBIDDEN: 'Solo lo staff di questa categoria può usare il thread staff.',
-  TICKET_CLOSED: 'Il thread staff è disponibile solo per i ticket attivi.',
-  TICKET_REOPENING: 'Il thread staff è disponibile solo per i ticket attivi.',
-  TICKET_CHANNEL_DELETED: 'Il thread staff è disponibile solo per i ticket attivi.'
-};
+const staffThreadErrors = (m: BotMessages): Record<string, string> => ({
+  STAFF_THREAD_MISSING_PERMISSIONS: m.staffThread.missingPermissions,
+  STAFF_THREAD_BUSY: m.staffThread.busy,
+  STAFF_THREAD_FORBIDDEN: m.staffThread.forbidden,
+  TICKET_CLOSED: m.staffThread.inactive,
+  TICKET_REOPENING: m.staffThread.inactive,
+  TICKET_CHANNEL_DELETED: m.staffThread.inactive
+});
 
 // Staff only (category staff roles, Manage Server/Channels), never the opener,
 // active tickets only. Joins the live staff thread or creates it.
 async function staffThreadInteraction(interaction: ButtonInteraction) {
   if (!interaction.guild || !interaction.guildId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const ticketId = interaction.customId.slice(STAFF_THREAD_PREFIX.length);
   if (!CUID.test(ticketId)) {
-    await interaction.reply({ content: 'Ticket non valido.', ephemeral: true });
+    await interaction.reply({ content: m.ticket.invalid, ephemeral: true });
     return;
   }
   const ticket = await prisma.ticket.findFirst({
@@ -1198,13 +1216,13 @@ async function staffThreadInteraction(interaction: ButtonInteraction) {
     include: { category: true }
   });
   if (!ticket || !OPEN_STATUSES.includes(ticket.status) || ticket.retentionPendingAt || ticket.channelDeletedAt) {
-    await interaction.reply({ content: STAFF_THREAD_ERRORS.TICKET_CLOSED!, ephemeral: true });
+    await interaction.reply({ content: m.staffThread.inactive, ephemeral: true });
     return;
   }
 
   const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
   if (!member || interaction.user.id === ticket.openerId || !hasStaffAccess(member, ticket.category.staffRoleIds)) {
-    await interaction.reply({ content: STAFF_THREAD_ERRORS.STAFF_THREAD_FORBIDDEN!, ephemeral: true });
+    await interaction.reply({ content: m.staffThread.forbidden, ephemeral: true });
     return;
   }
 
@@ -1212,13 +1230,13 @@ async function staffThreadInteraction(interaction: ButtonInteraction) {
   try {
     const result = await openStaffThread(interaction.client, interaction.guildId, ticket.id, interaction.user.id);
     await interaction.editReply({
-      content: (result.created ? 'Thread staff creato: ' : 'Sei stato aggiunto al thread staff: ') + '<#' + result.threadId + '>',
+      content: result.created ? m.staffThread.created(result.threadId) : m.staffThread.joined(result.threadId),
       allowedMentions: { parse: [] }
     });
   } catch (error) {
     const code = error instanceof Error ? error.message : '';
     await interaction.editReply({
-      content: STAFF_THREAD_ERRORS[code] ?? 'Impossibile aprire il thread staff.',
+      content: staffThreadErrors(m)[code] ?? m.staffThread.failed,
       allowedMentions: { parse: [] }
     }).catch(() => null);
   }
@@ -1227,6 +1245,7 @@ async function staffThreadInteraction(interaction: ButtonInteraction) {
 async function promptCloseTicket(interaction: ButtonInteraction) {
   if (!interaction.guild || !interaction.guildId || !interaction.channelId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const ticketId = interaction.customId.slice(CLOSE_PREFIX.length);
   const ticket = await prisma.ticket.findFirst({
     where: { id: ticketId, guildId: interaction.guildId, channelId: interaction.channelId },
@@ -1235,7 +1254,7 @@ async function promptCloseTicket(interaction: ButtonInteraction) {
 
   if (!ticket || !OPEN_STATUSES.includes(ticket.status)) {
     await interaction.reply({
-      content: 'Il ticket è già chiuso o non esiste.',
+      content: m.ticket.alreadyClosed,
       ephemeral: true
     });
     return;
@@ -1246,7 +1265,7 @@ async function promptCloseTicket(interaction: ButtonInteraction) {
     hasStaffAccess(member, ticket.category.staffRoleIds);
   if (!allowed) {
     await interaction.reply({
-      content: 'Non hai i permessi per chiudere questo ticket.',
+      content: m.ticket.noClosePermission,
       ephemeral: true
     });
     return;
@@ -1254,15 +1273,15 @@ async function promptCloseTicket(interaction: ButtonInteraction) {
 
   const reason = new TextInputBuilder()
     .setCustomId('reason')
-    .setLabel('Motivo della chiusura')
+    .setLabel(m.ticket.closeReasonLabel)
     .setStyle(TextInputStyle.Paragraph)
     .setRequired(false)
     .setMaxLength(1000)
-    .setPlaceholder('Opzionale');
+    .setPlaceholder(m.ticket.optional);
 
   const modal = new ModalBuilder()
     .setCustomId(`${CLOSE_MODAL_PREFIX}${ticket.id}`)
-    .setTitle(`Chiudi ticket #${ticket.ticketNumber}`)
+    .setTitle(m.ticket.closeModalTitle(ticket.ticketNumber))
     .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(reason));
 
   await interaction.showModal(modal);
@@ -1271,6 +1290,7 @@ async function promptCloseTicket(interaction: ButtonInteraction) {
 async function submitCloseTicket(interaction: ModalSubmitInteraction) {
   if (!interaction.guildId) return;
 
+  const m = await guildMessages(interaction.guildId);
   const ticketId = interaction.customId.slice(CLOSE_MODAL_PREFIX.length);
   const ticket = await prisma.ticket.findFirst({
     where: { id: ticketId, guildId: interaction.guildId },
@@ -1279,7 +1299,7 @@ async function submitCloseTicket(interaction: ModalSubmitInteraction) {
 
   if (!ticket || !OPEN_STATUSES.includes(ticket.status)) {
     await interaction.reply({
-      content: 'Il ticket è già chiuso o non esiste.',
+      content: m.ticket.alreadyClosed,
       ephemeral: true
     });
     return;
@@ -1290,7 +1310,7 @@ async function submitCloseTicket(interaction: ModalSubmitInteraction) {
     hasStaffAccess(member, ticket.category.staffRoleIds);
   if (!allowed) {
     await interaction.reply({
-      content: 'Non hai i permessi per chiudere questo ticket.',
+      content: m.ticket.noClosePermission,
       ephemeral: true
     });
     return;
@@ -1305,7 +1325,7 @@ async function submitCloseTicket(interaction: ModalSubmitInteraction) {
     interaction.user.id,
     reason
   ).then(() => true, () => false);
-  await interaction.editReply(closed ? 'Ticket chiuso.' : 'Il ticket è già chiuso o non è più disponibile.');
+  await interaction.editReply(closed ? m.ticket.closed : m.ticket.closeFailed);
 }
 
 export async function handleTicketInteraction(
@@ -1314,7 +1334,7 @@ export async function handleTicketInteraction(
   const opening = [PANEL_SELECT_PREFIX, PANEL_BUTTON_PREFIX, MAIN_MENU_BUTTON_PREFIX, MAIN_MENU_SELECT_PREFIX, OPEN_MODAL_PREFIX, OPEN_SELECT_PREFIX]
     .some((prefix) => interaction.customId.startsWith(prefix));
   if (opening && interaction.guildId && !allowOpeningInteraction(interaction.guildId, interaction.user.id)) {
-    await interaction.reply({ content: 'Stai usando il menu troppo rapidamente. Riprova tra pochi secondi.', ephemeral: true });
+    await interaction.reply({ content: (await guildMessages(interaction.guildId)).open.tooFast, ephemeral: true });
     return true;
   }
 

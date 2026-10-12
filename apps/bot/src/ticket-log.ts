@@ -8,10 +8,11 @@ import {
 import pino from 'pino';
 import { prisma } from '@dispatch/db';
 import {
-  TICKET_LOG_EVENT_INFO,
+  TICKET_LOG_EVENTS,
   type BlacklistLogPayload,
   type TicketLogEvent
 } from '@dispatch/shared';
+import { guildLocale, messages, type BotMessages } from './i18n.js';
 
 /*
  * Per-server ticket log channel. Every caller is a ticket action that must
@@ -91,7 +92,7 @@ async function resolveLogChannel(client: Client, guildId: string, channelId: str
 export type TicketLogField = { name: string; value: string; inline?: boolean };
 
 export type TicketLogData = {
-  /** Specific action, e.g. "Ticket preso in carico". Defaults to the event label. */
+  /** Specific action, e.g. "Ticket claimed". Defaults to the event label. */
   title?: string;
   ticket?: { id: string; ticketNumber: number; channelId?: string | null } | null;
   /** Discord user that performed the action; null/undefined = system. */
@@ -103,23 +104,22 @@ export type TicketLogData = {
 const clip = (value: string, max: number) => (value.length > max ? value.slice(0, max - 1) + '…' : value);
 export const userMention = (userId: string) => `<@${userId}> (${userId})`;
 
-export function buildTicketLogEmbed(event: TicketLogEvent, data: TicketLogData = {}) {
-  const info = TICKET_LOG_EVENT_INFO.find((entry) => entry.key === event);
+export function buildTicketLogEmbed(event: TicketLogEvent, data: TicketLogData, m: BotMessages) {
   const fields: TicketLogField[] = [];
   if (data.ticket) {
     const number = '#' + String(data.ticket.ticketNumber).padStart(4, '0');
     fields.push({
-      name: 'Ticket',
+      name: m.log.ticket,
       value: data.ticket.channelId ? `${number} · <#${data.ticket.channelId}>` : number,
       inline: true
     });
   }
-  fields.push({ name: 'Autore', value: data.actorId ? userMention(data.actorId) : 'Sistema', inline: true });
-  if (data.categoryName) fields.push({ name: 'Categoria', value: data.categoryName, inline: true });
+  fields.push({ name: m.log.author, value: data.actorId ? userMention(data.actorId) : m.common.system, inline: true });
+  if (data.categoryName) fields.push({ name: m.log.category, value: data.categoryName, inline: true });
   fields.push(...(data.fields ?? []));
 
   const embed = new EmbedBuilder()
-    .setTitle(clip(data.title ?? info?.label ?? event, 256))
+    .setTitle(clip(data.title ?? m.log.eventLabels[event] ?? event, 256))
     .setColor(COLORS[event])
     .addFields(fields.slice(0, 25).map((field) => ({
       name: clip(field.name || '-', 256),
@@ -147,7 +147,8 @@ export async function logTicketEvent(
     const settings = await loadSettings(guildId);
     if (!settings.channelId || !settings.events.has(event)) return false;
     const channel = await resolveLogChannel(client, guildId, settings.channelId);
-    await channel.send({ embeds: [buildTicketLogEmbed(event, data)], allowedMentions: NO_MENTIONS });
+    const m = messages[await guildLocale(guildId)];
+    await channel.send({ embeds: [buildTicketLogEmbed(event, data, m)], allowedMentions: NO_MENTIONS });
     return true;
   } catch (error) {
     try {
@@ -165,12 +166,13 @@ export async function sendTicketLogTest(client: Client, guildId: string, actorId
   const settings = await loadSettings(guildId);
   if (!settings.channelId) throw new Error('TICKET_LOG_CHANNEL_REQUIRED');
   const channel = await resolveLogChannel(client, guildId, settings.channelId);
-  const enabled = TICKET_LOG_EVENT_INFO.filter((entry) => settings.events.has(entry.key)).map((entry) => entry.label);
+  const m = messages[await guildLocale(guildId)];
+  const enabled = TICKET_LOG_EVENTS.filter((event) => settings.events.has(event)).map((event) => m.log.eventLabels[event]);
   const embed = buildTicketLogEmbed('TICKET_UPDATE', {
-    title: 'Messaggio di prova',
+    title: m.log.testMessage,
     actorId,
-    fields: [{ name: 'Eventi attivi', value: enabled.length ? enabled.join(', ') : 'Nessun evento selezionato' }]
-  }).setColor(0x38bdf8);
+    fields: [{ name: m.log.activeEvents, value: enabled.length ? enabled.join(', ') : m.log.noEvents }]
+  }, m).setColor(0x38bdf8);
   try {
     await channel.send({ embeds: [embed], allowedMentions: NO_MENTIONS });
   } catch {
@@ -180,14 +182,15 @@ export async function sendTicketLogTest(client: Client, guildId: string, actorId
 }
 
 /** BLACKLIST happens in the API: it forwards only a validated, structured payload. */
-export function logBlacklistEvent(client: Client, guildId: string, payload: BlacklistLogPayload) {
-  const fields: TicketLogField[] = [{ name: 'Utente', value: userMention(payload.targetUserId), inline: true }];
+export async function logBlacklistEvent(client: Client, guildId: string, payload: BlacklistLogPayload) {
+  const m = messages[await guildLocale(guildId)];
+  const fields: TicketLogField[] = [{ name: m.log.user, value: userMention(payload.targetUserId), inline: true }];
   if (payload.action === 'add') {
     const expires = payload.expiresAt ? Math.floor(new Date(payload.expiresAt).getTime() / 1000) : null;
-    fields.push({ name: 'Scadenza', value: expires ? `<t:${expires}:f>` : 'Permanente', inline: true });
+    fields.push({ name: m.log.expiry, value: expires ? `<t:${expires}:f>` : m.log.permanent, inline: true });
   }
   return logTicketEvent(client, guildId, 'BLACKLIST', {
-    title: payload.action === 'add' ? 'Utente aggiunto alla blacklist' : 'Utente rimosso dalla blacklist',
+    title: payload.action === 'add' ? m.log.blacklistAdded : m.log.blacklistRemoved,
     actorId: payload.actorId,
     fields
   });

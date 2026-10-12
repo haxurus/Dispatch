@@ -20,6 +20,7 @@ import { assertTranscriptRetention, lockTicket } from './retention.js';
 import { reserveTicketOpen, consumeTicketOpenReservation, commitTicketOpen,
   releaseTicketOpenReservation, formVersion } from './open-guard.js';
 import { logTicketEvent, userMention } from './ticket-log.js';
+import { guildMessages, type BotMessages } from './i18n.js';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 
@@ -155,7 +156,7 @@ async function getGuildChannel(client: Client, guildId: string, channelId: strin
 
 // Closure message: optional feedback row, then Riapri (staff always, opener
 // within the reopen window) and Elimina canale (staff, with confirmation).
-function closureComponents(ticketId: string, feedbackEnabled: boolean) {
+function closureComponents(ticketId: string, feedbackEnabled: boolean, m: BotMessages) {
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
 
   if (feedbackEnabled) {
@@ -175,11 +176,11 @@ function closureComponents(ticketId: string, feedbackEnabled: boolean) {
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId('dispatch:reopen:' + ticketId)
-        .setLabel('Riapri ticket')
+        .setLabel(m.buttons.reopen)
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId('dispatch:delete-channel:' + ticketId)
-        .setLabel('Elimina canale')
+        .setLabel(m.buttons.deleteChannel)
         .setStyle(ButtonStyle.Danger)
     )
   );
@@ -267,6 +268,7 @@ export async function unclaimTicket(client: Client, guildId: string, ticketId: s
   if (!ticket.claimedById) return { ok: true, claimedById: null, status: ticket.status };
 
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const m = await guildMessages(guildId);
 
   await prisma.$transaction([
     prisma.ticket.update({
@@ -284,13 +286,13 @@ export async function unclaimTicket(client: Client, guildId: string, ticketId: s
     })
   ]);
 
-  await channel.send({ content: `Ticket rilasciato da <@${actorId}>.`, allowedMentions: { users: [actorId] } }).catch(() => null);
+  await channel.send({ content: m.ticket.releasedBy(actorId), allowedMentions: { users: [actorId] } }).catch(() => null);
   await logTicketEvent(client, guildId, 'TICKET_CLAIM', {
-    title: 'Ticket rilasciato',
+    title: m.log.released,
     ticket,
     actorId,
     categoryName: ticket.category.name,
-    fields: [{ name: 'Assegnatario precedente', value: userMention(ticket.claimedById), inline: true }]
+    fields: [{ name: m.log.previousAssignee, value: userMention(ticket.claimedById), inline: true }]
   });
   return { ok: true, claimedById: null, status: 'OPEN' };
 }
@@ -303,6 +305,7 @@ export async function assignTicket(client: Client, guildId: string, ticketId: st
   const assignee = await guild.members.fetch(assigneeId).catch(() => null);
   if (!assignee) throw new Error('ASSIGNEE_NOT_FOUND');
   if (!hasStaffAccess(assignee, ticket.category.staffRoleIds)) throw new Error('ASSIGNEE_NOT_STAFF');
+  const m = await guildMessages(guildId);
 
   await prisma.$transaction([
     prisma.ticket.update({
@@ -321,15 +324,15 @@ export async function assignTicket(client: Client, guildId: string, ticketId: st
   ]);
 
   await channel.send({
-    content: `Ticket assegnato a <@${assigneeId}> da <@${actorId}>.`,
+    content: m.ticket.assignedTo(assigneeId, actorId),
     allowedMentions: { users: [assigneeId, actorId] }
   }).catch(() => null);
   await logTicketEvent(client, guildId, 'TICKET_CLAIM', {
-    title: 'Ticket assegnato',
+    title: m.log.assigned,
     ticket,
     actorId,
     categoryName: ticket.category.name,
-    fields: [{ name: 'Assegnatario', value: userMention(assigneeId), inline: true }]
+    fields: [{ name: m.log.assignee, value: userMention(assigneeId), inline: true }]
   });
 
   return { ok: true, claimedById: assigneeId, status: 'IN_PROGRESS' };
@@ -345,6 +348,7 @@ export async function transferTicketCategory(client: Client, guildId: string, ti
   if (!category) throw new Error('CATEGORY_NOT_FOUND');
 
   const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const m = await guildMessages(guildId);
 
   for (const roleId of ticket.category.staffRoleIds) {
     if (!category.staffRoleIds.includes(roleId)) {
@@ -385,7 +389,7 @@ export async function transferTicketCategory(client: Client, guildId: string, ti
   ]);
 
   await channel.send({
-    content: `Ticket trasferito alla categoria **${category.name}** da <@${actorId}>.`,
+    content: m.ticket.transferredTo(category.name, actorId),
     allowedMentions: { users: [actorId] }
   }).catch(() => null);
   if (ticket.staffThreadId) {
@@ -395,18 +399,18 @@ export async function transferTicketCategory(client: Client, guildId: string, ti
       const added = await addStaffRoleMembers(guild, thread, category.staffRoleIds, ticket.openerId).catch(() => []);
       if (added.length) {
         await thread.send({
-          content: `Ticket trasferito a **${category.name}**: ` + added.map((id) => `<@${id}>`).join(' '),
+          content: m.staffThread.transferred(category.name) + added.map((id) => `<@${id}>`).join(' '),
           allowedMentions: { parse: [], users: added }
         }).catch(() => null);
       }
     }
   }
   await logTicketEvent(client, guildId, 'TICKET_UPDATE', {
-    title: 'Categoria trasferita',
+    title: m.log.transferred,
     ticket,
     actorId,
     categoryName: category.name,
-    fields: [{ name: 'Categoria precedente', value: ticket.category.name, inline: true }]
+    fields: [{ name: m.log.previousCategory, value: ticket.category.name, inline: true }]
   });
 
   return { ok: true, categoryId: category.id, status: 'OPEN', claimedById: null };
@@ -419,6 +423,7 @@ export async function addTicketMember(client: Client, guildId: string, ticketId:
   const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const member = await guild.members.fetch(userId).catch(() => null);
   if (!member) throw new Error('MEMBER_NOT_FOUND');
+  const m = await guildMessages(guildId);
 
   await channel.permissionOverwrites.edit(userId, PARTICIPANT_PERMISSIONS);
 
@@ -444,15 +449,15 @@ export async function addTicketMember(client: Client, guildId: string, ticketId:
   ]);
 
   await channel.send({
-    content: `<@${userId}> è stato aggiunto al ticket da <@${actorId}>.`,
+    content: m.ticket.memberAdded(userId, actorId),
     allowedMentions: { users: [userId, actorId] }
   }).catch(() => null);
   await logTicketEvent(client, guildId, 'TICKET_MEMBERS', {
-    title: 'Membro aggiunto',
+    title: m.log.memberAdded,
     ticket,
     actorId,
     categoryName: ticket.category.name,
-    fields: [{ name: 'Utente', value: userMention(userId), inline: true }]
+    fields: [{ name: m.log.user, value: userMention(userId), inline: true }]
   });
 
   return { ok: true, userId };
@@ -466,6 +471,7 @@ export async function removeTicketMember(client: Client, guildId: string, ticket
   if (!existing) throw new Error('MEMBER_NOT_FOUND');
 
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const m = await guildMessages(guildId);
   await channel.permissionOverwrites.delete(userId).catch(() => null);
 
   await prisma.$transaction([
@@ -484,15 +490,15 @@ export async function removeTicketMember(client: Client, guildId: string, ticket
   ]);
 
   await channel.send({
-    content: `<@${userId}> è stato rimosso dal ticket da <@${actorId}>.`,
+    content: m.ticket.memberRemoved(userId, actorId),
     allowedMentions: { users: [userId, actorId] }
   }).catch(() => null);
   await logTicketEvent(client, guildId, 'TICKET_MEMBERS', {
-    title: 'Membro rimosso',
+    title: m.log.memberRemoved,
     ticket,
     actorId,
     categoryName: ticket.category.name,
-    fields: [{ name: 'Utente', value: userMention(userId), inline: true }]
+    fields: [{ name: m.log.user, value: userMention(userId), inline: true }]
   });
 
   return { ok: true, userId };
@@ -526,14 +532,14 @@ async function fetchAllMessages(channel: TextChannel | ThreadChannel) {
 
 // Shared HTML renderer (user transcript and staff thread transcript): every
 // Discord-provided string is escaped.
-function renderTranscriptHtml(title: string, heading: string, subtitle: string, messages: Message[]) {
+function renderTranscriptHtml(title: string, heading: string, subtitle: string, messages: Message[], m: BotMessages) {
   const rows = messages.map((message) => {
-    const content = message.content ? escapeHtml(message.content) : '<em>[nessun contenuto testuale]</em>';
+    const content = message.content ? escapeHtml(message.content) : `<em>${escapeHtml(m.transcript.noText)}</em>`;
     const attachments = [...message.attachments.values()].map((attachment) =>
-      `<li><a href="${escapeHtml(attachment.url)}" rel="noreferrer">${escapeHtml(attachment.name ?? 'allegato')}</a></li>`
+      `<li><a href="${escapeHtml(attachment.url)}" rel="noreferrer">${escapeHtml(attachment.name ?? m.transcript.attachment)}</a></li>`
     ).join('');
     const attachmentBlock = attachments ? `<ul>${attachments}</ul>` : '';
-    const embedBlock = message.embeds.length ? `<div class="meta">Embed: ${message.embeds.length}</div>` : '';
+    const embedBlock = message.embeds.length ? `<div class="meta">${m.transcript.embeds}: ${message.embeds.length}</div>` : '';
 
     return `<article class="message">
       <div class="meta">${escapeHtml(message.author.tag)} · ${escapeHtml(message.createdAt.toISOString())} · ${message.id}</div>
@@ -544,7 +550,7 @@ function renderTranscriptHtml(title: string, heading: string, subtitle: string, 
   }).join('\n');
 
   return `<!doctype html>
-<html lang="it">
+<html lang="${m.htmlLang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -570,15 +576,17 @@ async function buildTranscript(client: Client, guildId: string, ticketId: string
   if (ticket.channelDeletedAt) throw new Error('TICKET_CHANNEL_DELETED');
   await assertTranscriptRetention(ticket);
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const m = await guildMessages(guildId);
 
   // Parent channel only: the private staff thread never enters the user transcript.
   const messages = await fetchAllMessages(channel);
 
   const html = renderTranscriptHtml(
     `Dispatch Ticket #${ticket.ticketNumber}`,
-    `Ticket #${ticket.ticketNumber}`,
-    `Categoria: ${ticket.category.name} · Stato: ${ticket.status}`,
-    messages
+    m.transcript.heading(ticket.ticketNumber),
+    m.transcript.subtitle(ticket.category.name, m.ticket.statusLabels[ticket.status] ?? ticket.status),
+    messages,
+    m
   );
 
   return {
@@ -625,16 +633,17 @@ export async function generateTranscript(client: Client, guildId: string, ticket
   if (!(await persistTranscript(build))) throw new Error('TRANSCRIPT_STATE_CHANGED');
 
   if (actorId) {
+    const m = await guildMessages(guildId);
     await audit(build.ticket.id, guildId, actorId, 'ticket.transcript.generate', {
       messageCount: build.messageCount,
       temporary: !build.ticket.category.transcriptRetain
     });
     await logTicketEvent(client, guildId, 'TICKET_TRANSCRIPT', {
-      title: 'Transcript generato',
+      title: m.log.transcriptGenerated,
       ticket: build.ticket,
       actorId,
       categoryName: build.ticket.category.name,
-      fields: [{ name: 'Messaggi', value: String(build.messageCount), inline: true }]
+      fields: [{ name: m.log.messages, value: String(build.messageCount), inline: true }]
     });
   }
 
@@ -646,6 +655,7 @@ async function generateAndDeliverAutomaticTranscript(client: Client, guildId: st
   const category = build.ticket.category;
 
   if (!category.transcriptAutoGenerate) return { ok: true, skipped: true };
+  const m = await guildMessages(guildId);
 
   let openerDelivered = false;
   let channelDelivered = false;
@@ -669,7 +679,7 @@ async function generateAndDeliverAutomaticTranscript(client: Client, guildId: st
     try {
       const user = await client.users.fetch(build.ticket.openerId);
       await user.send({
-        content: `Transcript del ticket #${build.ticket.ticketNumber}.`,
+        content: m.transcript.dm(build.ticket.ticketNumber),
         files: [transcriptAttachment(build)]
       });
       openerDelivered = true;
@@ -685,7 +695,7 @@ async function generateAndDeliverAutomaticTranscript(client: Client, guildId: st
       const channel = await guild.channels.fetch(category.transcriptChannelId);
       if (!channel?.isTextBased() || !('send' in channel)) throw new Error('TRANSCRIPT_CHANNEL_INVALID');
       await channel.send({
-        content: `Transcript ticket #${build.ticket.ticketNumber} · <@${build.ticket.openerId}>`,
+        content: m.transcript.archive(build.ticket.ticketNumber, build.ticket.openerId),
         files: [transcriptAttachment(build)],
         allowedMentions: { parse: [], users: [] }
       });
@@ -712,16 +722,16 @@ async function generateAndDeliverAutomaticTranscript(client: Client, guildId: st
     }
   });
 
-  const yesNo = (value: boolean) => (value ? 'Sì' : 'No');
+  const yesNo = (value: boolean) => (value ? m.common.yes : m.common.no);
   await logTicketEvent(client, guildId, 'TICKET_TRANSCRIPT', {
-    title: 'Transcript automatico',
+    title: m.log.autoTranscript,
     ticket: build.ticket,
     categoryName: category.name,
     fields: [
-      { name: 'Messaggi', value: String(build.messageCount), inline: true },
-      ...(category.transcriptSendToOpener ? [{ name: 'DM all’utente', value: yesNo(openerDelivered), inline: true }] : []),
-      ...(category.transcriptChannelId ? [{ name: 'Canale archivio', value: yesNo(channelDelivered), inline: true }] : []),
-      { name: 'Copia conservata', value: yesNo(category.transcriptRetain), inline: true }
+      { name: m.log.messages, value: String(build.messageCount), inline: true },
+      ...(category.transcriptSendToOpener ? [{ name: m.log.dmToUser, value: yesNo(openerDelivered), inline: true }] : []),
+      ...(category.transcriptChannelId ? [{ name: m.log.archiveChannel, value: yesNo(channelDelivered), inline: true }] : []),
+      { name: m.log.retainedCopy, value: yesNo(category.transcriptRetain), inline: true }
     ]
   });
 
@@ -745,6 +755,7 @@ export async function closeTicket(
   assertTicketActive(ticket.status);
 
   const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  const m = await guildMessages(guildId);
   const trimmedReason = reason?.trim().slice(0, 1000) || null;
   const closedById = await staffCloserId(client, guild, ticket, actorId);
 
@@ -786,8 +797,8 @@ export async function closeTicket(
   await channel.setName(`closed-${String(ticket.ticketNumber).padStart(4, '0')}`).catch(() => null);
   await channel.send({
     content: trimmedReason
-      ? `Ticket chiuso da <@${actorId}>. Motivo: ${trimmedReason}`
-      : `Ticket chiuso da <@${actorId}>.`,
+      ? m.ticket.closedByWithReason(actorId, trimmedReason)
+      : m.ticket.closedBy(actorId),
     allowedMentions: { users: [actorId] }
   }).catch(() => null);
 
@@ -795,14 +806,14 @@ export async function closeTicket(
   await channel.send({
     content: [
       ticket.category.feedbackEnabled
-        ? (handledById ? `Valuta l’assistenza ricevuta da <@${handledById}>.` : 'Puoi valutare l’assistenza ricevuta.')
+        ? (handledById ? m.ticket.rateHandler(handledById) : m.ticket.rateGeneric)
         : null,
       ticket.category.reopenWindowHours
-        ? `Puoi riaprire il ticket entro ${ticket.category.reopenWindowHours} ore dalla chiusura.`
+        ? m.ticket.reopenWithin(ticket.category.reopenWindowHours)
         : null,
-      'Lo staff può riaprire il ticket o eliminare il canale.'
+      m.ticket.staffCanReopen
     ].filter(Boolean).join(' '),
-    components: closureComponents(ticket.id, ticket.category.feedbackEnabled),
+    components: closureComponents(ticket.id, ticket.category.feedbackEnabled, m),
     allowedMentions: { parse: [] }
   }).catch(() => null);
 
@@ -815,13 +826,13 @@ export async function closeTicket(
 
   // Never the close reason: it is encrypted at rest and stays in the ticket.
   await logTicketEvent(client, guildId, 'TICKET_CLOSE', {
-    title: 'Ticket chiuso',
+    title: m.log.closed,
     ticket,
     actorId,
     categoryName: ticket.category.name,
     fields: [
-      { name: 'Motivo indicato', value: trimmedReason ? 'Sì' : 'No', inline: true },
-      ...(movedTo ? [{ name: 'Spostato in', value: `<#${movedTo}>`, inline: true }] : [])
+      { name: m.log.reasonGiven, value: trimmedReason ? m.common.yes : m.common.no, inline: true },
+      ...(movedTo ? [{ name: m.log.movedTo, value: `<#${movedTo}>`, inline: true }] : [])
     ]
   });
 
@@ -925,15 +936,16 @@ export async function reopenTicket(
       details: { userWindowEnforced: enforceUserWindow }
     } });
   });
+  const m = await guildMessages(guildId);
   await channel.setName('ticket-' + String(ticket.ticketNumber).padStart(4, '0')).catch(() => null);
-  await channel.send({ content: 'Ticket riaperto.', allowedMentions: { parse: [] } }).catch(() => null);
-  if (ticket.staffThreadId) await reopenStaffThread(guild, ticket, channel, actorId).catch(() => null);
+  await channel.send({ content: m.ticket.reopenedNotice, allowedMentions: { parse: [] } }).catch(() => null);
+  if (ticket.staffThreadId) await reopenStaffThread(guild, ticket, channel, actorId, m).catch(() => null);
   await logTicketEvent(client, guildId, 'TICKET_REOPEN', {
-    title: 'Ticket riaperto',
+    title: m.log.reopened,
     ticket,
     actorId,
     categoryName: ticket.category.name,
-    fields: [{ name: 'Da parte dell’utente', value: enforceUserWindow ? 'Sì' : 'No', inline: true }]
+    fields: [{ name: m.log.byUser, value: enforceUserWindow ? m.common.yes : m.common.no, inline: true }]
   });
   return { ok: true, status: 'OPEN', claimedById: null };
 }
@@ -1037,9 +1049,10 @@ export async function deleteTicketChannel(client: Client, guildId: string, ticke
     });
   });
 
+  const m = await guildMessages(guildId);
   if (channel) {
     try {
-      await channel.delete('Dispatch: canale del ticket #' + ticket.ticketNumber + ' eliminato dallo staff');
+      await channel.delete(m.ticket.deleteAuditReason(ticket.ticketNumber));
     } catch (error) {
       if (!unknownChannel(error)) {
         // The channel still exists: undo the marker so the ticket stays usable.
@@ -1065,11 +1078,11 @@ export async function deleteTicketChannel(client: Client, guildId: string, ticke
   }
 
   await logTicketEvent(client, guildId, 'TICKET_DELETE', {
-    title: 'Canale eliminato dallo staff',
+    title: m.log.channelDeletedByStaff,
     ticket,
     actorId,
     categoryName: ticket.category.name,
-    fields: [{ name: 'Canale', value: ticket.channelId, inline: true }]
+    fields: [{ name: m.log.channel, value: ticket.channelId, inline: true }]
   });
 
   return { ok: true, channelDeletedAt: deletedAt.toISOString() };
@@ -1113,25 +1126,21 @@ export async function setTicketStatus(
     })
   ]);
 
-  const labels: Record<string, string> = {
-    OPEN: 'aperto',
-    WAITING: 'in attesa',
-    IN_PROGRESS: 'in lavorazione',
-    RESOLVED: 'risolto'
-  };
+  const m = await guildMessages(guildId);
+  const labels = m.ticket.statusLabels;
 
   await channel.send({
-    content: 'Stato ticket impostato su **' + labels[status] + '** da <@' + actorId + '>.',
+    content: m.ticket.statusSetTo(labels[status] ?? status, actorId),
     allowedMentions: { users: [actorId] }
   }).catch(() => null);
   await logTicketEvent(client, guildId, 'TICKET_UPDATE', {
-    title: 'Stato modificato',
+    title: m.log.statusChanged,
     ticket,
     actorId,
     categoryName: ticket.category.name,
     fields: [
-      { name: 'Prima', value: previousStatus, inline: true },
-      { name: 'Dopo', value: status, inline: true }
+      { name: m.log.before, value: labels[previousStatus] ?? previousStatus, inline: true },
+      { name: m.log.after, value: labels[status] ?? status, inline: true }
     ]
   });
 
@@ -1167,18 +1176,20 @@ export async function setTicketPriority(
     })
   ]);
 
+  const m = await guildMessages(guildId);
+  const priorities = m.ticket.priorityLabels;
   await channel.send({
-    content: 'Priorita impostata su **' + priority + '** da <@' + actorId + '>.',
+    content: m.ticket.prioritySetTo(priorities[priority] ?? priority, actorId),
     allowedMentions: { users: [actorId] }
   }).catch(() => null);
   await logTicketEvent(client, guildId, 'TICKET_UPDATE', {
-    title: 'Priorità modificata',
+    title: m.log.priorityChanged,
     ticket,
     actorId,
     categoryName: ticket.category.name,
     fields: [
-      { name: 'Prima', value: previousPriority, inline: true },
-      { name: 'Dopo', value: priority, inline: true }
+      { name: m.log.before, value: priorities[previousPriority] ?? previousPriority, inline: true },
+      { name: m.log.after, value: priorities[priority] ?? priority, inline: true }
     ]
   });
 
@@ -1399,6 +1410,7 @@ export async function openStaffThread(
   if (!member || !hasStaffAccess(member, ticket.category.staffRoleIds)) throw new Error('STAFF_THREAD_FORBIDDEN');
 
   if (staffThreadLocks.has(ticket.id)) throw new Error('STAFF_THREAD_BUSY');
+  const m = await guildMessages(guildId);
   staffThreadLocks.add(ticket.id);
   try {
     const existing = ticket.staffThreadId ? await fetchStaffThread(guild, channel, ticket.staffThreadId) : null;
@@ -1421,7 +1433,7 @@ export async function openStaffThread(
       type: ChannelType.PrivateThread,
       invitable: false,
       autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-      reason: 'Dispatch: thread staff del ticket #' + ticket.ticketNumber
+      reason: m.staffThread.createReason(ticket.ticketNumber)
     });
 
     const saved = await prisma.$transaction(async (tx) => {
@@ -1450,7 +1462,7 @@ export async function openStaffThread(
       return true;
     });
     if (!saved) {
-      await thread.delete('Dispatch: thread staff duplicato').catch(() => null);
+      await thread.delete(m.staffThread.duplicateReason).catch(() => null);
       throw new Error('TICKET_STATE_CONFLICT');
     }
 
@@ -1459,8 +1471,7 @@ export async function openStaffThread(
       .catch(() => [] as string[]);
     // Mention every added moderator (pings them) so nobody misses the thread.
     const mentioned = [...new Set([userId, ...added])];
-    const intro = `Thread privato dello staff per il ticket #${ticket.ticketNumber}. ` +
-      'Chi ha aperto il ticket non può vederlo; i messaggi non contano come risposta al ticket.';
+    const intro = m.staffThread.intro(ticket.ticketNumber);
     const mentions = mentioned.map((id) => `<@${id}>`);
     // 80 mentions per message keeps each one well under Discord's 2000 chars.
     for (let index = 0; index < mentions.length; index += 80) {
@@ -1470,11 +1481,11 @@ export async function openStaffThread(
       }).catch(() => null);
     }
     await logTicketEvent(client, guildId, 'TICKET_STAFF_THREAD', {
-      title: 'Thread staff creato',
+      title: m.log.staffThreadCreated,
       ticket,
       actorId: userId,
       categoryName: ticket.category.name,
-      fields: [{ name: 'Thread', value: `<#${thread.id}>`, inline: true }]
+      fields: [{ name: m.log.thread, value: `<#${thread.id}>`, inline: true }]
     });
     return { ok: true, threadId: thread.id, created: true };
   } catch (error) {
@@ -1509,6 +1520,7 @@ async function deliverStaffThreadTranscript(
     return false;
   }
 
+  const m = await guildMessages(ticket.guildId);
   let delivered = false;
   let messageCount = 0;
   let code: string | number | null = null;
@@ -1525,13 +1537,14 @@ async function deliverStaffThreadTranscript(
     const messages = await fetchAllMessages(thread);
     messageCount = messages.length;
     const html = renderTranscriptHtml(
-      `Dispatch Ticket #${ticket.ticketNumber} - thread staff`,
-      `Thread staff · Ticket #${ticket.ticketNumber}`,
-      `Categoria: ${ticket.category.name} · Thread privato dello staff, non visibile all’utente`,
-      messages
+      m.transcript.staffTitle(ticket.ticketNumber),
+      m.transcript.staffHeading(ticket.ticketNumber),
+      m.transcript.staffSubtitle(ticket.category.name),
+      messages,
+      m
     );
     await (target as TextChannel | NewsChannel).send({
-      content: `Transcript del thread staff del ticket #${ticket.ticketNumber} (riservato allo staff).`,
+      content: m.transcript.staffArchive(ticket.ticketNumber),
       files: [new AttachmentBuilder(Buffer.from(html, 'utf8'), { name: `dispatch-ticket-${ticket.ticketNumber}-staff.html` })],
       allowedMentions: { parse: [] }
     });
@@ -1551,14 +1564,14 @@ async function deliverStaffThreadTranscript(
   });
   if (delivered) {
     await logTicketEvent(client, ticket.guildId, 'TICKET_STAFF_THREAD', {
-      title: 'Transcript del thread staff inviato',
+      title: m.log.staffThreadTranscript,
       ticket,
       categoryName: ticket.category.name,
       fields: [
-        { name: 'Messaggi', value: String(messageCount), inline: true },
+        { name: m.log.messages, value: String(messageCount), inline: true },
         {
-          name: 'Destinazione',
-          value: destination.source === 'archive' ? 'Canale archivio transcript' : 'Canale log ticket',
+          name: m.log.destination,
+          value: destination.source === 'archive' ? m.log.archiveDestination : m.log.logDestination,
           inline: true
         }
       ]
@@ -1583,7 +1596,8 @@ async function closeStaffThread(
   if (trigger === 'close') {
     // An auto-archived thread must be unarchived before it can be locked.
     if (thread.archived) await thread.setArchived(false).catch(() => null);
-    await thread.edit({ locked: true, archived: true, reason: 'Dispatch: ticket chiuso' }).catch(() => null);
+    const m = await guildMessages(ticket.guildId);
+    await thread.edit({ locked: true, archived: true, reason: m.staffThread.closedReason }).catch(() => null);
   }
 }
 
@@ -1603,12 +1617,12 @@ async function staffThreadTranscriptHandled(ticket: TicketWithRelations) {
 }
 
 // Reopen: the thread becomes writable again for the staff.
-async function reopenStaffThread(guild: Guild, ticket: TicketWithRelations, parent: TextChannel, actorId: string) {
+async function reopenStaffThread(guild: Guild, ticket: TicketWithRelations, parent: TextChannel, actorId: string, m: BotMessages) {
   if (!ticket.staffThreadId) return;
   const thread = await fetchStaffThread(guild, parent, ticket.staffThreadId);
   if (!thread) return;
   try {
-    await thread.edit({ archived: false, locked: false, reason: 'Dispatch: ticket riaperto' });
+    await thread.edit({ archived: false, locked: false, reason: m.staffThread.reopenedReason });
   } catch (error) {
     await audit(ticket.id, ticket.guildId, actorId, 'ticket.staff_thread.reopen_failed', {
       code: discordErrorCode(error)
@@ -1663,6 +1677,7 @@ type AutomationTicket = Prisma.TicketGetPayload<{ include: { category: true } }>
 
 async function automateTicket(client: Client, ticket: AutomationTicket, now: number) {
   const category = ticket.category;
+  const m = await guildMessages(ticket.guildId);
 
   if (
     category.slaFirstResponseMinutes &&
@@ -1680,7 +1695,7 @@ async function automateTicket(client: Client, ticket: AutomationTicket, now: num
       client,
       ticket.guildId,
       ticket.channelId,
-      (mentions ? mentions + ' ' : '') + 'SLA prima risposta superato per il ticket #' + ticket.ticketNumber + '.',
+      (mentions ? mentions + ' ' : '') + m.ticket.slaFirstBreached(ticket.ticketNumber),
       category.staffRoleIds
     );
     await audit(
@@ -1691,10 +1706,10 @@ async function automateTicket(client: Client, ticket: AutomationTicket, now: num
       { minutes: category.slaFirstResponseMinutes }
     );
     await logTicketEvent(client, ticket.guildId, 'TICKET_AUTOMATION', {
-      title: 'SLA prima risposta superato',
+      title: m.log.slaFirst,
       ticket,
       categoryName: category.name,
-      fields: [{ name: 'Soglia', value: category.slaFirstResponseMinutes + ' min', inline: true }]
+      fields: [{ name: m.log.threshold, value: m.log.minutesShort(category.slaFirstResponseMinutes), inline: true }]
     });
   }
 
@@ -1714,7 +1729,7 @@ async function automateTicket(client: Client, ticket: AutomationTicket, now: num
       client,
       ticket.guildId,
       ticket.channelId,
-      (mentions ? mentions + ' ' : '') + 'SLA risoluzione superato per il ticket #' + ticket.ticketNumber + '.',
+      (mentions ? mentions + ' ' : '') + m.ticket.slaResolutionBreached(ticket.ticketNumber),
       category.staffRoleIds
     );
     await audit(
@@ -1725,10 +1740,10 @@ async function automateTicket(client: Client, ticket: AutomationTicket, now: num
       { minutes: category.slaResolutionMinutes }
     );
     await logTicketEvent(client, ticket.guildId, 'TICKET_AUTOMATION', {
-      title: 'SLA risoluzione superato',
+      title: m.log.slaResolution,
       ticket,
       categoryName: category.name,
-      fields: [{ name: 'Soglia', value: category.slaResolutionMinutes + ' min', inline: true }]
+      fields: [{ name: m.log.threshold, value: m.log.minutesShort(category.slaResolutionMinutes), inline: true }]
     });
   }
 
@@ -1752,8 +1767,7 @@ async function automateTicket(client: Client, ticket: AutomationTicket, now: num
       client,
       ticket.guildId,
       ticket.channelId,
-      (mentions ? mentions + ' ' : '') +
-        'Escalation automatica per il ticket #' + ticket.ticketNumber + '.',
+      (mentions ? mentions + ' ' : '') + m.ticket.escalation(ticket.ticketNumber),
       escalationRoles
     );
     await audit(
@@ -1764,12 +1778,12 @@ async function automateTicket(client: Client, ticket: AutomationTicket, now: num
       { minutes: category.escalationMinutes, roleIds: escalationRoles }
     );
     await logTicketEvent(client, ticket.guildId, 'TICKET_AUTOMATION', {
-      title: 'Escalation automatica',
+      title: m.log.escalation,
       ticket,
       categoryName: category.name,
       fields: [
-        { name: 'Dopo', value: category.escalationMinutes + ' min', inline: true },
-        { name: 'Ruoli', value: escalationRoles.map((roleId) => '<@&' + roleId + '>').join(' ') || 'Nessuno', inline: true }
+        { name: m.log.escalationAfter, value: m.log.minutesShort(category.escalationMinutes), inline: true },
+        { name: m.log.roles, value: escalationRoles.map((roleId) => '<@&' + roleId + '>').join(' ') || m.common.none, inline: true }
       ]
     });
   }
@@ -1794,8 +1808,7 @@ async function automateTicket(client: Client, ticket: AutomationTicket, now: num
         client,
         ticket.guildId,
         ticket.channelId,
-        '<@' + ticket.openerId + '> questo ticket verra chiuso automaticamente tra circa ' +
-          warningMinutes + ' minuti se non ci saranno nuove attivita.',
+        m.ticket.inactivityWarning(ticket.openerId, warningMinutes),
       [],
       [ticket.openerId]
       );
@@ -1807,10 +1820,10 @@ async function automateTicket(client: Client, ticket: AutomationTicket, now: num
         { warningMinutes }
       );
       await logTicketEvent(client, ticket.guildId, 'TICKET_AUTOMATION', {
-        title: 'Preavviso chiusura per inattività',
+        title: m.log.inactivityWarning,
         ticket,
         categoryName: category.name,
-        fields: [{ name: 'Chiusura tra', value: warningMinutes + ' min', inline: true }]
+        fields: [{ name: m.log.closingIn, value: m.log.minutesShort(warningMinutes), inline: true }]
       });
     }
 
@@ -1823,14 +1836,14 @@ async function automateTicket(client: Client, ticket: AutomationTicket, now: num
         ticket.guildId,
         ticket.id,
         client.user?.id ?? ticket.openerId,
-        'Chiuso automaticamente per inattivita.'
+        m.ticket.autoCloseReason
       ).catch(() => null);
       if (closed) {
         await logTicketEvent(client, ticket.guildId, 'TICKET_AUTOMATION', {
-          title: 'Chiusura automatica per inattività',
+          title: m.log.autoClose,
           ticket,
           categoryName: category.name,
-          fields: [{ name: 'Inattività', value: category.inactivityCloseHours + ' ore', inline: true }]
+          fields: [{ name: m.log.inactivity, value: m.log.hours(category.inactivityCloseHours), inline: true }]
         });
       }
     }
