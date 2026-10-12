@@ -28,7 +28,7 @@ Copy for the public bot directories, ready to paste, and the website's search en
 | Licence | AGPL-3.0 (open source) |
 | Contact | haxurus@icloud.com |
 | Support server | https://discord.gg/DDBGWP5fMX |
-| Languages | English and Italian (bot messages per server, website); the dashboard is in Italian |
+| Languages | English and Italian (bot messages per server, website, dashboard) |
 | Price | Free |
 | Invite URL | `https://dispatch.haxurus.com/backend/bot/invite` (redirects to Discord's authorisation page, scopes `bot applications.commands`, permissions `361045814288`) |
 

@@ -95,7 +95,9 @@ The super console is separate from RBAC: only the user in `SUPER_ADMIN_USER_ID` 
 
 Each server has a bot language, `GuildSettings.locale` (`en` or `it`, `en` by default for new servers), chosen in the dashboard under **Sistema e menu → Lingua del bot** (*System and menu → Bot language*). It applies to everything the bot posts in that server: ticket channels, ephemeral replies, logs, transcripts and leaderboards.
 
-The texts live in [`apps/bot/src/i18n.ts`](../apps/bot/src/i18n.ts): both dictionaries have the same shape, so a missing translation is a type error, and a test checks that their keys match. The locale is cached for 30 seconds per server. Default main menu texts follow the server language; texts customised by the server never change. Owner-facing status notices stay in Italian, like the super console.
+The texts live in [`apps/bot/src/i18n.ts`](../apps/bot/src/i18n.ts): both dictionaries have the same shape, so a missing translation is a type error, and a test checks that their keys match. The locale is cached for 30 seconds per server. Default main menu texts follow the server language; texts customised by the server never change. Owner-facing status notices stay in Italian.
+
+The dashboard and the super console have no `/en` and `/it` URLs (they are not indexed): `middleware.ts` picks the language from the `dispatch_locale` cookie (set when the visitor opens `/en` or `/it`, or uses the IT/EN toggle), otherwise from `Accept-Language`, English by default. Each page keeps its own `it`/`en` copy objects read through `useCopy` ([`apps/web/app/_components/locale-context.tsx`](../apps/web/app/_components/locale-context.tsx)).
 
 ## Data lifecycle
 

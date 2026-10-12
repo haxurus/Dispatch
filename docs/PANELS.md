@@ -2,7 +2,7 @@
 
 The **Pannelli** (*Panels*) section of the dashboard (`/dashboard/<guildId>/panels`) manages the Discord messages from which users open a ticket or fill in a form. It is reserved to Owner/Admin: the API (`/api/guilds/:guildId/panels…` and `/api/guilds/:guildId/form-panels…`, reads included) also answers `403` to the other levels.
 
-The dashboard is in Italian: labels are quoted as they appear, followed by an English gloss.
+The dashboard is available in English and Italian; labels are quoted in Italian followed by their English equivalent.
 
 The list shows every panel (Ticket/Form type, name, channel, number of items, active/inactive, published or not) with the actions **Modifica** (*Edit*), **Pubblica / Aggiorna su Discord** (*Publish / Update on Discord*) and **Elimina** (*Delete*, with confirmation; a message already published is not deleted from Discord and stops responding). The ticket **main menu** appears read-only and is always configured in **Sistema e menu** (*System and menu*).
 

@@ -1,6 +1,6 @@
 # Ticket protections: main menu, anti-spam and retention
 
-The dashboard is in Italian: labels are quoted as they appear, followed by an English gloss. Texts posted by the bot follow the server's bot language (English or Italian); they are quoted here in English.
+The dashboard is available in English and Italian; labels are quoted in Italian followed by their English equivalent. Texts posted by the bot follow the server's bot language (English or Italian); they are quoted here in English.
 
 ## Configuration
 

@@ -5,7 +5,7 @@ Dispatch supports two separate but integrated flows:
 - opening questions of tickets;
 - generic forms, for example applications, reports or data collection.
 
-The dashboard is in Italian: labels are quoted as they appear, followed by an English gloss.
+The dashboard is available in English and Italian; labels are quoted in Italian followed by their English equivalent.
 
 ## Ticket opening questions
 

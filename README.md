@@ -50,7 +50,7 @@ Dispatch opens private ticket channels from menus, panels and forms, lets staff 
 - Discord sign-in, access levels **Owner / Admin / Moderator / Viewer** verified live against the server, role-based access mapping.
 - Ticket queue with filters, ticket detail with actions, notes and transcript download; analytics (daily volume, categories, staff, SLA breaches, ratings) and the moderator leaderboard preview.
 - Panel editor with a live Discord-style preview, form builder and blacklist; every configuration change is recorded in an encrypted dashboard audit log.
-- The public website is in English and Italian; the dashboard and the super console are in Italian. The bot speaks English or Italian, chosen per server.
+- The website, the dashboard and the super console are in English and Italian (the dashboard follows the language chosen on the site or with its IT/EN toggle, stored in the `dispatch_locale` cookie). The bot speaks English or Italian, chosen per server.
 
 Per-server limits on the hosted instance: 50 categories, 25 ticket panels, 50 forms, 25 form panels, 100 response templates, 2,000 blacklist entries and 50 dashboard role bindings ([`packages/shared/src/quotas.ts`](packages/shared/src/quotas.ts)).
 
