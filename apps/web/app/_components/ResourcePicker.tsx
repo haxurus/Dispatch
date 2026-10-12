@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCopy } from './locale-context';
+import { format, type Locale } from '../i18n';
 
 /*
  * Searchable, accessible combobox for Discord channels and roles (and any
@@ -54,6 +56,38 @@ type Option = {
 
 const RENDER_LIMIT = 50;
 
+const it = {
+  category: 'Categoria',
+  managedRole: 'Gestito da integrazione',
+  unavailable: 'Non disponibile',
+  missingItem: 'Elemento non più disponibile · {id}',
+  add: 'Aggiungi…',
+  change: 'Cambia…',
+  search: 'Cerca per nome o ID…',
+  remove: 'Rimuovi {name}',
+  clearSelection: 'Rimuovi selezione',
+  noResults: 'Nessun risultato.',
+  noItems: 'Nessun elemento disponibile.',
+  more: 'Altri {count} risultati: continua a scrivere per filtrare.'
+};
+
+const en: typeof it = {
+  category: 'Category',
+  managedRole: 'Managed by an integration',
+  unavailable: 'Unavailable',
+  missingItem: 'Item no longer available · {id}',
+  add: 'Add…',
+  change: 'Change…',
+  search: 'Search by name or ID…',
+  remove: 'Remove {name}',
+  clearSelection: 'Clear selection',
+  noResults: 'No results.',
+  noItems: 'No items available.',
+  more: '{count} more results: keep typing to filter.'
+};
+
+const copy: Record<Locale, typeof it> = { it, en };
+
 export function normalizeSearch(value: string) {
   return value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 }
@@ -67,7 +101,7 @@ function channelPrefix(type: number) {
   return '#';
 }
 
-function buildOptions(source: Source): Option[] {
+function buildOptions(source: Source, c: typeof it): Option[] {
   if (source.kind === 'channel') {
     const categories = new Map(
       source.channels.filter((channel) => channel.type === CHANNEL_TYPES.category).map((channel) => [channel.id, channel])
@@ -89,7 +123,7 @@ function buildOptions(source: Source): Option[] {
           id: channel.id,
           label: channel.name,
           prefix: channelPrefix(channel.type),
-          meta: channel.type === CHANNEL_TYPES.category ? 'Categoria' : parent,
+          meta: channel.type === CHANNEL_TYPES.category ? c.category : parent,
           color: null,
           search: normalizeSearch(`${channel.name} ${channel.id} ${parent ?? ''}`)
         };
@@ -102,7 +136,7 @@ function buildOptions(source: Source): Option[] {
         id: role.id,
         label: role.name,
         prefix: '@',
-        meta: role.managed ? 'Gestito da integrazione' : null,
+        meta: role.managed ? c.managedRole : null,
         color: roleColor(role.color),
         search: normalizeSearch(`${role.name} ${role.id}`)
       }));
@@ -118,6 +152,7 @@ function buildOptions(source: Source): Option[] {
 }
 
 export default function ResourcePicker(props: ResourcePickerProps) {
+  const c = useCopy(copy);
   const uid = useId();
   const inputId = `${uid}-input`;
   const labelId = `${uid}-label`;
@@ -145,9 +180,9 @@ export default function ResourcePicker(props: ResourcePickerProps) {
     : props.kind === 'role' ? props.roles
       : props.items;
   const options = useMemo(
-    () => buildOptions(props as Source),
+    () => buildOptions(props as Source, c),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [props.kind, sourceKey,
+    [c, props.kind, sourceKey,
       props.kind === 'channel' ? props.channelTypes?.join(',') : '',
       props.kind === 'role' ? `${props.guildId}:${props.excludeManaged ? 1 : 0}` : '']
   );
@@ -260,17 +295,17 @@ export default function ResourcePicker(props: ResourcePickerProps) {
     const option = byId.get(id);
     return {
       id,
-      label: option ? option.label : 'Non disponibile',
+      label: option ? option.label : c.unavailable,
       prefix: option?.prefix ?? '',
       color: option?.color ?? null,
-      title: option ? `${option.prefix}${option.label} · ${id}` : `Elemento non più disponibile · ${id}`,
+      title: option ? `${option.prefix}${option.label} · ${id}` : format(c.missingItem, { id }),
       missing: !option
     };
   };
 
   const inputPlaceholder = selected.length
-    ? (multiple ? (atMax ? '' : 'Aggiungi…') : 'Cambia…')
-    : placeholder ?? 'Cerca per nome o ID…';
+    ? (multiple ? (atMax ? '' : c.add) : c.change)
+    : placeholder ?? c.search;
   const activeId = open && visible[active] ? optionId(active) : undefined;
   const describedBy = hint ? hintId : undefined;
 
@@ -298,7 +333,7 @@ export default function ResourcePicker(props: ResourcePickerProps) {
                 <button
                   type="button"
                   className="picker-chip-remove"
-                  aria-label={`Rimuovi ${chip.prefix}${chip.label}`}
+                  aria-label={format(c.remove, { name: `${chip.prefix}${chip.label}` })}
                   disabled={disabled}
                   onClick={() => remove(id)}
                 >
@@ -337,7 +372,7 @@ export default function ResourcePicker(props: ResourcePickerProps) {
           <button
             type="button"
             className="picker-clear"
-            aria-label="Rimuovi selezione"
+            aria-label={c.clearSelection}
             disabled={disabled}
             onClick={() => remove(selected[0]!)}
           >
@@ -393,12 +428,12 @@ export default function ResourcePicker(props: ResourcePickerProps) {
         })}
         {!visible.length && (
           <li className="picker-empty" role="presentation">
-            {options.length ? 'Nessun risultato.' : 'Nessun elemento disponibile.'}
+            {options.length ? c.noResults : c.noItems}
           </li>
         )}
         {filtered.length > visible.length && (
           <li className="picker-more" role="presentation">
-            Altri {filtered.length - visible.length} risultati: continua a scrivere per filtrare.
+            {format(c.more, { count: filtered.length - visible.length })}
           </li>
         )}
       </ul>

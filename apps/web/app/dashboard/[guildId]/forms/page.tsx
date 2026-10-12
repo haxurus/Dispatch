@@ -3,6 +3,8 @@
 import { type CSSProperties, FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ResourcePicker, { CHANNEL_TYPES } from '../../../_components/ResourcePicker';
+import { useCopy } from '../../../_components/locale-context';
+import { format, type Locale } from '../../../i18n';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
 type Channel = { id: string; name: string; type: number; parentId: string | null; position: number };
@@ -121,18 +123,208 @@ const emptyForm = () => ({
 
 const nullableNumber = (value: string) => value === '' ? null : Number(value);
 
-const errorMessages: Record<string, string> = {
-  FORM_FIELD_ADMIN_ONLY: 'Canale risultati, ruoli notificati e impostazioni ticket possono essere modificati solo da Admin/Owner.',
-  FORBIDDEN: 'Permessi insufficienti per questa operazione.',
-  QUOTA_EXCEEDED: 'Limite raggiunto per questo server: elimina un elemento esistente prima di crearne uno nuovo.',
-  FORM_IN_USE: 'Il form ha già invii e non può essere eliminato.',
-  TICKET_PARENT_NOT_FOUND: 'La categoria Discord override non è una categoria del server.',
-  TICKET_CLOSED_PARENT_NOT_FOUND: 'La categoria Discord per i ticket chiusi non è una categoria del server.'
+const it = {
+  errors: {
+    FORM_FIELD_ADMIN_ONLY: 'Canale risultati, ruoli notificati e impostazioni ticket possono essere modificati solo da Admin/Owner.',
+    FORBIDDEN: 'Permessi insufficienti per questa operazione.',
+    QUOTA_EXCEEDED: 'Limite raggiunto per questo server: elimina un elemento esistente prima di crearne uno nuovo.',
+    FORM_IN_USE: 'Il form ha già invii e non può essere eliminato.',
+    TICKET_PARENT_NOT_FOUND: 'La categoria Discord override non è una categoria del server.',
+    TICKET_CLOSED_PARENT_NOT_FOUND: 'La categoria Discord per i ticket chiusi non è una categoria del server.'
+  } as Record<string, string>,
+  loadError: 'Impossibile caricare la configurazione dei form.',
+  saveFailed: 'Salvataggio fallito: {code}',
+  updated: 'Form aggiornato.',
+  created: 'Form creato.',
+  deleteFailed: 'Eliminazione fallita.',
+  deleted: 'Form eliminato.',
+  permissionFailed: 'Aggiornamento permessi fallito.',
+  title: 'Form',
+  intro: 'Candidature, questionari e workflow con validazione e permessi granulari.',
+  panels: 'Pannelli',
+  tickets: 'Ticket',
+  dashboardPermissions: 'Permessi dashboard',
+  editForm: 'Modifica form',
+  newForm: 'Nuovo form',
+  cancel: 'Annulla',
+  name: 'Nome',
+  description: 'Descrizione',
+  mode: 'Modalità',
+  modeEphemeral: 'In chat - solo utente',
+  modeDm: 'Messaggi privati',
+  openAt: 'Apertura (ora locale)',
+  closeAt: 'Chiusura (ora locale)',
+  adminOnlyFields: 'Canale risultati, ruoli notificati e ticket automatico sono modificabili solo da Admin/Owner.',
+  resultChannel: 'Canale risultati',
+  none: 'Nessuno',
+  resultRoles: 'Ruoli da notificare',
+  accessLegend: 'Accesso e anti-spam',
+  allowedRoles: 'Ruoli autorizzati',
+  deniedRoles: 'Ruoli esclusi',
+  maxSubmissions: 'Invii massimi per utente',
+  cooldown: 'Cooldown secondi',
+  window: 'Finestra tentativi minuti',
+  maxAttempts: 'Tentativi massimi',
+  autoTicketLegend: 'Ticket automatico dopo invio',
+  createTicket: 'Crea canale privato con report, compilatore e staff',
+  ticketCategory: 'Categoria ticket Dispatch',
+  select: 'Seleziona...',
+  parentOverride: 'Categoria Discord override',
+  useCategoryDefault: 'Usa quella della categoria ticket',
+  closedParentOverride: 'Categoria Discord per i ticket chiusi (override)',
+  closedParentHint: 'Alla chiusura i ticket creati da questo form vengono spostati qui invece che nella categoria dei ticket chiusi della categoria ticket.',
+  staffRoles: 'Ruoli staff',
+  channelPrefix: 'Prefisso canale',
+  questionsLegend: 'Domande ({count}/25)',
+  questionN: 'Domanda {n}',
+  remove: 'Rimuovi',
+  id: 'ID',
+  question: 'Domanda',
+  type: 'Tipo',
+  types: {
+    SHORT_TEXT: 'Testo breve',
+    LONG_TEXT: 'Testo lungo',
+    INTEGER: 'Intero',
+    NUMBER: 'Numero',
+    EMAIL: 'Email',
+    URL: 'URL',
+    DATE: 'Data',
+    BOOLEAN: 'Sì/No',
+    SINGLE_SELECT: 'Scelta singola',
+    MULTI_SELECT: 'Scelta multipla',
+    DISCORD_ID: 'ID Discord'
+  } as Record<QuestionType, string>,
+  optionsLabel: 'Opzioni, una per riga: Etichetta|valore',
+  minSelections: 'Selezioni minime',
+  maxSelections: 'Selezioni massime',
+  required: 'Obbligatoria',
+  addQuestion: 'Aggiungi domanda',
+  formEnabled: 'Form abilitato',
+  saveChanges: 'Salva modifiche',
+  createForm: 'Crea form',
+  adminOnlyCreate: 'Solo Admin/Owner può creare nuovi form',
+  configured: 'Form configurati',
+  noDescription: 'Nessuna descrizione.',
+  questionCount: (count: number) => count === 1 ? '1 domanda' : `${count} domande`,
+  dm: 'DM',
+  ephemeral: 'ephemeral',
+  scheduled: 'aperto secondo pianificazione',
+  disabled: 'disabilitato',
+  edit: 'Modifica',
+  permissions: 'Permessi',
+  submissions: 'Invii',
+  delete: 'Elimina',
+  empty: 'Nessun form visibile.',
+  permissionsTitle: 'Permessi del form',
+  close: 'Chiudi',
+  permissionsHelp: 'Owner/Admin hanno sempre accesso e sono gli unici a modificare queste regole. Manage: domande, testi, pianificazione e limiti. View: vede il form. Review: vede gli invii. Submit: può compilare.'
 };
+
+const en: typeof it = {
+  errors: {
+    FORM_FIELD_ADMIN_ONLY: 'Results channel, notified roles and ticket settings can only be changed by Admin/Owner.',
+    FORBIDDEN: 'Insufficient permissions for this operation.',
+    QUOTA_EXCEEDED: 'Limit reached for this server: delete an existing item before creating a new one.',
+    FORM_IN_USE: 'The form already has submissions and cannot be deleted.',
+    TICKET_PARENT_NOT_FOUND: 'The Discord category override is not a category of this server.',
+    TICKET_CLOSED_PARENT_NOT_FOUND: 'The Discord category for closed tickets is not a category of this server.'
+  } as Record<string, string>,
+  loadError: 'Could not load the form configuration.',
+  saveFailed: 'Save failed: {code}',
+  updated: 'Form updated.',
+  created: 'Form created.',
+  deleteFailed: 'Delete failed.',
+  deleted: 'Form deleted.',
+  permissionFailed: 'Permission update failed.',
+  title: 'Forms',
+  intro: 'Applications, questionnaires and workflows with validation and granular permissions.',
+  panels: 'Panels',
+  tickets: 'Tickets',
+  dashboardPermissions: 'Dashboard permissions',
+  editForm: 'Edit form',
+  newForm: 'New form',
+  cancel: 'Cancel',
+  name: 'Name',
+  description: 'Description',
+  mode: 'Delivery',
+  modeEphemeral: 'In chat - user only',
+  modeDm: 'Direct messages',
+  openAt: 'Opens (local time)',
+  closeAt: 'Closes (local time)',
+  adminOnlyFields: 'Results channel, notified roles and automatic ticket can only be changed by Admin/Owner.',
+  resultChannel: 'Results channel',
+  none: 'None',
+  resultRoles: 'Roles to notify',
+  accessLegend: 'Access and anti-spam',
+  allowedRoles: 'Allowed roles',
+  deniedRoles: 'Excluded roles',
+  maxSubmissions: 'Max submissions per user',
+  cooldown: 'Cooldown seconds',
+  window: 'Attempt window minutes',
+  maxAttempts: 'Max attempts',
+  autoTicketLegend: 'Automatic ticket after submission',
+  createTicket: 'Create a private channel with the report, the submitter and staff',
+  ticketCategory: 'Dispatch ticket category',
+  select: 'Select...',
+  parentOverride: 'Discord category override',
+  useCategoryDefault: 'Use the ticket category one',
+  closedParentOverride: 'Discord category for closed tickets (override)',
+  closedParentHint: 'On close, tickets created by this form are moved here instead of the closed-tickets category of the ticket category.',
+  staffRoles: 'Staff roles',
+  channelPrefix: 'Channel prefix',
+  questionsLegend: 'Questions ({count}/25)',
+  questionN: 'Question {n}',
+  remove: 'Remove',
+  id: 'ID',
+  question: 'Question',
+  type: 'Type',
+  types: {
+    SHORT_TEXT: 'Short text',
+    LONG_TEXT: 'Long text',
+    INTEGER: 'Integer',
+    NUMBER: 'Number',
+    EMAIL: 'Email',
+    URL: 'URL',
+    DATE: 'Date',
+    BOOLEAN: 'Yes/No',
+    SINGLE_SELECT: 'Single choice',
+    MULTI_SELECT: 'Multiple choice',
+    DISCORD_ID: 'Discord ID'
+  },
+  optionsLabel: 'Options, one per line: Label|value',
+  minSelections: 'Min selections',
+  maxSelections: 'Max selections',
+  required: 'Required',
+  addQuestion: 'Add question',
+  formEnabled: 'Form enabled',
+  saveChanges: 'Save changes',
+  createForm: 'Create form',
+  adminOnlyCreate: 'Only Admin/Owner can create new forms',
+  configured: 'Configured forms',
+  noDescription: 'No description.',
+  questionCount: (count: number) => count === 1 ? '1 question' : `${count} questions`,
+  dm: 'DM',
+  ephemeral: 'ephemeral',
+  scheduled: 'open per schedule',
+  disabled: 'disabled',
+  edit: 'Edit',
+  permissions: 'Permissions',
+  submissions: 'Submissions',
+  delete: 'Delete',
+  empty: 'No visible forms.',
+  permissionsTitle: 'Form permissions',
+  close: 'Close',
+  permissionsHelp: 'Owner/Admin always have access and are the only ones who can change these rules. Manage: questions, texts, schedule and limits. View: sees the form. Review: sees the submissions. Submit: can fill it in.'
+};
+
+const copy: Record<Locale, typeof it> = { it, en };
+
+const QUESTION_TYPES: QuestionType[] = ['SHORT_TEXT', 'LONG_TEXT', 'INTEGER', 'NUMBER', 'EMAIL', 'URL', 'DATE', 'BOOLEAN', 'SINGLE_SELECT', 'MULTI_SELECT', 'DISCORD_ID'];
 
 export default function FormsPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
+  const c = useCopy(copy);
   const [access, setAccess] = useState<AccessLevel | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -161,7 +353,7 @@ export default function FormsPage() {
       return;
     }
     if (![a, r, f, tc].every((response) => response.ok)) {
-      setError('Impossibile caricare la configurazione dei form.');
+      setError(c.loadError);
       return;
     }
     const accessData = await a.json();
@@ -235,10 +427,10 @@ export default function FormsPage() {
       );
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setError(errorMessages[body.error] ?? `Salvataggio fallito: ${body.error ?? response.status}`);
+        setError(c.errors[body.error] ?? format(c.saveFailed, { code: body.error ?? response.status }));
         return;
       }
-      setNotice(editingId ? 'Form aggiornato.' : 'Form creato.');
+      setNotice(editingId ? c.updated : c.created);
       setEditingId(null); setForm(emptyForm());
       await load();
     } finally { setBusy(''); }
@@ -249,9 +441,9 @@ export default function FormsPage() {
     const response = await fetch(`/backend/api/guilds/${guildId}/forms/${id}`, { method: 'DELETE' });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      setError(errorMessages[body.error] ?? 'Eliminazione fallita.');
+      setError(c.errors[body.error] ?? c.deleteFailed);
     } else {
-      setNotice('Form eliminato.');
+      setNotice(c.deleted);
       await load();
     }
     setBusy('');
@@ -291,87 +483,90 @@ export default function FormsPage() {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next)
     });
     if (response.ok) await loadPermissions(selectedPermissionForm);
-    else setError('Aggiornamento permessi fallito.');
+    else {
+      const body = await response.json().catch(() => ({}));
+      setError(c.errors[body.error] ?? c.permissionFailed);
+    }
   };
 
   return (
     <main className="shell">
       <div className="row">
-        <div><p className="eyebrow">Dispatch</p><h1>Form</h1><p className="muted">Candidature, questionari e workflow con validazione e permessi granulari.</p></div>
+        <div><p className="eyebrow">Dispatch</p><h1>{c.title}</h1><p className="muted">{c.intro}</p></div>
         <div className="actions">
-          {isAdmin && <a className="button secondary" href={`/dashboard/${guildId}/panels`}>Pannelli</a>}
-          <a className="button secondary" href={`/dashboard/${guildId}/tickets`}>Ticket</a>
-          <a className="button secondary" href={`/dashboard/${guildId}`}>Permessi dashboard</a>
+          {isAdmin && <a className="button secondary" href={`/dashboard/${guildId}/panels`}>{c.panels}</a>}
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets`}>{c.tickets}</a>
+          <a className="button secondary" href={`/dashboard/${guildId}`}>{c.dashboardPermissions}</a>
         </div>
       </div>
       {error && <p className="error">{error}</p>}
       {notice && <p className="success">{notice}</p>}
 
       <form className="card form" onSubmit={save}>
-        <div className="row"><h2>{editingId ? 'Modifica form' : 'Nuovo form'}</h2>{editingId && <button type="button" className="secondary" onClick={() => { setEditingId(null); setForm(emptyForm()); }}>Annulla</button>}</div>
+        <div className="row"><h2>{editingId ? c.editForm : c.newForm}</h2>{editingId && <button type="button" className="secondary" onClick={() => { setEditingId(null); setForm(emptyForm()); }}>{c.cancel}</button>}</div>
         <div className="editor-split">
           <div className="form">
-            <label>Nome<input required maxLength={100} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}/></label>
-            <label>Descrizione<textarea maxLength={2000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></label>
+            <label>{c.name}<input required maxLength={100} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}/></label>
+            <label>{c.description}<textarea maxLength={2000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}/></label>
             <div className="field-row" style={{ '--cols': 3 } as CSSProperties}>
-              <label>Modalità<select value={form.deliveryMode} onChange={(e) => setForm({ ...form, deliveryMode: e.target.value as 'EPHEMERAL' | 'DM' })}><option value="EPHEMERAL">In chat - solo utente</option><option value="DM">Messaggi privati</option></select></label>
-              <label>Apertura (ora locale)<input type="datetime-local" value={form.openAt} onChange={(e) => setForm({ ...form, openAt: e.target.value })}/></label>
-              <label>Chiusura (ora locale)<input type="datetime-local" value={form.closeAt} onChange={(e) => setForm({ ...form, closeAt: e.target.value })}/></label>
+              <label>{c.mode}<select value={form.deliveryMode} onChange={(e) => setForm({ ...form, deliveryMode: e.target.value as 'EPHEMERAL' | 'DM' })}><option value="EPHEMERAL">{c.modeEphemeral}</option><option value="DM">{c.modeDm}</option></select></label>
+              <label>{c.openAt}<input type="datetime-local" value={form.openAt} onChange={(e) => setForm({ ...form, openAt: e.target.value })}/></label>
+              <label>{c.closeAt}<input type="datetime-local" value={form.closeAt} onChange={(e) => setForm({ ...form, closeAt: e.target.value })}/></label>
             </div>
-            {!isAdmin && <p className="muted">Canale risultati, ruoli notificati e ticket automatico sono modificabili solo da Admin/Owner.</p>}
+            {!isAdmin && <p className="muted">{c.adminOnlyFields}</p>}
             <div className="field-row">
-              <ResourcePicker label="Canale risultati" kind="channel" channels={channels}
-                channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]} placeholder="Nessuno" disabled={!isAdmin}
+              <ResourcePicker label={c.resultChannel} kind="channel" channels={channels}
+                channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]} placeholder={c.none} disabled={!isAdmin}
                 value={form.resultChannelId} onChange={(resultChannelId) => setForm({ ...form, resultChannelId })}/>
-              <ResourcePicker label="Ruoli da notificare" kind="role" roles={roles} guildId={guildId} multiple disabled={!isAdmin}
+              <ResourcePicker label={c.resultRoles} kind="role" roles={roles} guildId={guildId} multiple disabled={!isAdmin}
                 value={form.resultRoleIds} onChange={(resultRoleIds) => setForm({ ...form, resultRoleIds })}/>
             </div>
-            <fieldset><legend>Accesso e anti-spam</legend>
+            <fieldset><legend>{c.accessLegend}</legend>
               <div className="field-row">
-                <ResourcePicker label="Ruoli autorizzati" kind="role" roles={roles} guildId={guildId} multiple max={20}
+                <ResourcePicker label={c.allowedRoles} kind="role" roles={roles} guildId={guildId} multiple max={20}
                   value={form.allowedRoleIds} onChange={(allowedRoleIds) => setForm({ ...form, allowedRoleIds })}/>
-                <ResourcePicker label="Ruoli esclusi" kind="role" roles={roles} guildId={guildId} multiple max={20}
+                <ResourcePicker label={c.deniedRoles} kind="role" roles={roles} guildId={guildId} multiple max={20}
                   value={form.deniedRoleIds} onChange={(deniedRoleIds) => setForm({ ...form, deniedRoleIds })}/>
               </div>
               <div className="field-row" style={{ '--cols': 4 } as CSSProperties}>
-                <label>Invii massimi per utente<input type="number" min={0} max={1000} value={form.maxSubmissionsPerUser} onChange={(e) => setForm({ ...form, maxSubmissionsPerUser: Number(e.target.value) })}/></label>
-                <label>Cooldown secondi<input type="number" min={0} max={2592000} value={form.cooldownSeconds} onChange={(e) => setForm({ ...form, cooldownSeconds: Number(e.target.value) })}/></label>
-                <label>Finestra tentativi minuti<input type="number" min={1} max={10080} value={form.submissionWindowMinutes} onChange={(e) => setForm({ ...form, submissionWindowMinutes: Number(e.target.value) })}/></label>
-                <label>Tentativi massimi<input type="number" min={1} max={100} value={form.maxAttemptsPerWindow} onChange={(e) => setForm({ ...form, maxAttemptsPerWindow: Number(e.target.value) })}/></label>
+                <label>{c.maxSubmissions}<input type="number" min={0} max={1000} value={form.maxSubmissionsPerUser} onChange={(e) => setForm({ ...form, maxSubmissionsPerUser: Number(e.target.value) })}/></label>
+                <label>{c.cooldown}<input type="number" min={0} max={2592000} value={form.cooldownSeconds} onChange={(e) => setForm({ ...form, cooldownSeconds: Number(e.target.value) })}/></label>
+                <label>{c.window}<input type="number" min={1} max={10080} value={form.submissionWindowMinutes} onChange={(e) => setForm({ ...form, submissionWindowMinutes: Number(e.target.value) })}/></label>
+                <label>{c.maxAttempts}<input type="number" min={1} max={100} value={form.maxAttemptsPerWindow} onChange={(e) => setForm({ ...form, maxAttemptsPerWindow: Number(e.target.value) })}/></label>
               </div>
             </fieldset>
 
-            <fieldset disabled={!isAdmin}><legend>Ticket automatico dopo invio</legend>
-              <label className="checkbox-row"><input type="checkbox" checked={form.createTicketOnSubmit} onChange={(e) => setForm({ ...form, createTicketOnSubmit: e.target.checked })}/>Crea canale privato con report, compilatore e staff</label>
+            <fieldset disabled={!isAdmin}><legend>{c.autoTicketLegend}</legend>
+              <label className="checkbox-row"><input type="checkbox" checked={form.createTicketOnSubmit} onChange={(e) => setForm({ ...form, createTicketOnSubmit: e.target.checked })}/>{c.createTicket}</label>
               {form.createTicketOnSubmit && <>
                 <div className="form">
-                  <ResourcePicker label="Categoria ticket Dispatch" kind="item" items={ticketCategories} required
-                    placeholder="Seleziona..." disabled={!isAdmin}
+                  <ResourcePicker label={c.ticketCategory} kind="item" items={ticketCategories} required
+                    placeholder={c.select} disabled={!isAdmin}
                     value={form.ticketCategoryId} onChange={(ticketCategoryId) => setForm({ ...form, ticketCategoryId })}/>
-                  <ResourcePicker label="Categoria Discord override" kind="channel" channels={channels}
-                    channelTypes={[CHANNEL_TYPES.category]} placeholder="Usa quella della categoria ticket" disabled={!isAdmin}
+                  <ResourcePicker label={c.parentOverride} kind="channel" channels={channels}
+                    channelTypes={[CHANNEL_TYPES.category]} placeholder={c.useCategoryDefault} disabled={!isAdmin}
                     value={form.ticketParentCategoryId} onChange={(ticketParentCategoryId) => setForm({ ...form, ticketParentCategoryId })}/>
-                  <ResourcePicker label="Categoria Discord per i ticket chiusi (override)" kind="channel" channels={channels}
-                    channelTypes={[CHANNEL_TYPES.category]} placeholder="Usa quella della categoria ticket" disabled={!isAdmin}
-                    hint="Alla chiusura i ticket creati da questo form vengono spostati qui invece che nella categoria dei ticket chiusi della categoria ticket."
+                  <ResourcePicker label={c.closedParentOverride} kind="channel" channels={channels}
+                    channelTypes={[CHANNEL_TYPES.category]} placeholder={c.useCategoryDefault} disabled={!isAdmin}
+                    hint={c.closedParentHint}
                     value={form.ticketClosedParentCategoryId} onChange={(ticketClosedParentCategoryId) => setForm({ ...form, ticketClosedParentCategoryId })}/>
-                  <ResourcePicker label="Ruoli staff" kind="role" roles={roles} guildId={guildId} multiple max={20} disabled={!isAdmin}
+                  <ResourcePicker label={c.staffRoles} kind="role" roles={roles} guildId={guildId} multiple max={20} disabled={!isAdmin}
                     value={form.ticketStaffRoleIds} onChange={(ticketStaffRoleIds) => setForm({ ...form, ticketStaffRoleIds })}/>
                 </div>
-                <label>Prefisso canale<input value={form.ticketPrefix} onChange={(e) => setForm({ ...form, ticketPrefix: e.target.value })}/></label>
+                <label>{c.channelPrefix}<input value={form.ticketPrefix} onChange={(e) => setForm({ ...form, ticketPrefix: e.target.value })}/></label>
               </>}
             </fieldset>
           </div>
           <div className="form">
-            <fieldset><legend>Domande ({form.questions.length}/25)</legend>
+            <fieldset><legend>{format(c.questionsLegend, { count: form.questions.length })}</legend>
               {form.questions.map((q, index) => <div className="subcard form" key={q.clientKey}>
-                <div className="row"><strong>Domanda {index + 1}</strong><button type="button" className="danger" onClick={() => removeQuestion(index)}>Rimuovi</button></div>
+                <div className="row"><strong>{format(c.questionN, { n: index + 1 })}</strong><button type="button" className="danger" onClick={() => removeQuestion(index)}>{c.remove}</button></div>
                 <div className="field-row" style={{ '--cols': 2 } as CSSProperties}>
-                  <label>ID<input required maxLength={40} value={q.id} onChange={(e) => updateQuestion(index, { id: e.target.value })}/></label>
-                  <label>Domanda<input required maxLength={100} value={q.label} onChange={(e) => updateQuestion(index, { label: e.target.value })}/></label>
+                  <label>{c.id}<input required maxLength={40} value={q.id} onChange={(e) => updateQuestion(index, { id: e.target.value })}/></label>
+                  <label>{c.question}<input required maxLength={100} value={q.label} onChange={(e) => updateQuestion(index, { label: e.target.value })}/></label>
                 </div>
-                <label>Descrizione<textarea maxLength={500} value={q.description ?? ''} onChange={(e) => updateQuestion(index, { description: e.target.value || null })}/></label>
-                <label>Tipo<select value={q.type} onChange={(e) => {
+                <label>{c.description}<textarea maxLength={500} value={q.description ?? ''} onChange={(e) => updateQuestion(index, { description: e.target.value || null })}/></label>
+                <label>{c.type}<select value={q.type} onChange={(e) => {
                   const type = e.target.value as QuestionType;
                   updateQuestion(index, {
                     type,
@@ -381,44 +576,39 @@ export default function FormsPage() {
                     minLength: TEXT_TYPES.includes(type) ? q.minLength : null
                   });
                 }}>
-                  <option value="SHORT_TEXT">Testo breve</option><option value="LONG_TEXT">Testo lungo</option><option value="INTEGER">Intero</option><option value="NUMBER">Numero</option>
-                  <option value="EMAIL">Email</option><option value="URL">URL</option><option value="DATE">Data</option><option value="BOOLEAN">Sì/No</option>
-                  <option value="SINGLE_SELECT">Scelta singola</option><option value="MULTI_SELECT">Scelta multipla</option><option value="DISCORD_ID">ID Discord</option>
+                  {QUESTION_TYPES.map((type) => <option key={type} value={type}>{c.types[type]}</option>)}
                 </select></label>
-                {isSelectType(q.type) && <label>Opzioni, una per riga: Etichetta|valore<textarea value={q.optionsText} onChange={(e) => updateQuestion(index, { optionsText: e.target.value })} onBlur={() => commitOptions(index)}/></label>}
+                {isSelectType(q.type) && <label>{c.optionsLabel}<textarea value={q.optionsText} onChange={(e) => updateQuestion(index, { optionsText: e.target.value })} onBlur={() => commitOptions(index)}/></label>}
                 {q.type === 'MULTI_SELECT' && <div className="grid compact-grid">
-                  <label>Selezioni minime<input type="number" min={0} max={25} value={q.minSelections ?? ''} onChange={(e) => updateQuestion(index, { minSelections: nullableNumber(e.target.value) })}/></label>
-                  <label>Selezioni massime<input type="number" min={1} max={25} value={q.maxSelections ?? ''} onChange={(e) => updateQuestion(index, { maxSelections: nullableNumber(e.target.value) })}/></label>
+                  <label>{c.minSelections}<input type="number" min={0} max={25} value={q.minSelections ?? ''} onChange={(e) => updateQuestion(index, { minSelections: nullableNumber(e.target.value) })}/></label>
+                  <label>{c.maxSelections}<input type="number" min={1} max={25} value={q.maxSelections ?? ''} onChange={(e) => updateQuestion(index, { maxSelections: nullableNumber(e.target.value) })}/></label>
                 </div>}
-                <label className="checkbox-row"><input type="checkbox" checked={q.required} onChange={(e) => updateQuestion(index, { required: e.target.checked })}/>Obbligatoria</label>
+                <label className="checkbox-row"><input type="checkbox" checked={q.required} onChange={(e) => updateQuestion(index, { required: e.target.checked })}/>{c.required}</label>
               </div>)}
-              <button type="button" className="secondary" disabled={form.questions.length >= 25} onClick={addQuestion}>Aggiungi domanda</button>
+              <button type="button" className="secondary" disabled={form.questions.length >= 25} onClick={addQuestion}>{c.addQuestion}</button>
             </fieldset>
 
           </div>
         </div>
-        <label className="checkbox-row"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })}/>Form abilitato</label>
+        <label className="checkbox-row"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })}/>{c.formEnabled}</label>
         <button disabled={busy === 'form' || (!editingId && !isAdmin)} type="submit">
-            {editingId ? 'Salva modifiche' : isAdmin ? 'Crea form' : 'Solo Admin/Owner può creare nuovi form'}
+            {editingId ? c.saveChanges : isAdmin ? c.createForm : c.adminOnlyCreate}
         </button>
       </form>
 
-      <section><h2>Form configurati</h2><div className="grid">{forms.map((row) => <article className="card" key={row.id}>
-        <h3>{row.name}</h3><p>{row.description || 'Nessuna descrizione.'}</p>
-        <p className="muted">{row.questions.length} domande · {row.deliveryMode === 'DM' ? 'DM' : 'ephemeral'} · {row.enabled ? 'aperto secondo pianificazione' : 'disabilitato'}</p>
-        <div className="actions"><button className="secondary" onClick={() => editForm(row)}>Modifica</button>
-          {isAdmin && <button className="secondary" onClick={() => void loadPermissions(row.id)}>Permessi</button>}
-          <a className="button secondary" href={`/dashboard/${guildId}/forms/${row.id}`}>Invii</a>
-          {isAdmin && <button className="danger" disabled={busy === `form:${row.id}`} onClick={() => void removeForm(row.id)}>Elimina</button>}</div>
+      <section><h2>{c.configured}</h2><div className="grid">{forms.map((row) => <article className="card" key={row.id}>
+        <h3>{row.name}</h3><p>{row.description || c.noDescription}</p>
+        <p className="muted">{c.questionCount(row.questions.length)} · {row.deliveryMode === 'DM' ? c.dm : c.ephemeral} · {row.enabled ? c.scheduled : c.disabled}</p>
+        <div className="actions"><button className="secondary" onClick={() => editForm(row)}>{c.edit}</button>
+          {isAdmin && <button className="secondary" onClick={() => void loadPermissions(row.id)}>{c.permissions}</button>}
+          <a className="button secondary" href={`/dashboard/${guildId}/forms/${row.id}`}>{c.submissions}</a>
+          {isAdmin && <button className="danger" disabled={busy === `form:${row.id}`} onClick={() => void removeForm(row.id)}>{c.delete}</button>}</div>
       </article>)}
-      {!forms.length && <div className="card muted">Nessun form visibile.</div>}</div></section>
+      {!forms.length && <div className="card muted">{c.empty}</div>}</div></section>
 
       {isAdmin && selectedPermissionForm && <section className="card">
-        <div className="row"><h2>Permessi del form</h2><button className="secondary" onClick={() => { setSelectedPermissionForm(''); setPermissions([]); }}>Chiudi</button></div>
-        <p className="muted">
-          Owner/Admin hanno sempre accesso e sono gli unici a modificare queste regole. Manage: domande, testi,
-          pianificazione e limiti. View: vede il form. Review: vede gli invii. Submit: può compilare.
-        </p>
+        <div className="row"><h2>{c.permissionsTitle}</h2><button className="secondary" onClick={() => { setSelectedPermissionForm(''); setPermissions([]); }}>{c.close}</button></div>
+        <p className="muted">{c.permissionsHelp}</p>
         {roles.filter((r) => r.id !== guildId).map((role) => {
           const p = permissions.find((item) => item.discordRoleId === role.id);
           return <div className="role" key={role.id}><strong>{role.name}</strong>
