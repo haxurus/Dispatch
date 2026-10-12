@@ -12,6 +12,7 @@ import {
 import { runTicketRetention } from './retention.js';
 import { runLeaderboardCycle } from './leaderboard.js';
 import { checkInstall, isGuildInstallBlocked } from './install-guard.js';
+import { createStatusNotifier, guildFields } from './status.js';
 
 const log = pino({ level: config.logLevel });
 
@@ -28,13 +29,29 @@ const client = new Client({
     : undefined
 });
 
+const status = createStatusNotifier(client);
+
+// The bot is (again) in this guild: a pending post-removal purge is cancelled.
 async function ensureGuild(guild: { id: string; name: string }) {
   await prisma.guildSettings.upsert({
     where: { guildId: guild.id },
-    update: { guildName: guild.name },
+    update: { guildName: guild.name, leftAt: null },
     create: { guildId: guild.id, guildName: guild.name }
   });
 }
+
+// Starts the post-removal retention (the API purges after 30 days).
+async function markGuildLeft(guildIds: string[]) {
+  if (!guildIds.length) return 0;
+  const result = await prisma.guildSettings.updateMany({
+    where: { guildId: { in: guildIds }, leftAt: null },
+    data: { leftAt: new Date() }
+  });
+  return result.count;
+}
+
+// Servers the bot leaves on purpose (blocked installs): their GuildDelete is not news.
+const intentionalLeaves = new Set<string>();
 
 let internalApi: ReturnType<typeof startInternalApi> | null = null;
 let retentionRunning = false;
@@ -62,6 +79,7 @@ client.once(Events.ClientReady, async (ready) => {
     // Guilds blocked while the bot was offline are left at startup.
     const blocked = await isGuildInstallBlocked(guild.id).catch(() => false);
     if (blocked) {
+      intentionalLeaves.add(guild.id);
       await guild.leave()
         .then(() => log.warn({ guildId: guild.id }, 'Left blocked guild at startup'))
         .catch((error) => log.error({ err: error, guildId: guild.id }, 'Unable to leave blocked guild'));
@@ -70,18 +88,45 @@ client.once(Events.ClientReady, async (ready) => {
     await ensureGuild(guild).catch((error) => log.error({ err: error, guildId: guild.id }, 'Guild sync failed'));
   }
 
-  internalApi = startInternalApi(client, config.internalApiKey, config.internalApiPort);
+  // Servers that removed the bot while it was offline (unavailable guilds
+  // stay in the cache, so an outage never starts the purge clock).
+  const known = new Set(ready.guilds.cache.filter((guild) => !intentionalLeaves.has(guild.id)).keys());
+  const stored = await prisma.guildSettings.findMany({ where: { leftAt: null }, select: { guildId: true } })
+    .catch(() => [] as Array<{ guildId: string }>);
+  const departed = await markGuildLeft(stored.map((row) => row.guildId).filter((guildId) => !known.has(guildId)))
+    .catch((error) => { log.error({ err: error }, 'Unable to mark departed guilds'); return 0; });
+
+  internalApi = startInternalApi(client, config.internalApiKey, config.internalApiPort, status);
+  status.notify({
+    level: 'ok',
+    title: 'Dispatch online',
+    dedupeKey: 'startup',
+    fields: [
+      { name: 'Server', value: String(ready.guilds.cache.size) },
+      ...(departed ? [{ name: 'Rimosso mentre era offline', value: String(departed) }] : [])
+    ]
+  });
   void runRetentionCycle();
   void runLeaderboards();
 });
 
 client.on(Events.GuildCreate, async (guild) => {
   // Installation blacklist (super console): leave before creating any state.
+  let installerId: string | null = null;
   try {
-    const verdict = await checkInstall(guild, client.user?.id ?? null);
-    if (verdict !== 'allowed') {
+    const check = await checkInstall(guild, client.user?.id ?? null);
+    installerId = check.installerId;
+    if (check.verdict !== 'allowed') {
+      intentionalLeaves.add(guild.id);
+      setTimeout(() => intentionalLeaves.delete(guild.id), 120_000).unref();
       await guild.leave();
-      log.warn({ guildId: guild.id, reason: verdict }, 'Left guild: installation blocked');
+      log.warn({ guildId: guild.id, reason: check.verdict }, 'Left guild: installation blocked');
+      status.notify({
+        level: 'warn',
+        title: 'Installazione rifiutata',
+        description: `Dispatch è uscito da **${guild.name}**: ${check.verdict === 'blocked-guild' ? 'il server è in blacklist' : 'chi ha aggiunto il bot è in blacklist'}.`,
+        fields: guildFields(guild, installerId)
+      });
       return;
     }
   } catch (error) {
@@ -90,6 +135,15 @@ client.on(Events.GuildCreate, async (guild) => {
 
   await ensureGuild(guild).catch((error) => log.error({ err: error, guildId: guild.id }, 'Guild sync failed'));
   log.info({ guildId: guild.id, guildName: guild.name }, 'Dispatch joined guild');
+  status.notify({ level: 'ok', title: 'Dispatch aggiunto a un server', fields: guildFields(guild, installerId) });
+});
+
+client.on(Events.GuildDelete, async (guild) => {
+  // Removed, kicked or the server was deleted: start the post-removal retention.
+  await markGuildLeft([guild.id]).catch((error) => log.error({ err: error, guildId: guild.id }, 'Unable to mark guild as left'));
+  if (intentionalLeaves.delete(guild.id)) return;
+  log.info({ guildId: guild.id }, 'Dispatch removed from guild');
+  status.notify({ level: 'info', title: 'Dispatch rimosso da un server', fields: guildFields(guild) });
 });
 
 client.on(Events.GuildUpdate, async (_oldGuild, newGuild) => {

@@ -10,6 +10,12 @@ export const SITE_URL = (process.env.SITE_URL || 'https://dispatch.haxurus.com')
 
 export const SITE_NAME = 'Dispatch';
 
+/** Source of the running instance (AGPL §13): forks must point this to their own repository. */
+export const REPO_URL = 'https://github.com/haxurus/Dispatch';
+
+/** Operator contact for privacy and legal requests. Self-hosted instances must use their own. */
+export const CONTACT_EMAIL = 'haxurus@icloud.com';
+
 /** Locale request header set by middleware.ts, read by the root layout for <html lang>. */
 export const LOCALE_HEADER = 'x-dispatch-locale';
 

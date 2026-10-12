@@ -109,11 +109,13 @@ POSTGRES_ADMIN_USER=dispatch_owner
 POSTGRES_DB=dispatch
 LOG_LEVEL=info
 SUPER_ADMIN_USER_ID=<Discord user ID del proprietario dell'istanza>
-INVITE_ALLOWED_USER_IDS=<ID Discord separati da virgola, opzionale>
 ```
 
 - `SUPER_ADMIN_USER_ID` (opzionale, supporta anche `SUPER_ADMIN_USER_ID_FILE`): un solo Discord user ID (17-20 cifre). Abilita la super console su `/super` e le API `/api/super/*`; se vuoto nessuno vi accede. Un valore non valido blocca l'avvio dell'API.
-- `INVITE_ALLOWED_USER_IDS` (opzionale, supporta `_FILE`): account, oltre al super admin, autorizzati ad aggiungere il bot ospitato tramite `/backend/bot/invite`. Gli altri utenti vengono reindirizzati a `/it/development` (o `/en/development`). Un utente bloccato dalla super console non può installare il bot anche se è in lista.
+- Il bot ospitato è aperto a tutti i server: nel Developer Portal **Public Bot** deve essere attivo e `/backend/bot/invite` porta direttamente all'autorizzazione Discord. `INVITE_ALLOWED_USER_IDS` non è più usato e può essere tolto da `.env`.
+- Server e installatori in blacklist (super console → Blacklist installazioni) vengono abbandonati subito.
+- Il canale delle notifiche di stato (avvio, server aggiunti o rimossi, installazioni rifiutate) si sceglie in **Super console → Canale di stato**, con un messaggio di prova.
+- Quando il bot viene rimosso da un server, l'API cancella tutti i dati di quel server dopo 30 giorni (a meno che il bot non venga aggiunto di nuovo).
 
 `WEB_URL` deve coincidere esattamente con l'origine del browser: le richieste di modifica con un `Origin` diverso vengono rifiutate (CSRF).
 
@@ -287,7 +289,7 @@ I backup restano sulla stessa VPS. Copiarli periodicamente fuori dall'host, cifr
 
 Login e logout, lista server, RBAC (incluso il rifiuto di `@everyone` come ruolo di accesso), pubblicazione del menu, apertura del ticket con modulo, permessi del canale (thread vietati a utente e partecipanti; **Thread staff** crea un thread privato visibile solo allo staff e, alla chiusura, ne invia il transcript al canale archivio o al canale log), claim, unclaim, stati, priorità, chiusura con transcript, feedback (attribuito al moderatore che gestiva il ticket), classifica moderatori (anteprima negli Analytics e **Invia ora**), riapertura dentro e fuori finestra, anti-spam, blacklist, SLA/escalation e retention con valori brevi. Dettagli funzionali e note operative su prenotazioni `CREATING` e retention sono in [TICKET_PROTECTIONS.md](TICKET_PROTECTIONS.md).
 
-Super console (con `SUPER_ADMIN_USER_ID` impostato): il link "Super console" compare solo per quell'account; `/super` mostra metriche e server collegati; "Blocca ed espelli" fa uscire il bot e lo fa riuscire se viene riaggiunto; ogni azione compare nell'audit super-admin. Un account non autorizzato che apre `/backend/bot/invite` finisce su `/it/development`.
+Super console (con `SUPER_ADMIN_USER_ID` impostato): il link "Super console" compare solo per quell'account; `/super` mostra metriche e server collegati; "Blocca ed espelli" fa uscire il bot e lo fa riuscire se viene riaggiunto; ogni azione compare nell'audit super-admin. Il canale di stato riceve un messaggio quando il bot si avvia, entra o esce da un server.
 
 Comandi utili:
 

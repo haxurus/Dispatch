@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Icon } from './Brand';
 import { SiteHeader } from './SiteChrome';
 import { SNOWFLAKE, initial, logout } from './session';
-import { format, loginHref, superCopy, type Locale } from '../i18n';
+import { format, loginHref, superCopy, type Locale, type SuperCopy } from '../i18n';
 
 type BlockKind = 'USER' | 'GUILD';
 
@@ -48,6 +48,9 @@ type BotStatus = {
   user: { id: string; username: string; avatarUrl: string | null } | null;
 };
 
+type StatusChannel = { guildId: string; channelId: string; updatedAt: string } | null;
+type ChannelOption = { id: string; name: string; type: number };
+
 type Overview = {
   bot: { reachable: boolean; status: BotStatus | null };
   metrics: {
@@ -60,6 +63,7 @@ type Overview = {
   };
   guilds: Guild[];
   blocks: Block[];
+  statusChannel: StatusChannel;
   audit: Audit[];
 };
 
@@ -135,6 +139,7 @@ export default function SuperConsole({ locale }: { locale: Locale }) {
       case 'GUILD_NOT_CONNECTED': return c.notConnected;
       case 'INVALID_BLOCK_REQUEST':
       case 'INVALID_DISCORD_ID': return c.invalidId;
+      case 'CHANNEL_NOT_FOUND': return c.status.channelMissing;
       default: return c.failed;
     }
   };
@@ -355,6 +360,15 @@ export default function SuperConsole({ locale }: { locale: Locale }) {
               </div>
             </section>
 
+            <StatusChannelCard
+              c={c}
+              guilds={data.guilds}
+              current={data.statusChannel}
+              busy={busy}
+              mutate={mutate}
+              onTestResult={(ok, text) => { setError(ok ? '' : text); setStatus(ok ? text : ''); }}
+            />
+
             <section className="card">
               <div className="card-head">
                 <div><span className="kicker">{c.audit.kicker}</span><h2>{c.audit.title}</h2><p>{c.audit.text}</p></div>
@@ -375,5 +389,85 @@ export default function SuperConsole({ locale }: { locale: Locale }) {
         </div>
       </section>
     </main>
+  );
+}
+
+/* --------------------------------------------------------- status channel */
+
+function StatusChannelCard({ c, guilds, current, busy, mutate, onTestResult }: {
+  c: SuperCopy;
+  guilds: Guild[];
+  current: StatusChannel;
+  busy: boolean;
+  mutate: (run: () => Promise<string | null>) => Promise<boolean>;
+  onTestResult: (ok: boolean, text: string) => void;
+}) {
+  const [guildId, setGuildId] = useState(current?.guildId ?? '');
+  const [channelId, setChannelId] = useState(current?.channelId ?? '');
+  const [channels, setChannels] = useState<ChannelOption[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setChannels([]);
+    if (!SNOWFLAKE.test(guildId)) return;
+    let cancelled = false;
+    setLoading(true);
+    api<ChannelOption[]>(`/backend/api/super/status-channel/channels?guildId=${guildId}`)
+      .then((list) => { if (!cancelled) setChannels(list); })
+      .catch(() => { if (!cancelled) setChannels([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [guildId]);
+
+  const currentGuild = guilds.find((guild) => guild.id === current?.guildId);
+  const save = () => void mutate(async () => {
+    await api('/backend/api/super/status-channel', jsonInit('PUT', { guildId, channelId }));
+    return c.status.saved;
+  });
+  const remove = () => void mutate(async () => {
+    await api('/backend/api/super/status-channel', { method: 'DELETE' });
+    return c.status.removed;
+  });
+  const test = async () => {
+    try {
+      const result = await api<{ ok: boolean; error?: string }>('/backend/api/super/status-channel/test', jsonInit('POST', {}));
+      onTestResult(result.ok, result.ok ? c.status.testOk : `${c.status.testFailed}: ${c.status.errors[result.error ?? ''] ?? result.error ?? ''}`);
+    } catch (err) {
+      onTestResult(false, `${c.status.testFailed}: ${err instanceof ApiError ? err.code : ''}`);
+    }
+  };
+
+  return (
+    <section className="card">
+      <div className="card-head">
+        <div><span className="kicker">{c.status.kicker}</span><h2>{c.status.title}</h2><p>{c.status.text}</p></div>
+      </div>
+      <p className="muted">
+        {current
+          ? <>{c.status.current}: <strong>{currentGuild?.name ?? current.guildId}</strong> · <span className="mono">#{current.channelId}</span></>
+          : c.status.notSet}
+      </p>
+      <div className="block-forms status-forms">
+        <form onSubmit={(event) => { event.preventDefault(); save(); }}>
+          <label>{c.status.guild}
+            <select value={guildId} onChange={(event) => { setGuildId(event.target.value); setChannelId(''); }} required>
+              <option value="">{c.status.chooseGuild}</option>
+              {guilds.map((guild) => <option key={guild.id} value={guild.id}>{guild.name}</option>)}
+            </select>
+          </label>
+          <label>{c.status.channel}
+            <select value={channelId} onChange={(event) => setChannelId(event.target.value)} required disabled={!channels.length}>
+              <option value="">{loading ? c.loading : c.status.chooseChannel}</option>
+              {channels.map((channel) => <option key={channel.id} value={channel.id}>#{channel.name}</option>)}
+            </select>
+          </label>
+          <div className="button-row">
+            <button type="submit" className="button button-primary" disabled={busy || !guildId || !channelId}>{c.status.save}</button>
+            <button type="button" className="button button-secondary" disabled={busy || !current} onClick={() => void test()}>{c.status.test}</button>
+            <button type="button" className="button button-ghost" disabled={busy || !current} onClick={remove}>{c.status.remove}</button>
+          </div>
+        </form>
+      </div>
+    </section>
   );
 }

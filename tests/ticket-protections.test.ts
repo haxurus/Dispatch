@@ -13,6 +13,7 @@ import { retentionDue, runTicketRetention } from '../apps/bot/src/retention.js';
 import {
   closeTicket, deleteTicketChannel, recordTicketMessage, reopenTicket, staffThreadTranscriptDestination, ticketChannelOverwrites
 } from '../apps/bot/src/ticket-operations.js';
+import { purgeDepartedGuild, purgeDepartedGuilds } from '../apps/api/src/guild-purge.js';
 import { claimLeaderboardPeriod, releaseLeaderboardPeriod, runLeaderboardCycle } from '../apps/bot/src/leaderboard.js';
 import { handleTicketInteraction, publishMainMenu } from '../apps/bot/src/tickets.js';
 import { panelComponents } from '../apps/bot/src/panels.js';
@@ -1313,4 +1314,63 @@ test('staff thread transcript goes to the archive channel, else the log channel,
   } finally {
     invalidateTicketLogSettings();
   }
+});
+
+// Public instance: data lifecycle after the bot leaves a server
+// (migration 20261013100000_public_instance, apps/api/src/guild-purge.ts).
+async function departedGuildData() {
+  const cat = await category();
+  const closed = await ticket(cat);
+  await prisma.transcript.create({ data: { ticketId: closed.id, contentEncrypted: 'x' } });
+  const definition = await form();
+  await prisma.formSubmission.create({ data: {
+    guildId: G, formId: definition.id, userId: U, username: 'tester', answersEncrypted: 'x', source: 'test'
+  } });
+  await prisma.panelAudit.create({ data: { guildId: G, userId: U, username: 'tester', action: 'test', details: {} } });
+  await prisma.panelRoleBinding.create({ data: { guildId: G, discordRoleId: OTHER, accessLevel: 'VIEWER' } });
+}
+
+test('a server gone for longer than the retention is purged with every dependent row', async () => {
+  await departedGuildData();
+  await prisma.guildSettings.update({ where: { guildId: G }, data: { leftAt: new Date(Date.now() - 31 * DAY) } });
+
+  assert.equal(await purgeDepartedGuilds(Date.now(), 30), 1);
+  assert.equal(await prisma.guildSettings.count({ where: { guildId: G } }), 0);
+  for (const count of [
+    prisma.ticket.count({ where: { guildId: G } }),
+    prisma.transcript.count({ where: { ticket: { guildId: G } } }),
+    prisma.ticketCategory.count({ where: { guildId: G } }),
+    prisma.formDefinition.count({ where: { guildId: G } }),
+    prisma.formSubmission.count({ where: { guildId: G } }),
+    prisma.panelAudit.count({ where: { guildId: G } }),
+    prisma.panelRoleBinding.count({ where: { guildId: G } })
+  ]) assert.equal(await count, 0);
+});
+
+test('servers still within the retention, or added again, are never purged', async () => {
+  await departedGuildData();
+  await prisma.guildSettings.update({ where: { guildId: G }, data: { leftAt: new Date(Date.now() - 10 * DAY) } });
+  assert.equal(await purgeDepartedGuilds(Date.now(), 30), 0);
+
+  // Re-added (leftAt cleared) after the purge selected it: the locked re-check wins.
+  await prisma.guildSettings.update({ where: { guildId: G }, data: { leftAt: null } });
+  assert.equal(await purgeDepartedGuild(G, new Date()), false);
+  assert.equal(await prisma.ticket.count({ where: { guildId: G } }), 1);
+  assert.equal(await prisma.formSubmission.count({ where: { guildId: G } }), 1);
+});
+
+test('the bot role can stamp leftAt and read the status channel, but cannot change it', async () => {
+  const connection = new URL(db);
+  connection.username = 'dispatch_bot'; connection.password = 'dispatch_bot_test';
+  const bot = new PrismaClient({ datasources: { db: { url: connection.toString() } } });
+  try {
+    await bot.guildSettings.updateMany({ where: { guildId: G }, data: { leftAt: new Date() } });
+    assert.ok((await prisma.guildSettings.findUniqueOrThrow({ where: { guildId: G } })).leftAt);
+    await bot.statusChannel.findUnique({ where: { id: 1 } });
+    await assert.rejects(bot.statusChannel.upsert({
+      where: { id: 1 },
+      update: { channelId: OTHER },
+      create: { id: 1, guildId: G, channelId: OTHER, updatedByUserId: U }
+    }));
+  } finally { await bot.$disconnect(); }
 });

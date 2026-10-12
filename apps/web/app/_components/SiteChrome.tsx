@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Brand } from './Brand';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { chromeCopy, type Locale } from '../i18n';
+import { REPO_URL } from '../site';
 
 export type NavLink = { href: string; label: string; current?: boolean };
 
@@ -64,7 +65,11 @@ export function SiteFooter({ locale, children }: { locale: Locale; children?: Re
       <div className="site-container">
         {children}
         <div className="site-footer-bottom">
-          <span>Dispatch © 2026 · {c.madeBy} Haxurus</span>
+          <span>
+            Dispatch © 2026 · {c.madeBy} Haxurus · <a href={REPO_URL} target="_blank" rel="noreferrer">{c.openSource}</a>
+            {' · '}<a href={`/${locale}/legal#privacy`}>Privacy</a>
+            {' · '}<a href={`/${locale}/legal#terms`}>{c.terms}</a>
+          </span>
           <span className="mono">{c.footerTag}</span>
         </div>
       </div>

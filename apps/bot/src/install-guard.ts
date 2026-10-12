@@ -48,10 +48,10 @@ export async function findInstallerId(guild: Guild, botUserId: string, maxAgeMs 
 export type InstallVerdict = 'allowed' | 'blocked-guild' | 'blocked-installer';
 
 /** Decide whether the bot may stay in a guild it has just joined. */
-export async function checkInstall(guild: Guild, botUserId: string | null): Promise<InstallVerdict> {
-  if (await isGuildInstallBlocked(guild.id)) return 'blocked-guild';
-  if (!botUserId) return 'allowed';
+export async function checkInstall(guild: Guild, botUserId: string | null): Promise<{ verdict: InstallVerdict; installerId: string | null }> {
+  if (await isGuildInstallBlocked(guild.id)) return { verdict: 'blocked-guild', installerId: null };
+  if (!botUserId) return { verdict: 'allowed', installerId: null };
   const installerId = await findInstallerId(guild, botUserId);
-  if (installerId && await isUserInstallBlocked(installerId)) return 'blocked-installer';
-  return 'allowed';
+  if (installerId && await isUserInstallBlocked(installerId)) return { verdict: 'blocked-installer', installerId };
+  return { verdict: 'allowed', installerId };
 }

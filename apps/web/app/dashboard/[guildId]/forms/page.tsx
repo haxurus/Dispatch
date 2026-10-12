@@ -124,6 +124,7 @@ const nullableNumber = (value: string) => value === '' ? null : Number(value);
 const errorMessages: Record<string, string> = {
   FORM_FIELD_ADMIN_ONLY: 'Canale risultati, ruoli notificati e impostazioni ticket possono essere modificati solo da Admin/Owner.',
   FORBIDDEN: 'Permessi insufficienti per questa operazione.',
+  QUOTA_EXCEEDED: 'Limite raggiunto per questo server: elimina un elemento esistente prima di crearne uno nuovo.',
   FORM_IN_USE: 'Il form ha già invii e non può essere eliminato.',
   TICKET_PARENT_NOT_FOUND: 'La categoria Discord override non è una categoria del server.',
   TICKET_CLOSED_PARENT_NOT_FOUND: 'La categoria Discord per i ticket chiusi non è una categoria del server.'

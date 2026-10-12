@@ -6,6 +6,7 @@ import { publishFormPanel } from './forms.js';
 import { LEADERBOARD_LIMITS, parseBlacklistLogPayload } from '@dispatch/shared';
 import { logBlacklistEvent, sendTicketLogTest } from './ticket-log.js';
 import { sendLeaderboardNow } from './leaderboard.js';
+import type { StatusNotifier } from './status.js';
 import {
   addTicketMember,
   assignTicket,
@@ -55,7 +56,7 @@ function authorized(header: string | undefined, secret: string) {
   return crypto.timingSafeEqual(digest(header), digest(`Bearer ${secret}`));
 }
 
-export function startInternalApi(client: Client, secret: string, port = 3002) {
+export function startInternalApi(client: Client, secret: string, port = 3002, status?: StatusNotifier) {
   const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
@@ -104,6 +105,25 @@ export function startInternalApi(client: Client, secret: string, port = 3002) {
           }))
           .sort((a, b) => a.name.localeCompare(b.name));
         res.end(JSON.stringify(guilds));
+        return;
+      }
+
+      // Super console: test message and cache refresh for the status channel.
+      if (req.method === 'POST' && url.pathname === '/status/test') {
+        if (!status) throw new Error('STATUS_UNAVAILABLE');
+        status.invalidate();
+        const result = await status.deliver({
+          level: 'info',
+          title: 'Notifiche di stato attive',
+          description: 'Messaggio di prova inviato dalla super console. Qui arriveranno avvio del bot, server aggiunti o rimossi e installazioni rifiutate.'
+        }, { force: true });
+        res.end(JSON.stringify(result));
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/status/refresh') {
+        status?.invalidate();
+        res.end('{"ok":true}');
         return;
       }
 

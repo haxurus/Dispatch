@@ -107,7 +107,6 @@ services:
       BOT_INTERNAL_URL: http://bot:3002
       BOT_INTERNAL_API_KEY_FILE: /run/secrets/bot_internal_api_key
       SUPER_ADMIN_USER_ID: ${SUPER_ADMIN_USER_ID:-}
-      INVITE_ALLOWED_USER_IDS: ${INVITE_ALLOWED_USER_IDS:-}
     command:
       - sh
       - -c

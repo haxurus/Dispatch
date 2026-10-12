@@ -22,15 +22,6 @@ if (superAdminUserId && !SNOWFLAKE.test(superAdminUserId)) {
   throw new Error('SUPER_ADMIN_USER_ID must be a Discord user ID (17-20 digits) or empty');
 }
 
-// Accounts (besides the super admin) allowed to add the hosted bot to new servers.
-const inviteAllowedUserIds = optional('INVITE_ALLOWED_USER_IDS')
-  .split(',')
-  .map((value) => value.trim())
-  .filter(Boolean);
-if (inviteAllowedUserIds.some((value) => !SNOWFLAKE.test(value))) {
-  throw new Error('INVITE_ALLOWED_USER_IDS must contain comma-separated Discord user IDs');
-}
-
 const production = process.env.NODE_ENV === 'production';
 const publicBaseUrl = required('PUBLIC_BASE_URL');
 const webUrl = required('WEB_URL');
@@ -54,7 +45,6 @@ export const config = {
   webUrl,
   sessionSecret,
   superAdminUserId,
-  inviteAllowedUserIds,
   port: Number(process.env.PORT ?? 3001),
   production
 };
