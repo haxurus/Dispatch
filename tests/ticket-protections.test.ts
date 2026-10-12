@@ -1435,3 +1435,14 @@ test('leaderboard titles and form validation are localized', () => {
   assert.deepEqual(validateQuestionAnswer(question, '9'), { ok: false, message: 'Il valore minimo è 13.' });
   assert.equal(displayAnswer({ id: 'b', label: 'Ok?', type: 'BOOLEAN', value: 'true' }, undefined, 'en'), 'Yes');
 });
+
+test('status notices never carry tokens or connection strings', async () => {
+  const { redactText } = await import('../apps/bot/src/status.js');
+  // Built at runtime: a token-shaped literal would (rightly) trip secret scanning.
+  const token = ['A'.repeat(24), 'B'.repeat(6), 'C'.repeat(38)].join('.');
+  const text = redactText(`login failed ${token} postgresql://dispatch_bot:secret@postgres:5432/dispatch Bearer abcdefghijklmnopqrstu`);
+  assert.ok(!text.includes(token));
+  assert.ok(!text.includes('secret@postgres'));
+  assert.ok(!text.includes('abcdefghijklmnopqrstu'));
+  assert.ok(text.includes('[token]') && text.includes('postgresql://[redacted]') && text.includes('Bearer [redacted]'));
+});

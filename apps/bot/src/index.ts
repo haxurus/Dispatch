@@ -158,7 +158,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (isFormInteraction(interaction.customId)) await handleFormInteraction(interaction);
     else await handleTicketInteraction(interaction);
   } catch (error) {
-    log.error({ errorType: error instanceof Error ? error.name : 'UnknownError' }, 'Ticket interaction failed');
+    const errorType = error instanceof Error ? error.name : 'UnknownError';
+    log.error({ errorType }, 'Ticket interaction failed');
+    // Type and custom id prefix only: never the interaction content.
+    status.notify({
+      level: 'error',
+      title: 'Errore in un’interazione',
+      dedupeKey: `interaction:${errorType}:${interaction.customId.split(':').slice(0, 2).join(':')}`,
+      fields: [
+        { name: 'Tipo', value: errorType },
+        { name: 'Componente', value: interaction.customId.split(':').slice(0, 2).join(':') },
+        ...(interaction.guildId ? [{ name: 'Server', value: `\`${interaction.guildId}\`` }] : [])
+      ]
+    });
 
     const message = (await guildMessages(interaction.guildId).catch(() => null))?.common.interactionError ??
       'Something went wrong while handling the request.';
@@ -215,8 +227,20 @@ setInterval(() => {
   void runLeaderboards();
 }, 15 * 60 * 1000).unref();
 
-client.on(Events.Warn, (warning) => log.warn({ warning }, 'Discord client warning'));
-client.on(Events.Error, (error) => log.error({ err: error }, 'Discord client error'));
+client.on(Events.Warn, (warning) => {
+  log.warn({ warning }, 'Discord client warning');
+  status.notify({ level: 'warn', title: 'Avviso del client Discord', description: warning.slice(0, 500), dedupeKey: `warn:${warning.slice(0, 80)}` });
+});
+client.on(Events.Error, (error) => {
+  log.error({ err: error }, 'Discord client error');
+  status.notify({ level: 'error', title: 'Errore del client Discord', description: `${error.name}: ${error.message}`.slice(0, 500), dedupeKey: `client:${error.name}` });
+});
+client.on(Events.ShardDisconnect, (event, shardId) => {
+  status.notify({ level: 'warn', title: 'Gateway Discord disconnesso', fields: [{ name: 'Shard', value: String(shardId) }, { name: 'Codice', value: String(event.code) }], dedupeKey: `disconnect:${shardId}` });
+});
+client.on(Events.ShardResume, (shardId) => {
+  status.notify({ level: 'ok', title: 'Gateway Discord riconnesso', fields: [{ name: 'Shard', value: String(shardId) }], dedupeKey: `resume:${shardId}` });
+});
 
 const shutdown = async (signal: string) => {
   log.info({ signal }, 'Shutting down');
@@ -229,6 +253,8 @@ const shutdown = async (signal: string) => {
 };
 
 process.on('unhandledRejection', (reason) => {
+  const text = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+  status.notify({ level: 'error', title: 'Promise non gestita', description: text.slice(0, 500), dedupeKey: `rejection:${text.slice(0, 80)}` });
   log.error({ reason }, 'Unhandled promise rejection');
 });
 
