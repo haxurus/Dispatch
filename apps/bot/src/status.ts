@@ -39,6 +39,14 @@ const BURST_MAX = 30;
 
 const clip = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 1)}…` : value);
 
+// Error texts may quote connection strings or tokens: never post them.
+const REDACTIONS: Array<[RegExp, string]> = [
+  [/[A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6,7}\.[A-Za-z0-9_-]{27,40}/g, '[token]'],
+  [/\b(postgres(?:ql)?|redis|https?):\/\/[^\s'"]+/gi, '$1://[redacted]'],
+  [/(Bearer|Bot)\s+[A-Za-z0-9._-]{16,}/g, '$1 [redacted]']
+];
+export const redactText = (value: string) => REDACTIONS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value);
+
 type Target = { guildId: string; channelId: string } | null;
 
 export function createStatusNotifier(client: Client): StatusNotifier {
@@ -87,11 +95,11 @@ export function createStatusNotifier(client: Client): StatusNotifier {
       .setColor(COLORS[notice.level])
       .setFooter({ text: 'Dispatch · stato del bot' })
       .setTimestamp(new Date());
-    if (notice.description) embed.setDescription(clip(notice.description, 4000));
+    if (notice.description) embed.setDescription(clip(redactText(notice.description), 4000));
     const fields = (notice.fields ?? [])
       .filter((field) => field.value)
       .slice(0, 20)
-      .map((field) => ({ name: clip(field.name, 256), value: clip(field.value, 1024), inline: field.inline ?? true }));
+      .map((field) => ({ name: clip(field.name, 256), value: clip(redactText(field.value), 1024), inline: field.inline ?? true }));
     if (fields.length) embed.addFields(fields);
 
     const guild = client.guilds.cache.get(config.guildId);
