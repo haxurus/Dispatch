@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Icon } from './Brand';
 import { SiteHeader } from './SiteChrome';
 import { SNOWFLAKE, initial, logout } from './session';
-import { format, loginHref, superCopy, type Locale, type SuperCopy } from '../i18n';
+import { chromeCopy, format, loginHref, superCopy, type Locale, type SuperCopy } from '../i18n';
+import { LocaleToggle } from './locale-context';
 
 type BlockKind = 'USER' | 'GUILD';
 
@@ -88,13 +89,13 @@ const jsonInit = (method: 'PUT' | 'POST', body: unknown): RequestInit => ({
   body: JSON.stringify(body)
 });
 
-function formatUptime(ms: number | null) {
+function formatUptime(ms: number | null, locale: Locale) {
   if (ms === null || ms < 0) return '—';
   const minutes = Math.floor(ms / 60_000);
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);
   const mins = minutes % 60;
-  if (days > 0) return `${days}g ${hours}h`;
+  if (days > 0) return `${days}${locale === 'it' ? 'g' : 'd'} ${hours}h`;
   if (hours > 0) return `${hours}h ${mins}m`;
   return `${mins}m`;
 }
@@ -224,10 +225,13 @@ export default function SuperConsole({ locale }: { locale: Locale }) {
         locale={locale}
         homeHref={`/${locale}`}
         links={[
-          { href: '/dashboard', label: 'Dashboard' },
-          { href: '/super', label: 'Super console', current: true }
+          { href: '/dashboard', label: chromeCopy[locale].dashboard },
+          { href: '/super', label: chromeCopy[locale].superConsole, current: true }
         ]}
-        actions={<button type="button" className="button button-ghost" onClick={() => void logout()}><Icon name="logout" size={15} />Esci</button>}
+        actions={<>
+          <LocaleToggle />
+          <button type="button" className="button button-ghost" onClick={() => void logout()}><Icon name="logout" size={15} />{chromeCopy[locale].logout}</button>
+        </>}
       />
 
       <section className="page">
@@ -254,7 +258,7 @@ export default function SuperConsole({ locale }: { locale: Locale }) {
             <div className="card card-feature">
               <span className="kicker">{c.kicker}</span>
               <h2>{c.signedOut}</h2>
-              <a className="button button-primary button-lg" href={loginHref}>Accedi con Discord<Icon name="arrowRight" size={16} /></a>
+              <a className="button button-primary button-lg" href={loginHref}>{chromeCopy[locale].signInDiscord}<Icon name="arrowRight" size={16} /></a>
             </div>
           )}
           {!data && !denied && !error && <div className="card skeleton-card"><h2>{c.loading}</h2></div>}
@@ -282,7 +286,7 @@ export default function SuperConsole({ locale }: { locale: Locale }) {
                 {botState === 'ready' ? c.metrics.ready : botState === 'notReady' ? c.metrics.notReady : c.metrics.offline}
               </span>
               {bot && <>
-                <span>{c.bot.uptime}: <span className="mono">{formatUptime(bot.uptimeMs)}</span></span>
+                <span>{c.bot.uptime}: <span className="mono">{formatUptime(bot.uptimeMs, locale)}</span></span>
                 <span>{c.bot.ping}: <span className="mono">{bot.pingMs ?? '—'}{bot.pingMs !== null ? ' ms' : ''}</span></span>
                 <span className="mono">{num(bot.guildCount)} {c.bot.servers}</span>
               </>}

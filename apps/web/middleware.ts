@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { DEFAULT_PUBLIC_LOCALE, LOCALE_HEADER } from './app/site';
+import { DEFAULT_PUBLIC_LOCALE, LOCALE_COOKIE, LOCALE_HEADER } from './app/site';
 
 /** Best supported language from Accept-Language (q-weighted), English by default. */
 function preferredLocale(header: string | null): 'it' | 'en' {
@@ -16,24 +16,50 @@ function preferredLocale(header: string | null): 'it' | 'en' {
   return (match?.lang as 'it' | 'en' | undefined) ?? DEFAULT_PUBLIC_LOCALE;
 }
 
+const ONE_YEAR = 60 * 60 * 24 * 365;
+
+function publicLocale(pathname: string): 'it' | 'en' | null {
+  if (pathname === '/en' || pathname.startsWith('/en/')) return 'en';
+  if (pathname === '/it' || pathname.startsWith('/it/')) return 'it';
+  return null;
+}
+
+/** Remembered choice (cookie), otherwise the browser language, English by default. */
+function visitorLocale(request: NextRequest): 'it' | 'en' {
+  const saved = request.cookies.get(LOCALE_COOKIE)?.value;
+  if (saved === 'it' || saved === 'en') return saved;
+  return preferredLocale(request.headers.get('accept-language'));
+}
+
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // `/` is the x-default entry point: a server redirect, so crawlers without
-  // Accept-Language land on the English home instead of an empty JS page.
+  // Accept-Language or cookies land on the English home instead of an empty JS page.
   if (pathname === '/') {
     const url = request.nextUrl.clone();
-    url.pathname = `/${preferredLocale(request.headers.get('accept-language'))}`;
+    url.pathname = `/${visitorLocale(request)}`;
     const response = NextResponse.redirect(url, 307);
-    response.headers.set('Vary', 'Accept-Language');
+    response.headers.set('Vary', 'Accept-Language, Cookie');
     return response;
   }
 
-  // <html lang> for the root layout: the dashboard and super console are Italian-only.
-  const locale = pathname === '/en' || pathname.startsWith('/en/') ? 'en' : 'it';
+  // Public pages carry their language in the URL and remember it for the
+  // dashboard and the super console, which have no /en and /it mirrors.
+  const fromPath = publicLocale(pathname);
+  const locale = fromPath ?? visitorLocale(request);
   const headers = new Headers(request.headers);
   headers.set(LOCALE_HEADER, locale);
-  return NextResponse.next({ request: { headers } });
+  const response = NextResponse.next({ request: { headers } });
+  if (fromPath && request.cookies.get(LOCALE_COOKIE)?.value !== fromPath) {
+    response.cookies.set(LOCALE_COOKIE, fromPath, {
+      path: '/',
+      maxAge: ONE_YEAR,
+      sameSite: 'lax',
+      secure: request.nextUrl.protocol === 'https:' || process.env.NODE_ENV === 'production'
+    });
+  }
+  return response;
 }
 
 export const config = {
