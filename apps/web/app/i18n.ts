@@ -23,6 +23,8 @@ const chromeIt = {
   languageSelector: 'Selettore lingua',
   madeBy: 'Fatto da',
   footerTag: 'discord ticketing',
+  openSource: 'Open source (AGPL-3.0)',
+  terms: 'Termini',
   dashboard: 'Dashboard',
   superConsole: 'Super console',
   signIn: 'Accedi',
@@ -40,6 +42,8 @@ const chromeEn: ChromeCopy = {
   languageSelector: 'Language selector',
   madeBy: 'Made by',
   footerTag: 'discord ticketing',
+  openSource: 'Open source (AGPL-3.0)',
+  terms: 'Terms',
   dashboard: 'Dashboard',
   superConsole: 'Super console',
   signIn: 'Sign in',
@@ -268,39 +272,6 @@ const homeEn: HomeCopy = {
 
 export const homeCopy: Record<Locale, HomeCopy> = { it: homeIt, en: homeEn };
 
-/* ---------------------------------------------------- Development notice */
-
-type DevelopmentCopy = {
-  meta: { title: string; description: string };
-  kicker: string;
-  title: string;
-  text: string;
-  detail: string;
-  dashboard: string;
-  home: string;
-};
-
-export const developmentCopy: Record<Locale, DevelopmentCopy> = {
-  it: {
-    meta: { title: 'Dispatch è ancora in sviluppo', description: 'L’istanza pubblica di Dispatch non accetta ancora installazioni su nuovi server.' },
-    kicker: 'Accesso limitato',
-    title: 'Dispatch è ancora in sviluppo.',
-    text: 'Per ora l’istanza pubblica di Dispatch può essere aggiunta a nuovi server solo dagli account autorizzati dal proprietario.',
-    detail: 'Se il bot è già presente nel tuo server puoi comunque accedere alla dashboard con Discord e gestire i ticket.',
-    dashboard: 'Apri la dashboard',
-    home: 'Torna alla home'
-  },
-  en: {
-    meta: { title: 'Dispatch is still in development', description: 'The public Dispatch instance does not accept installations on new servers yet.' },
-    kicker: 'Limited access',
-    title: 'Dispatch is still in development.',
-    text: 'For now, the public Dispatch instance can only be added to new servers by accounts authorised by its owner.',
-    detail: 'If the bot is already in your server, you can still sign in to the dashboard with Discord and manage tickets.',
-    dashboard: 'Open dashboard',
-    home: 'Back to home'
-  }
-};
-
 /* ---------------------------------------------------------- Super console */
 
 const superIt = {
@@ -352,7 +323,7 @@ const superIt = {
   blacklist: {
     kicker: 'Policy',
     title: 'Blacklist installazioni',
-    text: 'Blocca preventivamente un server o un utente Discord. I server bloccati vengono abbandonati anche se il bot viene aggiunto di nuovo; gli utenti bloccati non possono installarlo.',
+    text: 'Blocca preventivamente un server o un utente Discord. I server bloccati vengono abbandonati anche se il bot viene aggiunto di nuovo; un utente bloccato viene riconosciuto quando il bot può leggere il registro attività del server.',
     userId: 'Discord User ID',
     guildId: 'Discord Server ID',
     reason: 'Motivo opzionale',
@@ -364,6 +335,32 @@ const superIt = {
     blocked: 'Bloccato',
     unblock: 'Sblocca',
     confirmUnblock: 'Rimuovere {kind} {id} dalla blacklist?'
+  },
+  status: {
+    kicker: 'Notifiche',
+    title: 'Canale di stato',
+    text: 'Il bot pubblica qui avvio, server aggiunti o rimossi e installazioni rifiutate. Non contiene mai il contenuto dei ticket.',
+    current: 'Canale attuale',
+    notSet: 'Nessun canale configurato: le notifiche di stato non vengono inviate.',
+    guild: 'Server',
+    channel: 'Canale',
+    chooseGuild: 'Scegli un server',
+    chooseChannel: 'Scegli un canale',
+    save: 'Salva',
+    test: 'Invia prova',
+    remove: 'Rimuovi',
+    saved: 'Canale di stato salvato.',
+    removed: 'Canale di stato rimosso.',
+    testOk: 'Messaggio di prova inviato.',
+    testFailed: 'Invio di prova non riuscito',
+    channelMissing: 'Il canale non esiste più o non è un canale testuale.',
+    errors: {
+      STATUS_CHANNEL_NOT_SET: 'nessun canale configurato',
+      STATUS_GUILD_UNAVAILABLE: 'il bot non è nel server',
+      STATUS_CHANNEL_UNAVAILABLE: 'canale non trovato',
+      STATUS_MISSING_PERMISSIONS: 'il bot non può scrivere nel canale',
+      STATUS_SEND_FAILED: 'Discord ha rifiutato il messaggio'
+    } as Record<string, string>
   },
   audit: {
     kicker: 'Audit',
@@ -424,7 +421,7 @@ const superEn: SuperCopy = {
   blacklist: {
     kicker: 'Policy',
     title: 'Installation blacklist',
-    text: 'Preemptively block a Discord server or user. Blocked servers are left even if the bot is added again; blocked users cannot install it.',
+    text: 'Preemptively block a Discord server or user. Blocked servers are left even if the bot is added again; a blocked user is recognised when the bot can read the server’s audit log.',
     userId: 'Discord User ID',
     guildId: 'Discord Server ID',
     reason: 'Optional reason',
@@ -436,6 +433,32 @@ const superEn: SuperCopy = {
     blocked: 'Blocked',
     unblock: 'Unblock',
     confirmUnblock: 'Remove {kind} {id} from the blacklist?'
+  },
+  status: {
+    kicker: 'Notifications',
+    title: 'Status channel',
+    text: 'The bot posts startup, servers added or removed and rejected installations here. It never contains ticket content.',
+    current: 'Current channel',
+    notSet: 'No channel configured: status notifications are not sent.',
+    guild: 'Server',
+    channel: 'Channel',
+    chooseGuild: 'Choose a server',
+    chooseChannel: 'Choose a channel',
+    save: 'Save',
+    test: 'Send test',
+    remove: 'Remove',
+    saved: 'Status channel saved.',
+    removed: 'Status channel removed.',
+    testOk: 'Test message sent.',
+    testFailed: 'Test message failed',
+    channelMissing: 'The channel no longer exists or is not a text channel.',
+    errors: {
+      STATUS_CHANNEL_NOT_SET: 'no channel configured',
+      STATUS_GUILD_UNAVAILABLE: 'the bot is not in that server',
+      STATUS_CHANNEL_UNAVAILABLE: 'channel not found',
+      STATUS_MISSING_PERMISSIONS: 'the bot cannot write in the channel',
+      STATUS_SEND_FAILED: 'Discord rejected the message'
+    } as Record<string, string>
   },
   audit: {
     kicker: 'Audit',

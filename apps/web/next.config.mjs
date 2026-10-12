@@ -5,6 +5,8 @@ const noindex = [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }];
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
+  // The installation gate is gone: old links to the "still in development" page land on the home.
+  async redirects() { return [{ source: '/:locale(en|it)/development', destination: '/:locale', permanent: true }]; },
   async rewrites() { return [{ source: '/backend/:path*', destination: `${apiOrigin}/:path*` }]; },
   async headers() { return [
     { source: '/:path*', headers: [

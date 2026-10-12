@@ -230,3 +230,12 @@ export async function sendLeaderboard(guildId: string, actorId: string, period: 
     { actorId: id(actorId), period, offset }
   );
 }
+
+// Super console → instance status channel.
+export async function sendStatusTest() {
+  return api<{ ok: true } | { ok: false; error: string }>('/status/test', 'POST');
+}
+
+export async function refreshStatusChannel() {
+  return api<{ ok: true }>('/status/refresh', 'POST');
+}

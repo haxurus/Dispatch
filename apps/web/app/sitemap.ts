@@ -7,10 +7,14 @@ const absolute = (languages: Record<string, string>) =>
 
 /** Public, indexable pages only: one entry per language, each listing its hreflang siblings. */
 export default function sitemap(): MetadataRoute.Sitemap {
-  return LOCALES.map((locale) => ({
-    url: `${SITE_URL}/${locale}`,
-    changeFrequency: 'weekly',
-    priority: locale === 'en' ? 1 : 0.9,
-    alternates: { languages: absolute(languageAlternates()) }
-  }));
+  const pages = [
+    { path: '', changeFrequency: 'weekly' as const, priority: 1 },
+    { path: '/legal', changeFrequency: 'yearly' as const, priority: 0.3 }
+  ];
+  return pages.flatMap((page) => LOCALES.map((locale) => ({
+    url: `${SITE_URL}/${locale}${page.path}`,
+    changeFrequency: page.changeFrequency,
+    priority: locale === 'en' ? page.priority : Math.round(page.priority * 90) / 100,
+    alternates: { languages: absolute(languageAlternates(page.path)) }
+  })));
 }

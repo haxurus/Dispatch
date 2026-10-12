@@ -6,6 +6,7 @@ import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import { loadLeaderboardActivity, prisma, type Prisma } from '@dispatch/db';
 import {
+  GUILD_QUOTAS,
   LEADERBOARD_LIMITS,
   LEADERBOARD_PERIOD_KINDS,
   PANEL_BUTTON_STYLES,
@@ -18,9 +19,11 @@ import {
   isValidPanelEmoji,
   leaderboardPeriod,
   leaderboardTitle,
-  rankLeaderboard
+  rankLeaderboard,
+  type GuildQuota
 } from '@dispatch/shared';
 import { config } from './config.js';
+import { startGuildPurge } from './guild-purge.js';
 import {
   createSession,
   destroySession,
@@ -368,6 +371,12 @@ app.put('/api/guilds/:guildId/access-bindings/:roleId', async (request, reply) =
   if (!resources.roles.some((role) => role.id === roleId)) {
     return reply.code(404).send({ error: 'ROLE_NOT_FOUND' });
   }
+
+  const existingBinding = await prisma.panelRoleBinding.findUnique({
+    where: { guildId_discordRoleId: { guildId, discordRoleId: roleId } },
+    select: { id: true }
+  });
+  if (!existingBinding && await rejectOverQuota(reply, guildId, 'roleBindings')) return;
 
   const binding = await prisma.panelRoleBinding.upsert({
     where: {
@@ -992,6 +1001,30 @@ async function validateFormPanelResources(
 // Prisma Json input from validated, plain data.
 const jsonValue = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 
+/*
+ * Per-server limits of the hosted instance (GUILD_QUOTAS). Checked before a
+ * create; for upserts only when the row would be new, so editing an existing
+ * entry keeps working at the limit.
+ */
+const quotaCounters: Record<GuildQuota, (guildId: string, scopeId?: string) => Promise<number>> = {
+  categories: (guildId) => prisma.ticketCategory.count({ where: { guildId } }),
+  ticketPanels: (guildId) => prisma.ticketPanel.count({ where: { guildId } }),
+  forms: (guildId) => prisma.formDefinition.count({ where: { guildId } }),
+  formPanels: (guildId) => prisma.formPanel.count({ where: { guildId } }),
+  responseTemplates: (guildId) => prisma.responseTemplate.count({ where: { guildId } }),
+  blacklistEntries: (guildId) => prisma.guildBlacklist.count({ where: { guildId } }),
+  roleBindings: (guildId, formId) => formId
+    ? prisma.formPermissionBinding.count({ where: { guildId, formId } })
+    : prisma.panelRoleBinding.count({ where: { guildId } })
+};
+
+async function rejectOverQuota(reply: FastifyReply, guildId: string, quota: GuildQuota, scopeId?: string) {
+  const count = await quotaCounters[quota](guildId, scopeId);
+  if (count < GUILD_QUOTAS[quota]) return false;
+  reply.code(409).send({ error: 'QUOTA_EXCEEDED', quota, limit: GUILD_QUOTAS[quota] });
+  return true;
+}
+
 // Stored per-item overrides without the entry that is being removed.
 const withoutItem = (items: Prisma.JsonValue, id: string) =>
   Array.isArray(items)
@@ -1137,6 +1170,8 @@ app.post('/api/guilds/:guildId/categories', async (request, reply) => {
 
   const resourceError = await validateCategoryResources(guildId, parsed.data);
   if (resourceError) return reply.code(400).send({ error: resourceError });
+
+  if (await rejectOverQuota(reply, guildId, 'categories')) return;
 
   const { formFields, ...categoryData } = parsed.data;
   const category = await prisma.ticketCategory.create({
@@ -1293,6 +1328,8 @@ app.post('/api/guilds/:guildId/panels', async (request, reply) => {
   const resourceError = await validatePanelResources(guildId, parsed.data);
   if (resourceError) return reply.code(400).send({ error: resourceError });
 
+  if (await rejectOverQuota(reply, guildId, 'ticketPanels')) return;
+
   const panel = await prisma.ticketPanel.create({
     data: { guildId, ...parsed.data, items: jsonValue(parsed.data.items) }
   });
@@ -1410,6 +1447,7 @@ app.post('/api/guilds/:guildId/forms', async (request, reply) => {
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
   const resourceError = await validateFormResources(guildId, parsed.data);
   if (resourceError) return reply.code(400).send({ error: resourceError });
+  if (await rejectOverQuota(reply, guildId, 'forms')) return;
   const { questions, ...rest } = parsed.data;
   const form = await prisma.formDefinition.create({
     data: { guildId, ...rest, questions: JSON.parse(JSON.stringify(questions)) }
@@ -1522,6 +1560,11 @@ app.put('/api/guilds/:guildId/forms/:formId/permissions/:roleId', async (request
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
   const resources = await getGuildResources(guildId);
   if (!resources.roles.some((role) => role.id === roleId)) return reply.code(404).send({ error: 'ROLE_NOT_FOUND' });
+  const existingFormBinding = await prisma.formPermissionBinding.findUnique({
+    where: { formId_discordRoleId: { formId, discordRoleId: roleId } },
+    select: { id: true }
+  });
+  if (!existingFormBinding && await rejectOverQuota(reply, guildId, 'roleBindings', formId)) return;
   const binding = await prisma.formPermissionBinding.upsert({
     where: { formId_discordRoleId: { formId, discordRoleId: roleId } },
     create: { guildId, formId, discordRoleId: roleId, ...parsed.data },
@@ -1602,6 +1645,7 @@ app.post('/api/guilds/:guildId/form-panels', async (request, reply) => {
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY', details: parsed.error.flatten() });
   const resourceError = await validateFormPanelResources(guildId, parsed.data);
   if (resourceError) return reply.code(resourceError === 'FORM_NOT_FOUND' ? 404 : 400).send({ error: resourceError });
+  if (await rejectOverQuota(reply, guildId, 'formPanels')) return;
   const { items, ...data } = parsed.data;
   const panel = await prisma.formPanel.create({
     data: { guildId, ...data, formId: data.formIds[0]!, items: jsonValue(items) }
@@ -1739,6 +1783,12 @@ app.post('/api/guilds/:guildId/blacklist', async (request, reply) => {
   const expiresAt = parsed.data.expiresInHours
     ? new Date(Date.now() + parsed.data.expiresInHours * 3_600_000)
     : null;
+
+  const existingEntry = await prisma.guildBlacklist.findUnique({
+    where: { guildId_userId: { guildId, userId: parsed.data.userId } },
+    select: { id: true }
+  });
+  if (!existingEntry && await rejectOverQuota(reply, guildId, 'blacklistEntries')) return;
 
   const entry = await prisma.guildBlacklist.upsert({
     where: {
@@ -2175,6 +2225,8 @@ app.post('/api/guilds/:guildId/response-templates', async (request, reply) => {
     content: z.string().trim().min(1).max(2000)
   }).safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+
+  if (await rejectOverQuota(reply, guildId, 'responseTemplates')) return;
 
   try {
     const template = await prisma.responseTemplate.create({
@@ -2715,3 +2767,5 @@ await app.listen({
   host: '0.0.0.0',
   port: config.port
 });
+
+startGuildPurge(app.log);

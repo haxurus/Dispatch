@@ -50,6 +50,11 @@ model GuildSettings {
   leaderboardLastWeekly  String?
   leaderboardLastMonthly String?
 
+  // Set when the bot leaves the server, cleared when it is added again; the
+  // API purges the server's data once it is older than the post-removal
+  // retention (see apps/api/src/guild-purge.ts).
+  leftAt        DateTime?
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -68,6 +73,8 @@ model GuildSettings {
   formSubmissions FormSubmission[]
   formSessions FormSession[]
   formPermissions FormPermissionBinding[]
+
+  @@index([leftAt])
 }
 
 model TicketCategory {
@@ -548,4 +555,14 @@ model SuperAdminAudit {
 
   @@index([createdAt(sort: Desc)])
   @@index([subjectType, subjectId, createdAt(sort: Desc)])
+}
+
+// Instance status notices (single row, id = 1), set from the super console.
+// Read by the bot; written only by the API.
+model StatusChannel {
+  id              Int      @id @default(1)
+  guildId         String
+  channelId       String
+  updatedByUserId String
+  updatedAt       DateTime @updatedAt
 }

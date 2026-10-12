@@ -2,11 +2,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@dispatch/db';
 import { config } from './config.js';
-import { getSession, requireSession, type SessionInfo } from './auth.js';
+import { requireSession, type SessionInfo } from './auth.js';
 import {
   getBotGuilds,
   getBotStatus,
+  getGuildResources,
   leaveBotGuild,
+  refreshStatusChannel,
+  sendStatusTest,
   type BotGuild,
   type BotStatus
 } from './discord.js';
@@ -14,7 +17,7 @@ import { superAdminAudit, type SuperAuditSubject } from './super-audit.js';
 import { unprotectJson } from './security.js';
 
 /*
- * Super console: instance-owner endpoints plus the gated bot invite.
+ * Super console: instance-owner endpoints plus the public bot invite.
  *
  * Every route re-checks the super admin on the server (the UI flag from
  * /api/me only toggles a nav link). Mutations additionally go through a
@@ -24,6 +27,8 @@ import { unprotectJson } from './security.js';
  */
 
 const snowflake = z.string().regex(/^\d{17,20}$/);
+// Text and announcement channels: the only ones a status embed can go to.
+const SENDABLE_CHANNEL_TYPES = new Set([0, 5]);
 const blockParams = z.object({ kind: z.enum(['USER', 'GUILD']), subjectId: snowflake });
 const blockBody = z.object({ reason: z.string().trim().max(500).nullable().optional() });
 
@@ -121,39 +126,11 @@ async function audit(
 
 const errorStatus = (error: unknown) => (error as { status?: unknown }).status;
 
-async function isUserInstallBlocked(userId: string) {
-  const block = await prisma.installBlock.findUnique({
-    where: { kind_subjectId: { kind: 'USER', subjectId: userId } },
-    select: { id: true }
-  });
-  return Boolean(block);
-}
-
-async function canInstallBot(userId: string) {
-  // The super admin can never be blocked (PUT refuses it), so it can always install.
-  if (isSuperAdminUserId(userId)) return true;
-  if (!config.inviteAllowedUserIds.includes(userId)) return false;
-  return !(await isUserInstallBlocked(userId));
-}
-
 export function registerSuperRoutes(app: FastifyInstance) {
-  app.get('/bot/invite', async (request, reply) => {
-    const query = z.object({ lang: z.enum(['it', 'en']).optional() }).safeParse(request.query);
-    const lang = query.success ? (query.data.lang ?? 'it') : 'it';
-
-    const session = await getSession(request);
-    if (!session) {
-      // Sign in first; the OAuth callback lands on the dashboard, where the
-      // "Aggiungi a Discord" action is available again.
-      return reply.redirect(`${config.publicBaseUrl}/auth/discord`);
-    }
-
-    if (!(await canInstallBot(session.userId))) {
-      return reply.redirect(`${config.webUrl}/${lang}/development`);
-    }
-
-    return reply.redirect(botInstallUrl());
-  });
+  // The hosted bot is open to every server: the website's "Add" buttons land
+  // here and go straight to Discord's authorisation page. Blacklisted servers
+  // and installers are left by the bot on join (InstallBlock).
+  app.get('/bot/invite', async (_request, reply) => reply.redirect(botInstallUrl()));
 
   app.get('/api/super/overview', async (request, reply) => {
     const session = await requireSuperAdmin(request, reply);
@@ -184,7 +161,7 @@ export function registerSuperRoutes(app: FastifyInstance) {
       _count: { _all: true }
     });
 
-    const [openTickets, ticketsLast7Days, forms, guildBlacklistEntries, blocks, auditRows, settings] = await Promise.all([
+    const [openTickets, ticketsLast7Days, forms, guildBlacklistEntries, blocks, auditRows, settings, statusChannel] = await Promise.all([
       prisma.ticket.count({ where: { status: { in: OPEN_TICKET_STATUSES } } }),
       prisma.ticket.count({ where: { createdAt: { gte: since } } }),
       prisma.formDefinition.count(),
@@ -194,7 +171,11 @@ export function registerSuperRoutes(app: FastifyInstance) {
       prisma.guildSettings.findMany({
         where: { guildId: { in: guildIds } },
         select: { guildId: true, createdAt: true }
-      })
+      }),
+      // Until the VPS installer is re-run, the API role may lack the grant on
+      // the new table: the console must keep working without the status channel.
+      prisma.statusChannel.findUnique({ where: { id: 1 }, select: { guildId: true, channelId: true, updatedAt: true } })
+        .catch(() => null)
     ]);
 
     const openMap = new Map(openByGuild.map((row) => [row.guildId, row._count._all]));
@@ -220,6 +201,7 @@ export function registerSuperRoutes(app: FastifyInstance) {
         blocked: blockedGuilds.has(guild.id)
       })),
       blocks,
+      statusChannel,
       audit: auditRows.map((row) => {
         let details: unknown = null;
         try {
@@ -306,5 +288,72 @@ export function registerSuperRoutes(app: FastifyInstance) {
 
     await audit(request, session, 'guild.leave', 'GUILD', guildId, { outcome: 'ok' });
     return { ok: true, guildId };
+  });
+
+  // ------------------------------------------------------- status channel
+  // Where the bot posts instance notices: startup, servers added or removed,
+  // rejected installations.
+  app.get('/api/super/status-channel/channels', async (request, reply) => {
+    const session = await requireSuperAdmin(request, reply);
+    if (!session) return;
+    const parsed = z.object({ guildId: snowflake }).safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: 'INVALID_QUERY' });
+    try {
+      const resources = await getGuildResources(parsed.data.guildId);
+      return resources.channels
+        .filter((channel) => SENDABLE_CHANNEL_TYPES.has(channel.type))
+        .sort((a, b) => a.position - b.position)
+        .map((channel) => ({ id: channel.id, name: channel.name, type: channel.type }));
+    } catch (error) {
+      if (errorStatus(error) === 404) return reply.code(404).send({ error: 'GUILD_NOT_CONNECTED' });
+      request.log.warn({ err: error }, 'Unable to list status channel candidates');
+      return reply.code(502).send({ error: 'BOT_UNAVAILABLE' });
+    }
+  });
+
+  app.put('/api/super/status-channel', async (request, reply) => {
+    const session = await requireSuperMutation(request, reply);
+    if (!session) return;
+    const parsed = z.object({ guildId: snowflake, channelId: snowflake }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+    const { guildId, channelId } = parsed.data;
+    try {
+      const resources = await getGuildResources(guildId);
+      if (!resources.channels.some((channel) => channel.id === channelId && SENDABLE_CHANNEL_TYPES.has(channel.type))) {
+        return reply.code(400).send({ error: 'CHANNEL_NOT_FOUND' });
+      }
+    } catch (error) {
+      if (errorStatus(error) === 404) return reply.code(404).send({ error: 'GUILD_NOT_CONNECTED' });
+      request.log.warn({ err: error }, 'Unable to verify status channel');
+      return reply.code(502).send({ error: 'BOT_UNAVAILABLE' });
+    }
+    const row = await prisma.statusChannel.upsert({
+      where: { id: 1 },
+      update: { guildId, channelId, updatedByUserId: session.userId },
+      create: { id: 1, guildId, channelId, updatedByUserId: session.userId }
+    });
+    await refreshStatusChannel().catch(() => null);
+    await audit(request, session, 'status_channel.update', 'GUILD', guildId, { channelId });
+    return { ok: true, statusChannel: { guildId: row.guildId, channelId: row.channelId, updatedAt: row.updatedAt } };
+  });
+
+  app.delete('/api/super/status-channel', async (request, reply) => {
+    const session = await requireSuperMutation(request, reply);
+    if (!session) return;
+    const removed = await prisma.statusChannel.deleteMany({ where: { id: 1 } });
+    await refreshStatusChannel().catch(() => null);
+    await audit(request, session, 'status_channel.delete', null, null, { removed: removed.count });
+    return { ok: true };
+  });
+
+  app.post('/api/super/status-channel/test', async (request, reply) => {
+    const session = await requireSuperMutation(request, reply);
+    if (!session) return;
+    try {
+      return await sendStatusTest();
+    } catch (error) {
+      request.log.warn({ err: error }, 'Status test failed');
+      return reply.code(502).send({ error: 'BOT_UNAVAILABLE' });
+    }
   });
 }

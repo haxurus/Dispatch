@@ -30,7 +30,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript",
   "PanelSession", "PanelRoleBinding", "PanelAudit", "TicketNote", "ResponseTemplate", "TicketFeedback", "GuildBlacklist",
   "FormDefinition", "FormPanel", "FormSubmission", "FormSession", "FormPermissionBinding",
-  "InstallBlock", "SuperAdminAudit"
+  "InstallBlock", "SuperAdminAudit", "StatusChannel"
 TO dispatch_api;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript", "TicketFeedback", "TicketOpenAttempt", "TicketUserGuard"
@@ -42,7 +42,7 @@ GRANT SELECT ON TABLE "FormDefinition", "FormPermissionBinding" TO dispatch_bot;
 GRANT SELECT, UPDATE ON TABLE "FormPanel" TO dispatch_bot;
 GRANT SELECT, INSERT, UPDATE ON TABLE "FormSubmission" TO dispatch_bot;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "FormSession" TO dispatch_bot;
-GRANT SELECT ON TABLE "InstallBlock" TO dispatch_bot;
+GRANT SELECT ON TABLE "InstallBlock", "StatusChannel" TO dispatch_bot;
 REVOKE ALL ON TABLE "PanelSession", "PanelRoleBinding", "PanelAudit", "SuperAdminAudit" FROM dispatch_bot;
 ALTER ROLE dispatch_api NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
 ALTER ROLE dispatch_bot NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
