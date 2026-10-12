@@ -3,6 +3,8 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ResourcePicker, { CHANNEL_TYPES } from '../../../_components/ResourcePicker';
+import { useCopy } from '../../../_components/locale-context';
+import { format, type Locale } from '../../../i18n';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
 
@@ -66,6 +68,232 @@ type ResponseTemplate = {
   content: string;
 };
 
+const it = {
+  loadError: 'Impossibile caricare la configurazione ticket.',
+  escalationMissing: 'Indica dopo quanti minuti attivare l’escalation automatica, oppure disattivala.',
+  categoryErrors: {
+    QUOTA_EXCEEDED: 'Limite raggiunto per questo server: elimina un elemento esistente prima di crearne uno nuovo.'
+  } as Record<string, string>,
+  categorySaveFailed: 'Salvataggio categoria fallito: {code}',
+  categoryUpdated: 'Categoria aggiornata.',
+  categoryCreated: 'Categoria creata.',
+  categoryInUse: 'La categoria contiene già ticket e non può essere eliminata.',
+  categoryInUseByForm: 'La categoria è usata da uno o più form per il ticket automatico: aggiorna i form prima di eliminarla, oppure disabilitala.',
+  categoryDeleteFailed: 'Eliminazione categoria fallita: {code}',
+  categoryDeleted: 'Categoria eliminata.',
+  templateErrors: {
+    QUOTA_EXCEEDED: 'Limite raggiunto per questo server: elimina un elemento esistente prima di crearne uno nuovo.'
+  } as Record<string, string>,
+  templateCreateFailed: 'Creazione template fallita: {code}',
+  templateCreated: 'Template creato.',
+  templateDeleteFailed: 'Eliminazione template fallita: {code}',
+  templateDeleted: 'Template eliminato.',
+  title: 'Configurazione ticket',
+  adminRequired: 'Serve il livello Admin o Owner.',
+  back: 'Torna indietro',
+  eyebrow: 'Dispatch',
+  intro: 'Categorie, form, SLA, automazioni e risposte rapide.',
+  navManage: 'Gestisci ticket',
+  navPanels: 'Pannelli',
+  navForms: 'Form',
+  navSystem: 'Sistema',
+  navAnalytics: 'Analytics',
+  navBlacklist: 'Blacklist',
+  navPermissions: 'Permessi dashboard',
+  editCategoryTitle: 'Modifica categoria',
+  newCategoryTitle: 'Nuova categoria ticket',
+  cancel: 'Annulla',
+  name: 'Nome',
+  description: 'Descrizione',
+  discordCategory: 'Categoria Discord',
+  none: 'Nessuna',
+  closedCategory: 'Categoria Discord per i ticket chiusi',
+  closedCategoryPlaceholder: 'Nessuna (restano dove sono)',
+  closedCategoryHint: "Facoltativa. Alla chiusura il canale viene spostato qui mantenendo i propri permessi; alla riapertura torna nella categoria di origine. Una categoria Discord contiene al massimo 50 canali: se è piena il ticket resta dov'è.",
+  staffRoles: 'Ruoli staff',
+  maxOpenPerUser: 'Massimo ticket aperti per utente',
+  antiSpam: 'Anti-spam categoria',
+  openCooldown: 'Cooldown dopo apertura, secondi',
+  antiSpamWindow: 'Finestra tentativi, minuti',
+  antiSpamMaxAttempts: 'Tentativi massimi nella finestra',
+  slaAutomations: 'SLA e automazioni',
+  slaHelp: 'Lascia vuoto un campo per disattivare la relativa automazione.',
+  slaFirstResponse: 'SLA prima risposta, minuti',
+  slaResolution: 'SLA risoluzione, minuti',
+  emptyDisabledMasc: 'Vuoto = disattivato',
+  emptyDisabledFem: 'Vuoto = disattivata',
+  inactivityClose: 'Auto-chiusura inattività, ore',
+  inactivityWarning: 'Preavviso auto-chiusura, minuti',
+  emptyNoWarning: 'Vuoto = nessun preavviso',
+  reopenWindow: 'Finestra riapertura utente, ore',
+  emptyStaffOnly: 'Vuoto = solo lo staff',
+  escalationAuto: 'Escalation automatica',
+  escalationAfter: 'Escalation dopo, minuti dall’apertura',
+  escalationRoles: 'Ruoli escalation',
+  escalationRolesHint: 'Vuoto = vengono menzionati i ruoli staff della categoria.',
+  escalationOff: 'Disattivata: nessuna menzione automatica per i ticket aperti da troppo tempo.',
+  feedbackToggle: 'Richiedi feedback 1-5 stelle alla chiusura',
+  formLegend: 'Form iniziale, massimo 5 domande',
+  question: 'Domanda {number}',
+  remove: 'Rimuovi',
+  fieldLabel: 'Etichetta',
+  fieldType: 'Tipo',
+  typeShort: 'Risposta breve',
+  typeLong: 'Paragrafo',
+  typeSelect: 'Menu a scelta singola',
+  fieldPlaceholder: 'Placeholder',
+  fieldOptions: 'Opzioni, una per riga: Etichetta|valore',
+  required: 'Obbligatoria',
+  minChars: 'Min caratteri',
+  maxChars: 'Max caratteri',
+  addQuestion: 'Aggiungi domanda',
+  transcript: 'Transcript',
+  transcriptAuto: 'Genera automaticamente il transcript alla chiusura',
+  transcriptDm: "Invia il file HTML in DM all'utente che ha aperto il ticket",
+  transcriptChannel: 'Canale archivio transcript',
+  transcriptChannelPlaceholder: 'Non inviare in un canale',
+  transcriptRetain: 'Conserva una copia cifrata lato Dispatch fino alla retention/eliminazione del ticket',
+  transcriptRetainHelp: "Attivo: la copia resta disponibile e può essere scaricata più volte dalla dashboard. Disattivo: il transcript generato dalla dashboard è monouso e viene eliminato dal database al primo download; il transcript automatico viene creato solo in memoria per l'invio e non viene salvato.",
+  saving: 'Salvataggio...',
+  saveChanges: 'Salva modifiche',
+  createCategory: 'Crea categoria',
+  categoriesTitle: 'Categorie',
+  noDescription: 'Nessuna descrizione.',
+  limitsLine: 'Limite aperti: {max} · Cooldown: {cooldown}s · Tentativi: {attempts}/{window}m',
+  slaLine: 'SLA risposta: {first} · SLA risoluzione: {resolution} · Auto-close: {autoClose}',
+  automationLine: 'Escalation: {escalation} · Riapertura: {reopen} · Feedback: {feedback} · Transcript: {transcript}',
+  off: 'off',
+  on: 'on',
+  hoursShort: '{value}h',
+  minutesShort: '{value} min',
+  transcriptAutoShort: 'auto',
+  transcriptManual: 'manuale',
+  closedTickets: 'Ticket chiusi: {where}',
+  movedTo: 'spostati in {name}',
+  stayInCategory: 'restano nella categoria',
+  edit: 'Modifica',
+  delete: 'Elimina',
+  newTemplate: 'Nuovo template risposta',
+  message: 'Messaggio',
+  createTemplate: 'Crea template',
+  templatesTitle: 'Template disponibili',
+  noTemplates: 'Nessun template configurato.'
+};
+
+const en: typeof it = {
+  loadError: 'The ticket configuration could not be loaded.',
+  escalationMissing: 'Enter after how many minutes automatic escalation should trigger, or turn it off.',
+  categoryErrors: {
+    QUOTA_EXCEEDED: 'Limit reached for this server: delete an existing item before creating a new one.'
+  } as Record<string, string>,
+  categorySaveFailed: 'Saving the category failed: {code}',
+  categoryUpdated: 'Category updated.',
+  categoryCreated: 'Category created.',
+  categoryInUse: 'The category already contains tickets and cannot be deleted.',
+  categoryInUseByForm: 'The category is used by one or more forms for automatic tickets: update those forms before deleting it, or disable it.',
+  categoryDeleteFailed: 'Deleting the category failed: {code}',
+  categoryDeleted: 'Category deleted.',
+  templateErrors: {
+    QUOTA_EXCEEDED: 'Limit reached for this server: delete an existing item before creating a new one.'
+  } as Record<string, string>,
+  templateCreateFailed: 'Creating the canned reply failed: {code}',
+  templateCreated: 'Canned reply created.',
+  templateDeleteFailed: 'Deleting the canned reply failed: {code}',
+  templateDeleted: 'Canned reply deleted.',
+  title: 'Ticket setup',
+  adminRequired: 'The Admin or Owner level is required.',
+  back: 'Go back',
+  eyebrow: 'Dispatch',
+  intro: 'Categories, forms, SLAs, automations and canned replies.',
+  navManage: 'Manage tickets',
+  navPanels: 'Panels',
+  navForms: 'Forms',
+  navSystem: 'System',
+  navAnalytics: 'Analytics',
+  navBlacklist: 'Blacklist',
+  navPermissions: 'Dashboard permissions',
+  editCategoryTitle: 'Edit category',
+  newCategoryTitle: 'New ticket category',
+  cancel: 'Cancel',
+  name: 'Name',
+  description: 'Description',
+  discordCategory: 'Discord category',
+  none: 'None',
+  closedCategory: 'Discord category for closed tickets',
+  closedCategoryPlaceholder: 'None (they stay where they are)',
+  closedCategoryHint: 'Optional. On close the channel is moved here, keeping its own permissions; on reopen it goes back to its original category. A Discord category holds at most 50 channels: if it is full, the ticket stays where it is.',
+  staffRoles: 'Staff roles',
+  maxOpenPerUser: 'Maximum open tickets per user',
+  antiSpam: 'Category anti-spam',
+  openCooldown: 'Cooldown after opening, seconds',
+  antiSpamWindow: 'Attempt window, minutes',
+  antiSpamMaxAttempts: 'Maximum attempts in the window',
+  slaAutomations: 'SLA and automations',
+  slaHelp: 'Leave a field empty to turn off the related automation.',
+  slaFirstResponse: 'First response SLA, minutes',
+  slaResolution: 'Resolution SLA, minutes',
+  emptyDisabledMasc: 'Empty = off',
+  emptyDisabledFem: 'Empty = off',
+  inactivityClose: 'Auto-close on inactivity, hours',
+  inactivityWarning: 'Auto-close warning, minutes',
+  emptyNoWarning: 'Empty = no warning',
+  reopenWindow: 'User reopen window, hours',
+  emptyStaffOnly: 'Empty = staff only',
+  escalationAuto: 'Automatic escalation',
+  escalationAfter: 'Escalate after, minutes from opening',
+  escalationRoles: 'Escalation roles',
+  escalationRolesHint: 'Empty = the category staff roles are mentioned.',
+  escalationOff: 'Off: no automatic mention for tickets that have been open too long.',
+  feedbackToggle: 'Ask for 1-5 star feedback on close',
+  formLegend: 'Initial form, up to 5 questions',
+  question: 'Question {number}',
+  remove: 'Remove',
+  fieldLabel: 'Label',
+  fieldType: 'Type',
+  typeShort: 'Short answer',
+  typeLong: 'Paragraph',
+  typeSelect: 'Single-choice menu',
+  fieldPlaceholder: 'Placeholder',
+  fieldOptions: 'Options, one per line: Label|value',
+  required: 'Required',
+  minChars: 'Min characters',
+  maxChars: 'Max characters',
+  addQuestion: 'Add question',
+  transcript: 'Transcript',
+  transcriptAuto: 'Automatically generate the transcript on close',
+  transcriptDm: 'Send the HTML file by DM to the user who opened the ticket',
+  transcriptChannel: 'Transcript archive channel',
+  transcriptChannelPlaceholder: 'Do not send to a channel',
+  transcriptRetain: 'Keep an encrypted copy on Dispatch until the ticket’s retention/deletion',
+  transcriptRetainHelp: 'On: the copy stays available and can be downloaded multiple times from the dashboard. Off: a transcript generated from the dashboard is single-use and is deleted from the database on first download; the automatic transcript is created in memory only for delivery and is not saved.',
+  saving: 'Saving...',
+  saveChanges: 'Save changes',
+  createCategory: 'Create category',
+  categoriesTitle: 'Categories',
+  noDescription: 'No description.',
+  limitsLine: 'Open limit: {max} · Cooldown: {cooldown}s · Attempts: {attempts}/{window}m',
+  slaLine: 'Response SLA: {first} · Resolution SLA: {resolution} · Auto-close: {autoClose}',
+  automationLine: 'Escalation: {escalation} · Reopen: {reopen} · Feedback: {feedback} · Transcript: {transcript}',
+  off: 'off',
+  on: 'on',
+  hoursShort: '{value}h',
+  minutesShort: '{value} min',
+  transcriptAutoShort: 'auto',
+  transcriptManual: 'manual',
+  closedTickets: 'Closed tickets: {where}',
+  movedTo: 'moved to {name}',
+  stayInCategory: 'stay in the category',
+  edit: 'Edit',
+  delete: 'Delete',
+  newTemplate: 'New canned reply',
+  message: 'Message',
+  createTemplate: 'Create canned reply',
+  templatesTitle: 'Available canned replies',
+  noTemplates: 'No canned replies configured.'
+};
+
+const copy: Record<Locale, typeof it> = { it, en };
+
 const newCategory = () => ({
   name: '',
   description: '',
@@ -114,6 +342,7 @@ function parseFieldOptions(text: string): FormField['options'] {
 export default function TicketConfigurationPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
+  const c = useCopy(copy);
 
   const [access, setAccess] = useState<AccessLevel | null>(null);
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
@@ -147,7 +376,7 @@ export default function TicketConfigurationPage() {
     }
 
     if (![accessResponse, resourcesResponse, categoriesResponse, templatesResponse].every((response) => response.ok)) {
-      setError('Impossibile caricare la configurazione ticket.');
+      setError(c.loadError);
       return;
     }
 
@@ -214,7 +443,7 @@ export default function TicketConfigurationPage() {
 
     const { escalationEnabled, ...categoryData } = categoryForm;
     if (escalationEnabled && categoryData.escalationMinutes == null) {
-      setError('Indica dopo quanti minuti attivare l’escalation automatica, oppure disattivala.');
+      setError(c.escalationMissing);
       return;
     }
 
@@ -246,12 +475,13 @@ export default function TicketConfigurationPage() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setError(`Salvataggio categoria fallito: ${body.error ?? response.status}`);
+        const code = body.error ?? response.status;
+        setError(c.categoryErrors[String(code)] ?? format(c.categorySaveFailed, { code }));
         return;
       }
 
       resetCategory();
-      setNotice(editingCategoryId ? 'Categoria aggiornata.' : 'Categoria creata.');
+      setNotice(editingCategoryId ? c.categoryUpdated : c.categoryCreated);
       await load();
     } finally {
       setBusy('');
@@ -331,14 +561,14 @@ export default function TicketConfigurationPage() {
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         setError(body.error === 'CATEGORY_IN_USE'
-          ? 'La categoria contiene già ticket e non può essere eliminata.'
+          ? c.categoryInUse
           : body.error === 'CATEGORY_IN_USE_BY_FORM'
-            ? 'La categoria è usata da uno o più form per il ticket automatico: aggiorna i form prima di eliminarla, oppure disabilitala.'
-            : `Eliminazione categoria fallita: ${body.error ?? response.status}`);
+            ? c.categoryInUseByForm
+            : format(c.categoryDeleteFailed, { code: body.error ?? response.status }));
         return;
       }
 
-      setNotice('Categoria eliminata.');
+      setNotice(c.categoryDeleted);
       await load();
     } finally {
       setBusy('');
@@ -360,13 +590,14 @@ export default function TicketConfigurationPage() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setError(`Creazione template fallita: ${body.error ?? response.status}`);
+        const code = body.error ?? response.status;
+        setError(c.templateErrors[String(code)] ?? format(c.templateCreateFailed, { code }));
         return;
       }
 
       setTemplateName('');
       setTemplateContent('');
-      setNotice('Template creato.');
+      setNotice(c.templateCreated);
       await load();
     } finally {
       setBusy('');
@@ -385,11 +616,11 @@ export default function TicketConfigurationPage() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setError(`Eliminazione template fallita: ${body.error ?? response.status}`);
+        setError(format(c.templateDeleteFailed, { code: body.error ?? response.status }));
         return;
       }
 
-      setNotice('Template eliminato.');
+      setNotice(c.templateDeleted);
       await load();
     } finally {
       setBusy('');
@@ -400,9 +631,9 @@ export default function TicketConfigurationPage() {
     return (
       <main className="shell">
         <section className="card">
-          <h1>Configurazione ticket</h1>
-          <p>Serve il livello Admin o Owner.</p>
-          <a className="button secondary" href={`/dashboard/${guildId}`}>Torna indietro</a>
+          <h1>{c.title}</h1>
+          <p>{c.adminRequired}</p>
+          <a className="button secondary" href={`/dashboard/${guildId}`}>{c.back}</a>
         </section>
       </main>
     );
@@ -412,18 +643,18 @@ export default function TicketConfigurationPage() {
     <main className="shell">
       <div className="row">
         <div>
-          <p className="eyebrow">Dispatch</p>
-          <h1>Configurazione ticket</h1>
-          <p className="muted">Categorie, form, SLA, automazioni e risposte rapide.</p>
+          <p className="eyebrow">{c.eyebrow}</p>
+          <h1>{c.title}</h1>
+          <p className="muted">{c.intro}</p>
         </div>
         <div className="actions">
-          <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>Gestisci ticket</a>
-          <a className="button secondary" href={`/dashboard/${guildId}/panels`}>Pannelli</a>
-          <a className="button secondary" href={`/dashboard/${guildId}/forms`}>Form</a>
-          <a className="button secondary" href={`/dashboard/${guildId}/tickets/system`}>Sistema</a>
-          <a className="button secondary" href={`/dashboard/${guildId}/tickets/analytics`}>Analytics</a>
-          <a className="button secondary" href={`/dashboard/${guildId}/tickets/security`}>Blacklist</a>
-          <a className="button secondary" href={`/dashboard/${guildId}`}>Permessi dashboard</a>
+          <a className="button" href={`/dashboard/${guildId}/tickets/manage`}>{c.navManage}</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/panels`}>{c.navPanels}</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/forms`}>{c.navForms}</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets/system`}>{c.navSystem}</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets/analytics`}>{c.navAnalytics}</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets/security`}>{c.navBlacklist}</a>
+          <a className="button secondary" href={`/dashboard/${guildId}`}>{c.navPermissions}</a>
         </div>
       </div>
 
@@ -433,9 +664,9 @@ export default function TicketConfigurationPage() {
       <section>
         <form className="card form" onSubmit={saveCategory}>
           <div className="row">
-            <h2>{editingCategoryId ? 'Modifica categoria' : 'Nuova categoria ticket'}</h2>
+            <h2>{editingCategoryId ? c.editCategoryTitle : c.newCategoryTitle}</h2>
             {editingCategoryId && (
-              <button className="secondary" type="button" onClick={resetCategory}>Annulla</button>
+              <button className="secondary" type="button" onClick={resetCategory}>{c.cancel}</button>
             )}
           </div>
 
@@ -445,7 +676,7 @@ export default function TicketConfigurationPage() {
           <div className="editor-split">
             <div className="form">
               <label>
-                Nome
+                {c.name}
                 <input
                   required
                   maxLength={80}
@@ -455,7 +686,7 @@ export default function TicketConfigurationPage() {
               </label>
 
               <label>
-                Descrizione
+                {c.description}
                 <textarea
                   maxLength={500}
                   value={categoryForm.description}
@@ -464,28 +695,28 @@ export default function TicketConfigurationPage() {
               </label>
 
               <ResourcePicker
-                label="Categoria Discord"
+                label={c.discordCategory}
                 kind="channel"
                 channels={channels}
                 channelTypes={[CHANNEL_TYPES.category]}
-                placeholder="Nessuna"
+                placeholder={c.none}
                 value={categoryForm.discordCategoryId}
                 onChange={(discordCategoryId) => setCategoryForm({ ...categoryForm, discordCategoryId })}
               />
 
               <ResourcePicker
-                label="Categoria Discord per i ticket chiusi"
+                label={c.closedCategory}
                 kind="channel"
                 channels={channels}
                 channelTypes={[CHANNEL_TYPES.category]}
-                placeholder="Nessuna (restano dove sono)"
-                hint="Facoltativa. Alla chiusura il canale viene spostato qui mantenendo i propri permessi; alla riapertura torna nella categoria di origine. Una categoria Discord contiene al massimo 50 canali: se è piena il ticket resta dov'è."
+                placeholder={c.closedCategoryPlaceholder}
+                hint={c.closedCategoryHint}
                 value={categoryForm.closedParentCategoryId}
                 onChange={(closedParentCategoryId) => setCategoryForm({ ...categoryForm, closedParentCategoryId })}
               />
 
               <ResourcePicker
-                label="Ruoli staff"
+                label={c.staffRoles}
                 kind="role"
                 roles={roles}
                 guildId={guildId}
@@ -495,7 +726,7 @@ export default function TicketConfigurationPage() {
               />
 
               <label>
-                Massimo ticket aperti per utente
+                {c.maxOpenPerUser}
                 <input
                   type="number"
                   min={1}
@@ -509,10 +740,10 @@ export default function TicketConfigurationPage() {
               </label>
 
               <fieldset>
-                <legend>Anti-spam categoria</legend>
+                <legend>{c.antiSpam}</legend>
                 <div className="grid compact-grid">
                   <label>
-                    Cooldown dopo apertura, secondi
+                    {c.openCooldown}
                     <input
                       type="number"
                       min={0}
@@ -525,7 +756,7 @@ export default function TicketConfigurationPage() {
                     />
                   </label>
                   <label>
-                    Finestra tentativi, minuti
+                    {c.antiSpamWindow}
                     <input
                       type="number"
                       min={1}
@@ -538,7 +769,7 @@ export default function TicketConfigurationPage() {
                     />
                   </label>
                   <label>
-                    Tentativi massimi nella finestra
+                    {c.antiSpamMaxAttempts}
                     <input
                       type="number"
                       min={1}
@@ -554,16 +785,16 @@ export default function TicketConfigurationPage() {
               </fieldset>
 
               <fieldset>
-                <legend>SLA e automazioni</legend>
-                <p className="muted">Lascia vuoto un campo per disattivare la relativa automazione.</p>
+                <legend>{c.slaAutomations}</legend>
+                <p className="muted">{c.slaHelp}</p>
                 <div className="grid compact-grid">
                   <label>
-                    SLA prima risposta, minuti
+                    {c.slaFirstResponse}
                     <input
                       type="number"
                       min={1}
                       max={10080}
-                      placeholder="Vuoto = disattivato"
+                      placeholder={c.emptyDisabledMasc}
                       value={categoryForm.slaFirstResponseMinutes ?? ''}
                       onChange={(event) => setCategoryForm({
                         ...categoryForm,
@@ -572,12 +803,12 @@ export default function TicketConfigurationPage() {
                     />
                   </label>
                   <label>
-                    SLA risoluzione, minuti
+                    {c.slaResolution}
                     <input
                       type="number"
                       min={1}
                       max={43200}
-                      placeholder="Vuoto = disattivato"
+                      placeholder={c.emptyDisabledMasc}
                       value={categoryForm.slaResolutionMinutes ?? ''}
                       onChange={(event) => setCategoryForm({
                         ...categoryForm,
@@ -586,12 +817,12 @@ export default function TicketConfigurationPage() {
                     />
                   </label>
                   <label>
-                    Auto-chiusura inattività, ore
+                    {c.inactivityClose}
                     <input
                       type="number"
                       min={1}
                       max={720}
-                      placeholder="Vuoto = disattivata"
+                      placeholder={c.emptyDisabledFem}
                       value={categoryForm.inactivityCloseHours ?? ''}
                       onChange={(event) => setCategoryForm({
                         ...categoryForm,
@@ -600,12 +831,12 @@ export default function TicketConfigurationPage() {
                     />
                   </label>
                   <label>
-                    Preavviso auto-chiusura, minuti
+                    {c.inactivityWarning}
                     <input
                       type="number"
                       min={1}
                       max={1440}
-                      placeholder="Vuoto = nessun preavviso"
+                      placeholder={c.emptyNoWarning}
                       value={categoryForm.inactivityWarningMinutes ?? ''}
                       onChange={(event) => setCategoryForm({
                         ...categoryForm,
@@ -614,12 +845,12 @@ export default function TicketConfigurationPage() {
                     />
                   </label>
                   <label>
-                    Finestra riapertura utente, ore
+                    {c.reopenWindow}
                     <input
                       type="number"
                       min={1}
                       max={720}
-                      placeholder="Vuoto = solo lo staff"
+                      placeholder={c.emptyStaffOnly}
                       value={categoryForm.reopenWindowHours ?? ''}
                       onChange={(event) => setCategoryForm({
                         ...categoryForm,
@@ -641,13 +872,13 @@ export default function TicketConfigurationPage() {
                         : categoryForm.escalationMinutes
                     })}
                   />
-                  Escalation automatica
+                  {c.escalationAuto}
                 </label>
 
                 {categoryForm.escalationEnabled ? (
                   <div className="form">
                     <label>
-                      Escalation dopo, minuti dall’apertura
+                      {c.escalationAfter}
                       <input
                         type="number"
                         required
@@ -662,19 +893,19 @@ export default function TicketConfigurationPage() {
                     </label>
 
                     <ResourcePicker
-                      label="Ruoli escalation"
+                      label={c.escalationRoles}
                       kind="role"
                       roles={roles}
                       guildId={guildId}
                       multiple
-                      hint="Vuoto = vengono menzionati i ruoli staff della categoria."
+                      hint={c.escalationRolesHint}
                       value={categoryForm.escalationRoleIds}
                       onChange={(escalationRoleIds) => setCategoryForm({ ...categoryForm, escalationRoleIds })}
                     />
                   </div>
                 ) : (
                   <p className="muted">
-                    Disattivata: nessuna menzione automatica per i ticket aperti da troppo tempo.
+                    {c.escalationOff}
                   </p>
                 )}
 
@@ -687,23 +918,23 @@ export default function TicketConfigurationPage() {
                       feedbackEnabled: event.target.checked
                     })}
                   />
-                  Richiedi feedback 1-5 stelle alla chiusura
+                  {c.feedbackToggle}
                 </label>
               </fieldset>
 
             </div>
             <div className="form">
               <fieldset>
-                <legend>Form iniziale, massimo 5 domande</legend>
+                <legend>{c.formLegend}</legend>
                 <div className="form">
                   {categoryForm.formFields.map((field, index) => (
                     <div className="subcard form" key={field.id}>
                       <div className="row">
-                        <strong>Domanda {index + 1}</strong>
-                        <button className="danger" type="button" onClick={() => removeFormField(index)}>Rimuovi</button>
+                        <strong>{format(c.question, { number: index + 1 })}</strong>
+                        <button className="danger" type="button" onClick={() => removeFormField(index)}>{c.remove}</button>
                       </div>
                       <label>
-                        Etichetta
+                        {c.fieldLabel}
                         <input
                           required
                           maxLength={45}
@@ -712,7 +943,7 @@ export default function TicketConfigurationPage() {
                         />
                       </label>
                       <label>
-                        Tipo
+                        {c.fieldType}
                         <select
                           value={field.type}
                           onChange={(event) => {
@@ -724,13 +955,13 @@ export default function TicketConfigurationPage() {
                             });
                           }}
                         >
-                          <option value="SHORT_TEXT">Risposta breve</option>
-                          <option value="LONG_TEXT">Paragrafo</option>
-                          <option value="SINGLE_SELECT">Menu a scelta singola</option>
+                          <option value="SHORT_TEXT">{c.typeShort}</option>
+                          <option value="LONG_TEXT">{c.typeLong}</option>
+                          <option value="SINGLE_SELECT">{c.typeSelect}</option>
                         </select>
                       </label>
                       <label>
-                        Placeholder
+                        {c.fieldPlaceholder}
                         <input
                           maxLength={100}
                           value={field.placeholder ?? ''}
@@ -739,7 +970,7 @@ export default function TicketConfigurationPage() {
                       </label>
                       {field.type === 'SINGLE_SELECT' && (
                         <label>
-                          Opzioni, una per riga: Etichetta|valore
+                          {c.fieldOptions}
                           <textarea
                             value={optionDrafts[field.id] ?? formatFieldOptions(field.options)}
                             onChange={(event) => {
@@ -756,11 +987,11 @@ export default function TicketConfigurationPage() {
                           checked={field.required}
                           onChange={(event) => updateFormField(index, { required: event.target.checked })}
                         />
-                        Obbligatoria
+                        {c.required}
                       </label>
                       <div className="row">
                         <label>
-                          Min caratteri
+                          {c.minChars}
                           <input
                             type="number"
                             min={0}
@@ -770,7 +1001,7 @@ export default function TicketConfigurationPage() {
                           />
                         </label>
                         <label>
-                          Max caratteri
+                          {c.maxChars}
                           <input
                             type="number"
                             min={1}
@@ -788,13 +1019,13 @@ export default function TicketConfigurationPage() {
                     disabled={categoryForm.formFields.length >= 5}
                     onClick={addFormField}
                   >
-                    Aggiungi domanda
+                    {c.addQuestion}
                   </button>
                 </div>
               </fieldset>
 
               <fieldset>
-                <legend>Transcript</legend>
+                <legend>{c.transcript}</legend>
                 <label className="checkbox-row">
                   <input
                     type="checkbox"
@@ -804,7 +1035,7 @@ export default function TicketConfigurationPage() {
                       transcriptAutoGenerate: event.target.checked
                     })}
                   />
-                  Genera automaticamente il transcript alla chiusura
+                  {c.transcriptAuto}
                 </label>
 
                 {categoryForm.transcriptAutoGenerate && (
@@ -818,15 +1049,15 @@ export default function TicketConfigurationPage() {
                           transcriptSendToOpener: event.target.checked
                         })}
                       />
-                      Invia il file HTML in DM all'utente che ha aperto il ticket
+                      {c.transcriptDm}
                     </label>
 
                     <ResourcePicker
-                      label="Canale archivio transcript"
+                      label={c.transcriptChannel}
                       kind="channel"
                       channels={channels}
                       channelTypes={[CHANNEL_TYPES.text, CHANNEL_TYPES.announcement]}
-                      placeholder="Non inviare in un canale"
+                      placeholder={c.transcriptChannelPlaceholder}
                       value={categoryForm.transcriptChannelId}
                       onChange={(transcriptChannelId) => setCategoryForm({ ...categoryForm, transcriptChannelId })}
                     />
@@ -843,13 +1074,11 @@ export default function TicketConfigurationPage() {
                       transcriptRetain: event.target.checked
                     })}
                   />
-                  Conserva una copia cifrata lato Dispatch fino alla retention/eliminazione del ticket
+                  {c.transcriptRetain}
                 </label>
 
                 <p className="muted">
-                  Attivo: la copia resta disponibile e può essere scaricata più volte dalla dashboard.
-                  Disattivo: il transcript generato dalla dashboard è monouso e viene eliminato dal database al primo
-                  download; il transcript automatico viene creato solo in memoria per l'invio e non viene salvato.
+                  {c.transcriptRetainHelp}
                 </p>
               </fieldset>
 
@@ -857,41 +1086,57 @@ export default function TicketConfigurationPage() {
           </div>
 
           <button disabled={busy === 'category'} type="submit">
-            {busy === 'category' ? 'Salvataggio...' : editingCategoryId ? 'Salva modifiche' : 'Crea categoria'}
+            {busy === 'category' ? c.saving : editingCategoryId ? c.saveChanges : c.createCategory}
           </button>
         </form>
 
       </section>
 
       <section>
-        <h2>Categorie</h2>
+        <h2>{c.categoriesTitle}</h2>
         <div className="grid">
           {categories.map((category) => (
             <article className="card" key={category.id}>
               <h3>{category.name}</h3>
-              <p>{category.description || 'Nessuna descrizione.'}</p>
+              <p>{category.description || c.noDescription}</p>
               <p className="muted">
-                Limite aperti: {category.maxOpenPerUser} · Cooldown: {category.openCooldownSeconds}s · Tentativi: {category.antiSpamMaxAttempts}/{category.antiSpamWindowMinutes}m
+                {format(c.limitsLine, {
+                  max: category.maxOpenPerUser,
+                  cooldown: category.openCooldownSeconds,
+                  attempts: category.antiSpamMaxAttempts,
+                  window: category.antiSpamWindowMinutes
+                })}
               </p>
               <p className="muted">
-                SLA risposta: {category.slaFirstResponseMinutes ?? 'off'} · SLA risoluzione: {category.slaResolutionMinutes ?? 'off'} · Auto-close: {category.inactivityCloseHours ? `${category.inactivityCloseHours}h` : 'off'}
+                {format(c.slaLine, {
+                  first: category.slaFirstResponseMinutes ?? c.off,
+                  resolution: category.slaResolutionMinutes ?? c.off,
+                  autoClose: category.inactivityCloseHours ? format(c.hoursShort, { value: category.inactivityCloseHours }) : c.off
+                })}
               </p>
               <p className="muted">
-                Escalation: {category.escalationMinutes ? `${category.escalationMinutes} min` : 'off'} · Riapertura: {category.reopenWindowHours ? `${category.reopenWindowHours}h` : 'off'} · Feedback: {category.feedbackEnabled ? 'on' : 'off'} · Transcript: {category.transcriptAutoGenerate ? 'auto' : 'manuale'}
+                {format(c.automationLine, {
+                  escalation: category.escalationMinutes ? format(c.minutesShort, { value: category.escalationMinutes }) : c.off,
+                  reopen: category.reopenWindowHours ? format(c.hoursShort, { value: category.reopenWindowHours }) : c.off,
+                  feedback: category.feedbackEnabled ? c.on : c.off,
+                  transcript: category.transcriptAutoGenerate ? c.transcriptAutoShort : c.transcriptManual
+                })}
               </p>
               <p className="muted">
-                Ticket chiusi: {category.closedParentCategoryId
-                  ? `spostati in ${channels.find((channel) => channel.id === category.closedParentCategoryId)?.name ?? category.closedParentCategoryId}`
-                  : 'restano nella categoria'}
+                {format(c.closedTickets, {
+                  where: category.closedParentCategoryId
+                    ? format(c.movedTo, { name: channels.find((channel) => channel.id === category.closedParentCategoryId)?.name ?? category.closedParentCategoryId })
+                    : c.stayInCategory
+                })}
               </p>
               <div className="actions">
-                <button className="secondary" onClick={() => editCategory(category)}>Modifica</button>
+                <button className="secondary" onClick={() => editCategory(category)}>{c.edit}</button>
                 <button
                   className="danger"
                   disabled={busy === `category:${category.id}`}
                   onClick={() => void deleteCategory(category.id)}
                 >
-                  Elimina
+                  {c.delete}
                 </button>
               </div>
             </article>
@@ -901,9 +1146,9 @@ export default function TicketConfigurationPage() {
 
       <section className="grid settings-grid">
         <form className="card form" onSubmit={createTemplate}>
-          <h2>Nuovo template risposta</h2>
+          <h2>{c.newTemplate}</h2>
           <label>
-            Nome
+            {c.name}
             <input
               required
               maxLength={80}
@@ -912,7 +1157,7 @@ export default function TicketConfigurationPage() {
             />
           </label>
           <label>
-            Messaggio
+            {c.message}
             <textarea
               required
               maxLength={2000}
@@ -920,11 +1165,11 @@ export default function TicketConfigurationPage() {
               onChange={(event) => setTemplateContent(event.target.value)}
             />
           </label>
-          <button disabled={busy === 'template'} type="submit">Crea template</button>
+          <button disabled={busy === 'template'} type="submit">{c.createTemplate}</button>
         </form>
 
         <div className="card">
-          <h2>Template disponibili</h2>
+          <h2>{c.templatesTitle}</h2>
           <div className="member-list">
             {templates.map((template) => (
               <div className="list-item" key={template.id}>
@@ -935,13 +1180,13 @@ export default function TicketConfigurationPage() {
                     disabled={busy === `template:${template.id}`}
                     onClick={() => void deleteTemplate(template.id)}
                   >
-                    Elimina
+                    {c.delete}
                   </button>
                 </div>
                 <p className="muted preserve">{template.content}</p>
               </div>
             ))}
-            {templates.length === 0 && <p className="muted">Nessun template configurato.</p>}
+            {templates.length === 0 && <p className="muted">{c.noTemplates}</p>}
           </div>
         </div>
       </section>

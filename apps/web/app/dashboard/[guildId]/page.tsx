@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { Icon, type IconName } from '../../_components/Brand';
+import { useCopy } from '../../_components/locale-context';
+import { format, type Locale } from '../../i18n';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
 
@@ -26,14 +28,72 @@ const accessText: Record<AccessLevel, string> = {
   OWNER: 'Owner'
 };
 
-const sections = (guildId: string): Array<{ href: string; icon: IconName; title: string; text: string }> => [
-  { href: `/dashboard/${guildId}/tickets/manage`, icon: 'inbox', title: 'Ticket', text: 'Coda dei ticket, filtri per stato, dettaglio, note e azioni dello staff.' },
-  { href: `/dashboard/${guildId}/tickets`, icon: 'ticket', title: 'Configurazione ticket', text: 'Categorie, ruoli staff, questionari, SLA, automazioni e risposte rapide.' },
-  { href: `/dashboard/${guildId}/tickets/system`, icon: 'sliders', title: 'Sistema e menu', text: 'Anti-spam globale, retention di transcript e canali, menu principale.' },
-  { href: `/dashboard/${guildId}/panels`, icon: 'panel', title: 'Pannelli', text: 'Messaggi Discord per aprire ticket e form: menu o pulsanti, embed, emoji e anteprima.' },
-  { href: `/dashboard/${guildId}/forms`, icon: 'clipboard', title: 'Form', text: 'Candidature e questionari con domande validate e permessi per ruolo.' },
-  { href: `/dashboard/${guildId}/tickets/analytics`, icon: 'chart', title: 'Analytics', text: 'Volumi, tempi medi, violazioni SLA, feedback e attività dello staff.' },
-  { href: `/dashboard/${guildId}/tickets/security`, icon: 'ban', title: 'Blacklist', text: 'Utenti esclusi dall’apertura di nuovi ticket, con scadenza e motivo.' }
+type SectionKey = 'manage' | 'tickets' | 'system' | 'panels' | 'forms' | 'analytics' | 'security';
+
+const it = {
+  kicker: 'Server',
+  title: 'Panoramica',
+  intro: 'Scorciatoie alle sezioni del server e permessi di accesso alla dashboard.',
+  accessPill: 'Accesso',
+  loadError: 'Non hai accesso a questo server oppure Discord non è raggiungibile.',
+  saveError: 'Impossibile aggiornare il permesso.',
+  sections: {
+    manage: ['Ticket', 'Coda dei ticket, filtri per stato, dettaglio, note e azioni dello staff.'],
+    tickets: ['Configurazione ticket', 'Categorie, ruoli staff, questionari, SLA, automazioni e risposte rapide.'],
+    system: ['Sistema e menu', 'Lingua del bot, anti-spam globale, retention di transcript e canali, menu principale.'],
+    panels: ['Pannelli', 'Messaggi Discord per aprire ticket e form: menu o pulsanti, embed, emoji e anteprima.'],
+    forms: ['Form', 'Candidature e questionari con domande validate e permessi per ruolo.'],
+    analytics: ['Analytics', 'Volumi, tempi medi, violazioni SLA, feedback e attività dello staff.'],
+    security: ['Blacklist', 'Utenti esclusi dall’apertura di nuovi ticket, con scadenza e motivo.']
+  } as Record<SectionKey, [string, string]>,
+  accessKicker: 'Accessi',
+  accessTitle: 'Permessi dashboard per ruolo',
+  assigned: '{count} assegnati',
+  accessHelp: 'Owner, Administrator e Manage Server ottengono accesso automaticamente. Qui puoi assegnare accesso agli altri ruoli.',
+  accessFor: 'Accesso per {role}',
+  noAccess: 'Nessun accesso',
+  saving: 'Salvataggio…',
+  loadingRoles: 'Caricamento ruoli…',
+  readOnly: 'Accesso al pannello: {level}. La gestione dei permessi richiede il livello Admin o Owner.'
+};
+
+const en: typeof it = {
+  kicker: 'Server',
+  title: 'Overview',
+  intro: 'Shortcuts to the server sections and dashboard access permissions.',
+  accessPill: 'Access',
+  loadError: 'You do not have access to this server, or Discord cannot be reached.',
+  saveError: 'The permission could not be updated.',
+  sections: {
+    manage: ['Tickets', 'Ticket queue, status filters, details, notes and staff actions.'],
+    tickets: ['Ticket setup', 'Categories, staff roles, questionnaires, SLAs, automations and canned replies.'],
+    system: ['System and menu', 'Bot language, global anti-spam, transcript and channel retention, main menu.'],
+    panels: ['Panels', 'Discord messages that open tickets and forms: menu or buttons, embed, emoji and preview.'],
+    forms: ['Forms', 'Applications and questionnaires with validated questions and per-role permissions.'],
+    analytics: ['Analytics', 'Volumes, average times, SLA breaches, feedback and staff activity.'],
+    security: ['Blacklist', 'Users who cannot open new tickets, with expiry and reason.']
+  },
+  accessKicker: 'Access',
+  accessTitle: 'Dashboard permissions by role',
+  assigned: '{count} assigned',
+  accessHelp: 'Owner, Administrator and Manage Server get access automatically. Here you can grant access to other roles.',
+  accessFor: 'Access for {role}',
+  noAccess: 'No access',
+  saving: 'Saving…',
+  loadingRoles: 'Loading roles…',
+  readOnly: 'Dashboard access: {level}. Managing permissions requires the Admin or Owner level.'
+};
+
+const copy: Record<Locale, typeof it> = { it, en };
+
+const sections = (guildId: string): Array<{ key: SectionKey; href: string; icon: IconName }> => [
+  { key: 'manage', href: `/dashboard/${guildId}/tickets/manage`, icon: 'inbox' },
+  { key: 'tickets', href: `/dashboard/${guildId}/tickets`, icon: 'ticket' },
+  { key: 'system', href: `/dashboard/${guildId}/tickets/system`, icon: 'sliders' },
+  { key: 'panels', href: `/dashboard/${guildId}/panels`, icon: 'panel' },
+  { key: 'forms', href: `/dashboard/${guildId}/forms`, icon: 'clipboard' },
+  { key: 'analytics', href: `/dashboard/${guildId}/tickets/analytics`, icon: 'chart' },
+  { key: 'security', href: `/dashboard/${guildId}/tickets/security`, icon: 'ban' }
 ];
 
 const roleColor = (color: number | undefined) =>
@@ -42,6 +102,7 @@ const roleColor = (color: number | undefined) =>
 export default function GuildDashboardPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
+  const c = useCopy(copy);
 
   const [access, setAccess] = useState<AccessLevel | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -66,7 +127,7 @@ export default function GuildDashboardPage() {
     }
 
     if (!accessResponse.ok || !resourcesResponse.ok) {
-      setError('Non hai accesso a questo server oppure Discord non è raggiungibile.');
+      setError(c.loadError);
       return;
     }
 
@@ -101,7 +162,7 @@ export default function GuildDashboardPage() {
           });
 
       if (!response.ok) {
-        setError('Impossibile aggiornare il permesso.');
+        setError(c.saveError);
         return;
       }
 
@@ -118,38 +179,39 @@ export default function GuildDashboardPage() {
     <>
       <header className="workspace-head">
         <div>
-          <span className="kicker">Server</span>
-          <h1>Panoramica</h1>
-          <p>Scorciatoie alle sezioni del server e permessi di accesso alla dashboard.</p>
+          <span className="kicker">{c.kicker}</span>
+          <h1>{c.title}</h1>
+          <p>{c.intro}</p>
         </div>
-        <div className="live-pill"><i />Accesso {access ? accessText[access] : '…'}</div>
+        <div className="live-pill"><i />{c.accessPill} {access ? accessText[access] : '…'}</div>
       </header>
 
       <section className="content">
         {error && <div className="notice notice-error" role="alert">{error}</div>}
 
         <div className="quick-grid">
-          {sections(guildId).map((section) => (
-            <a className="quick-card" href={section.href} key={section.href}>
-              <span className="feature-icon"><Icon name={section.icon} size={18} /></span>
-              <strong>{section.title}</strong>
-              <span>{section.text}</span>
-            </a>
-          ))}
+          {sections(guildId).map((section) => {
+            const [title, text] = c.sections[section.key];
+            return (
+              <a className="quick-card" href={section.href} key={section.href}>
+                <span className="feature-icon"><Icon name={section.icon} size={18} /></span>
+                <strong>{title}</strong>
+                <span>{text}</span>
+              </a>
+            );
+          })}
         </div>
 
         {canAdmin ? (
           <div className="panel">
             <div className="panel-title">
               <div>
-                <p className="eyebrow">Accessi</p>
-                <h2>Permessi dashboard per ruolo</h2>
+                <p className="eyebrow">{c.accessKicker}</p>
+                <h2>{c.accessTitle}</h2>
               </div>
-              <span className="tag">{bindings.length} assegnati</span>
+              <span className="tag">{format(c.assigned, { count: bindings.length })}</span>
             </div>
-            <p>
-              Owner, Administrator e Manage Server ottengono accesso automaticamente. Qui puoi assegnare accesso agli altri ruoli.
-            </p>
+            <p>{c.accessHelp}</p>
 
             <div className="binding-list">
               {assignableRoles.map((role) => {
@@ -162,7 +224,7 @@ export default function GuildDashboardPage() {
                     </div>
 
                     <select
-                      aria-label={`Accesso per ${role.name}`}
+                      aria-label={format(c.accessFor, { role: role.name })}
                       value={current}
                       disabled={saving === role.id}
                       onChange={(event) => {
@@ -172,25 +234,21 @@ export default function GuildDashboardPage() {
                         );
                       }}
                     >
-                      <option value="">Nessun accesso</option>
+                      <option value="">{c.noAccess}</option>
                       <option value="VIEWER">Viewer</option>
                       <option value="MODERATOR">Moderator</option>
                       <option value="ADMIN">Admin</option>
                     </select>
 
-                    <em>{saving === role.id ? 'Salvataggio…' : ''}</em>
+                    <em>{saving === role.id ? c.saving : ''}</em>
                   </div>
                 );
               })}
-              {assignableRoles.length === 0 && !error && <div className="empty">Caricamento ruoli…</div>}
+              {assignableRoles.length === 0 && !error && <div className="empty">{c.loadingRoles}</div>}
             </div>
           </div>
         ) : (
-          access && (
-            <div className="notice">
-              Accesso al pannello: <strong>{accessText[access]}</strong>. La gestione dei permessi richiede il livello Admin o Owner.
-            </div>
-          )
+          access && <div className="notice">{format(c.readOnly, { level: accessText[access] })}</div>
         )}
       </section>
     </>

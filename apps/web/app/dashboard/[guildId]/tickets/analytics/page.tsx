@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ModeratorLeaderboard from '../../../../_components/ModeratorLeaderboard';
+import { useCopy } from '../../../../_components/locale-context';
+import { format, type Locale } from '../../../../i18n';
 
 type Analytics = {
   period: { days: number; since: string };
@@ -37,19 +39,100 @@ type Analytics = {
   daily: Array<{ date: string; created: number; closed: number }>;
 };
 
-function minutes(value: number | null) {
-  if (value === null) return 'n/d';
-  if (value < 60) return `${value.toFixed(1)} min`;
-  return `${(value / 60).toFixed(1)} h`;
+const it = {
+  notAvailable: 'n/d',
+  minutesUnit: '{value} min',
+  hoursUnit: '{value} h',
+  ratingValue: '{value}/5',
+  loadError: 'Non hai accesso agli analytics o il servizio non è disponibile.',
+  eyebrow: 'Dispatch Analytics',
+  title: 'Performance ticket',
+  intro: 'Volumi, SLA, feedback e attività staff.',
+  periodDays: '{days} giorni',
+  tickets: 'Ticket',
+  setup: 'Configurazione',
+  created: 'Creati',
+  closed: 'Chiusi',
+  currentOpen: 'Aperti adesso',
+  avgFirstResponse: 'Prima risposta media',
+  avgResolution: 'Risoluzione media',
+  avgRating: 'Rating medio',
+  feedback: 'Feedback',
+  firstResponseBreaches: 'Breach SLA risposta',
+  resolutionBreaches: 'Breach SLA risoluzione',
+  dailyTitle: 'Andamento giornaliero',
+  createdTitle: 'Creati: {count}',
+  closedTitle: 'Chiusi: {count}',
+  dailyLegend: 'Valori per riga: creati / chiusi.',
+  categories: 'Categorie',
+  category: 'Categoria',
+  rating: 'Rating',
+  staff: 'Staff',
+  userId: 'User ID',
+  claim: 'Claim',
+  handled: 'Gestiti',
+  handledTitle: 'Ticket chiusi attribuiti a chi li aveva in carico, altrimenti a chi li ha chiusi',
+  firstResponse: '1ª risposta',
+  replies: 'Reply',
+  assigned: 'Assegnati',
+  ratingTitle: 'Valutazioni attribuite al moderatore che gestiva il ticket'
+};
+
+const en: typeof it = {
+  notAvailable: 'n/a',
+  minutesUnit: '{value} min',
+  hoursUnit: '{value} h',
+  ratingValue: '{value}/5',
+  loadError: 'You do not have access to analytics, or the service is unavailable.',
+  eyebrow: 'Dispatch Analytics',
+  title: 'Ticket performance',
+  intro: 'Volumes, SLAs, feedback and staff activity.',
+  periodDays: '{days} days',
+  tickets: 'Tickets',
+  setup: 'Setup',
+  created: 'Created',
+  closed: 'Closed',
+  currentOpen: 'Open now',
+  avgFirstResponse: 'Average first response',
+  avgResolution: 'Average resolution',
+  avgRating: 'Average rating',
+  feedback: 'Feedback',
+  firstResponseBreaches: 'Response SLA breaches',
+  resolutionBreaches: 'Resolution SLA breaches',
+  dailyTitle: 'Daily trend',
+  createdTitle: 'Created: {count}',
+  closedTitle: 'Closed: {count}',
+  dailyLegend: 'Values per row: created / closed.',
+  categories: 'Categories',
+  category: 'Category',
+  rating: 'Rating',
+  staff: 'Staff',
+  userId: 'User ID',
+  claim: 'Claims',
+  handled: 'Handled',
+  handledTitle: 'Closed tickets credited to whoever had claimed them, otherwise to whoever closed them',
+  firstResponse: '1st response',
+  replies: 'Replies',
+  assigned: 'Assigned',
+  ratingTitle: 'Ratings credited to the moderator who was handling the ticket'
+};
+
+const copy: Record<Locale, typeof it> = { it, en };
+
+function minutes(value: number | null, c: typeof it) {
+  if (value === null) return c.notAvailable;
+  if (value < 60) return format(c.minutesUnit, { value: value.toFixed(1) });
+  return format(c.hoursUnit, { value: (value / 60).toFixed(1) });
 }
 
-function rating(value: number | null) {
-  return value === null ? 'n/d' : `${value.toFixed(2)}/5`;
+function rating(value: number | null, c: typeof it) {
+  return value === null ? c.notAvailable : format(c.ratingValue, { value: value.toFixed(2) });
 }
 
 export default function TicketAnalyticsPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
+  const c = useCopy(copy);
 
   const [days, setDays] = useState(30);
   const [data, setData] = useState<Analytics | null>(null);
@@ -72,7 +155,7 @@ export default function TicketAnalyticsPage() {
     }
 
     if (!response.ok) {
-      setError('Non hai accesso agli analytics o il servizio non è disponibile.');
+      setError(c.loadError);
       return;
     }
 
@@ -87,18 +170,18 @@ export default function TicketAnalyticsPage() {
     <main className="shell">
       <div className="row">
         <div>
-          <p className="eyebrow">Dispatch Analytics</p>
-          <h1>Performance ticket</h1>
-          <p className="muted">Volumi, SLA, feedback e attività staff.</p>
+          <p className="eyebrow">{c.eyebrow}</p>
+          <h1>{c.title}</h1>
+          <p className="muted">{c.intro}</p>
         </div>
         <div className="actions">
           <select value={days} onChange={(event) => setDays(Number(event.target.value))}>
-            <option value={7}>7 giorni</option>
-            <option value={30}>30 giorni</option>
-            <option value={90}>90 giorni</option>
+            <option value={7}>{format(c.periodDays, { days: 7 })}</option>
+            <option value={30}>{format(c.periodDays, { days: 30 })}</option>
+            <option value={90}>{format(c.periodDays, { days: 90 })}</option>
           </select>
-          <a className="button secondary" href={`/dashboard/${guildId}/tickets/manage`}>Ticket</a>
-          <a className="button secondary" href={`/dashboard/${guildId}/tickets`}>Configurazione</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets/manage`}>{c.tickets}</a>
+          <a className="button secondary" href={`/dashboard/${guildId}/tickets`}>{c.setup}</a>
         </div>
       </div>
 
@@ -107,19 +190,19 @@ export default function TicketAnalyticsPage() {
       {data && (
         <>
           <section className="stat-grid">
-            <article className="card stat-card"><span>Creati</span><strong>{data.summary.created}</strong></article>
-            <article className="card stat-card"><span>Chiusi</span><strong>{data.summary.closed}</strong></article>
-            <article className="card stat-card"><span>Aperti adesso</span><strong>{data.summary.currentOpen}</strong></article>
-            <article className="card stat-card"><span>Prima risposta media</span><strong>{minutes(data.summary.averageFirstResponseMinutes)}</strong></article>
-            <article className="card stat-card"><span>Risoluzione media</span><strong>{minutes(data.summary.averageResolutionMinutes)}</strong></article>
-            <article className="card stat-card"><span>Rating medio</span><strong>{rating(data.summary.averageRating)}</strong></article>
-            <article className="card stat-card"><span>Feedback</span><strong>{data.summary.feedbackCount}</strong></article>
-            <article className="card stat-card"><span>Breach SLA risposta</span><strong>{data.summary.firstResponseSlaBreaches}</strong></article>
-            <article className="card stat-card"><span>Breach SLA risoluzione</span><strong>{data.summary.resolutionSlaBreaches}</strong></article>
+            <article className="card stat-card"><span>{c.created}</span><strong>{data.summary.created}</strong></article>
+            <article className="card stat-card"><span>{c.closed}</span><strong>{data.summary.closed}</strong></article>
+            <article className="card stat-card"><span>{c.currentOpen}</span><strong>{data.summary.currentOpen}</strong></article>
+            <article className="card stat-card"><span>{c.avgFirstResponse}</span><strong>{minutes(data.summary.averageFirstResponseMinutes, c)}</strong></article>
+            <article className="card stat-card"><span>{c.avgResolution}</span><strong>{minutes(data.summary.averageResolutionMinutes, c)}</strong></article>
+            <article className="card stat-card"><span>{c.avgRating}</span><strong>{rating(data.summary.averageRating, c)}</strong></article>
+            <article className="card stat-card"><span>{c.feedback}</span><strong>{data.summary.feedbackCount}</strong></article>
+            <article className="card stat-card"><span>{c.firstResponseBreaches}</span><strong>{data.summary.firstResponseSlaBreaches}</strong></article>
+            <article className="card stat-card"><span>{c.resolutionBreaches}</span><strong>{data.summary.resolutionSlaBreaches}</strong></article>
           </section>
 
           <section className="card">
-            <h2>Andamento giornaliero</h2>
+            <h2>{c.dailyTitle}</h2>
             <div className="daily-chart">
               {data.daily.map((row) => (
                 <div className="daily-row" key={row.date}>
@@ -128,28 +211,28 @@ export default function TicketAnalyticsPage() {
                     <div
                       className="bar created"
                       style={{ width: row.created ? `${Math.max(2, (row.created / maxDaily) * 100)}%` : '0%' }}
-                      title={`Creati: ${row.created}`}
+                      title={format(c.createdTitle, { count: row.created })}
                     />
                     <div
                       className="bar closed"
                       style={{ width: row.closed ? `${Math.max(2, (row.closed / maxDaily) * 100)}%` : '0%' }}
-                      title={`Chiusi: ${row.closed}`}
+                      title={format(c.closedTitle, { count: row.closed })}
                     />
                   </div>
                   <span>{row.created}/{row.closed}</span>
                 </div>
               ))}
             </div>
-            <p className="muted">Valori per riga: creati / chiusi.</p>
+            <p className="muted">{c.dailyLegend}</p>
           </section>
 
           <section className="grid settings-grid">
             <article className="card">
-              <h2>Categorie</h2>
+              <h2>{c.categories}</h2>
               <div className="table-wrap">
                 <table>
                   <thead>
-                    <tr><th>Categoria</th><th>Creati</th><th>Chiusi</th><th>Rating</th></tr>
+                    <tr><th>{c.category}</th><th>{c.created}</th><th>{c.closed}</th><th>{c.rating}</th></tr>
                   </thead>
                   <tbody>
                     {data.categories.map((row) => (
@@ -157,7 +240,7 @@ export default function TicketAnalyticsPage() {
                         <td>{row.name}</td>
                         <td>{row.created}</td>
                         <td>{row.closed}</td>
-                        <td>{rating(row.averageRating)}</td>
+                        <td>{rating(row.averageRating, c)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -166,18 +249,18 @@ export default function TicketAnalyticsPage() {
             </article>
 
             <article className="card">
-              <h2>Staff</h2>
+              <h2>{c.staff}</h2>
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>User ID</th>
-                      <th>Claim</th>
-                      <th title="Ticket chiusi attribuiti a chi li aveva in carico, altrimenti a chi li ha chiusi">Gestiti</th>
-                      <th>1ª risposta</th>
-                      <th>Reply</th>
-                      <th>Assegnati</th>
-                      <th title="Valutazioni attribuite al moderatore che gestiva il ticket">Rating</th>
+                      <th>{c.userId}</th>
+                      <th>{c.claim}</th>
+                      <th title={c.handledTitle}>{c.handled}</th>
+                      <th>{c.firstResponse}</th>
+                      <th>{c.replies}</th>
+                      <th>{c.assigned}</th>
+                      <th title={c.ratingTitle}>{c.rating}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -189,7 +272,7 @@ export default function TicketAnalyticsPage() {
                         <td>{row.firstResponses}</td>
                         <td>{row.replies}</td>
                         <td>{row.currentlyAssigned}</td>
-                        <td>{rating(row.averageRating)}{row.feedbackCount ? ` (${row.feedbackCount})` : ''}</td>
+                        <td>{rating(row.averageRating, c)}{row.feedbackCount ? ` (${row.feedbackCount})` : ''}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -8,7 +8,7 @@ export type NavLink = { href: string; label: string; current?: boolean };
 
 /**
  * Sticky site header. The language switcher is shown only when both mirror
- * URLs are given (the dashboard and the super console are Italian-only).
+ * URLs are given; the dashboard and the super console use LocaleToggle instead.
  */
 export function SiteHeader({
   locale,

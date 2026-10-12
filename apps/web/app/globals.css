@@ -271,9 +271,9 @@ legend { padding: 0 8px; color: var(--accent); font: 500 .7rem var(--font-mono-s
 .site-nav-actions { display: flex; align-items: center; gap: 6px; }
 
 .language-switcher { display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--bg-raised); }
-.language-switcher a { min-width: 32px; padding: 4px 7px; border-radius: 4px; color: var(--muted); font: 500 .7rem/1.4 var(--font-mono-stack); text-align: center; letter-spacing: .05em; }
-.language-switcher a:hover { color: var(--text); }
-.language-switcher a.is-active { color: var(--accent-ink); background: var(--accent); }
+.language-switcher a, .language-switcher button { min-width: 32px; border: 0; cursor: pointer; background: transparent; padding: 4px 7px; border-radius: 4px; color: var(--muted); font: 500 .7rem/1.4 var(--font-mono-stack); text-align: center; letter-spacing: .05em; }
+.language-switcher a:hover, .language-switcher button:hover { color: var(--text); }
+.language-switcher a.is-active, .language-switcher button.is-active { color: var(--accent-ink); background: var(--accent); }
 .mobile-language-switcher { display: flex; gap: 6px; padding: 10px 0 2px; }
 .mobile-language-switcher a { flex: 1; padding: 9px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); color: var(--muted); font-size: .8rem; text-align: center; }
 .mobile-language-switcher a.is-active { color: var(--text); border-color: var(--accent-line); background: var(--accent-soft); }

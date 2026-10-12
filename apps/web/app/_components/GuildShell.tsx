@@ -3,6 +3,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import { Brand, Icon, type IconName } from './Brand';
+import { LocaleToggle, useCopy, useLocale } from './locale-context';
+import type { Locale } from '../i18n';
 import {
   SNOWFLAKE,
   accessLabel,
@@ -13,21 +15,58 @@ import {
   type Me
 } from './session';
 
-type NavItem = { key: string; href: string; label: string; icon: IconName };
+type NavKey = 'overview' | 'manage' | 'tickets' | 'system' | 'panels' | 'forms' | 'analytics' | 'security';
+type NavItem = { key: NavKey; href: string; icon: IconName };
 
 const TICKET_SUBPAGES = new Set(['manage', 'analytics', 'security', 'system']);
+
+const it = {
+  nav: {
+    overview: 'Panoramica',
+    manage: 'Ticket',
+    tickets: 'Configurazione ticket',
+    system: 'Sistema e menu',
+    panels: 'Pannelli',
+    forms: 'Form',
+    analytics: 'Analytics',
+    security: 'Blacklist'
+  } as Record<NavKey, string>,
+  allServers: 'Tutti i server',
+  sections: 'Sezioni del server',
+  yourAccess: 'Il tuo accesso',
+  logout: 'Esci'
+};
+
+const en: typeof it = {
+  nav: {
+    overview: 'Overview',
+    manage: 'Tickets',
+    tickets: 'Ticket setup',
+    system: 'System and menu',
+    panels: 'Panels',
+    forms: 'Forms',
+    analytics: 'Analytics',
+    security: 'Blacklist'
+  },
+  allServers: 'All servers',
+  sections: 'Server sections',
+  yourAccess: 'Your access',
+  logout: 'Log out'
+};
+
+const copy: Record<Locale, typeof it> = { it, en };
 
 function navItems(guildId: string): NavItem[] {
   const base = `/dashboard/${guildId}`;
   return [
-    { key: 'overview', href: base, label: 'Panoramica', icon: 'grid' },
-    { key: 'manage', href: `${base}/tickets/manage`, label: 'Ticket', icon: 'inbox' },
-    { key: 'tickets', href: `${base}/tickets`, label: 'Configurazione ticket', icon: 'ticket' },
-    { key: 'system', href: `${base}/tickets/system`, label: 'Sistema e menu', icon: 'sliders' },
-    { key: 'panels', href: `${base}/panels`, label: 'Pannelli', icon: 'panel' },
-    { key: 'forms', href: `${base}/forms`, label: 'Form', icon: 'clipboard' },
-    { key: 'analytics', href: `${base}/tickets/analytics`, label: 'Analytics', icon: 'chart' },
-    { key: 'security', href: `${base}/tickets/security`, label: 'Blacklist', icon: 'ban' }
+    { key: 'overview', href: base, icon: 'grid' },
+    { key: 'manage', href: `${base}/tickets/manage`, icon: 'inbox' },
+    { key: 'tickets', href: `${base}/tickets`, icon: 'ticket' },
+    { key: 'system', href: `${base}/tickets/system`, icon: 'sliders' },
+    { key: 'panels', href: `${base}/panels`, icon: 'panel' },
+    { key: 'forms', href: `${base}/forms`, icon: 'clipboard' },
+    { key: 'analytics', href: `${base}/tickets/analytics`, icon: 'chart' },
+    { key: 'security', href: `${base}/tickets/security`, icon: 'ban' }
   ];
 }
 
@@ -54,6 +93,8 @@ function activeKey(pathname: string, guildId: string) {
 export default function GuildShell({ children }: { children: ReactNode }) {
   const params = useParams<{ guildId: string }>();
   const pathname = usePathname() ?? '';
+  const locale = useLocale();
+  const c = useCopy(copy);
   const guildId = typeof params?.guildId === 'string' ? params.guildId : '';
   const validGuild = SNOWFLAKE.test(guildId);
 
@@ -91,8 +132,8 @@ export default function GuildShell({ children }: { children: ReactNode }) {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <Brand href="/it" className="sidebar-brand" />
-        <a className="sidebar-back" href="/dashboard"><Icon name="arrowLeft" size={14} />Tutti i server</a>
+        <Brand href={`/${locale}`} className="sidebar-brand" />
+        <a className="sidebar-back" href="/dashboard"><Icon name="arrowLeft" size={14} />{c.allServers}</a>
 
         <div className="sidebar-guild">
           {icon ? <img src={icon} alt="" /> : <div className="guild-placeholder">{initial(name)}</div>}
@@ -102,7 +143,7 @@ export default function GuildShell({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <nav className="sidebar-nav" aria-label="Sezioni del server">
+        <nav className="sidebar-nav" aria-label={c.sections}>
           {items.map((item) => (
             <a
               key={item.key}
@@ -110,14 +151,14 @@ export default function GuildShell({ children }: { children: ReactNode }) {
               className={current === item.key ? 'active' : undefined}
               aria-current={current === item.key ? 'page' : undefined}
             >
-              <Icon name={item.icon} size={17} />{item.label}
+              <Icon name={item.icon} size={17} />{c.nav[item.key]}
             </a>
           ))}
         </nav>
 
         <div className="sidebar-foot">
           {guild?.access && (
-            <div className="sidebar-access"><span>Il tuo accesso</span><strong className="mono">{accessLabel[guild.access]}</strong></div>
+            <div className="sidebar-access"><span>{c.yourAccess}</span><strong className="mono">{accessLabel[guild.access]}</strong></div>
           )}
           {me && (
             <div className="sidebar-user">
@@ -131,9 +172,10 @@ export default function GuildShell({ children }: { children: ReactNode }) {
             )}
             {me && (
               <button type="button" className="button button-sm button-ghost" onClick={() => void logout()}>
-                <Icon name="logout" size={14} />Esci
+                <Icon name="logout" size={14} />{c.logout}
               </button>
             )}
+            <LocaleToggle />
           </div>
         </div>
       </aside>

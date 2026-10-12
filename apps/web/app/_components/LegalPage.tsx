@@ -63,7 +63,7 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
             'We do not sell data and we do not use it for advertising or profiling. Data is shared only with the providers needed to run the service: Discord (the platform the bot works on), Cloudflare (network delivery and protection) and our hosting provider. Transcripts and logs are posted only in the channels configured by each server’s administrators, and to the ticket’s author when the server enables it.'
           ] },
           { title: 'Cookies', body: [
-            'We use only strictly necessary cookies: a session cookie when you sign in, and a short-lived cookie that protects the Discord sign-in. There are no analytics or advertising cookies.'
+            'We use only strictly necessary cookies: a session cookie when you sign in, a short-lived cookie that protects the Discord sign-in, and a cookie that remembers your language for one year. There are no analytics or advertising cookies.'
           ] },
           { title: 'Your rights', body: [
             `You can ask to access, correct or delete your data, to restrict or object to its processing and to receive a copy of it, by writing to ${CONTACT_EMAIL}. You have the right to lodge a complaint with your data protection authority (in Italy, the Garante per la protezione dei dati personali).`,
@@ -166,7 +166,7 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
             'Non vendiamo i dati e non li usiamo per pubblicità o profilazione. Li condividiamo solo con i fornitori necessari al servizio: Discord (la piattaforma su cui opera il bot), Cloudflare (distribuzione e protezione di rete) e il nostro fornitore di hosting. Transcript e log vengono pubblicati solo nei canali configurati dagli amministratori di ciascun server, e all’autore del ticket se il server lo abilita.'
           ] },
           { title: 'Cookie', body: [
-            'Usiamo solo cookie tecnici necessari: un cookie di sessione quando accedi e un cookie di breve durata che protegge l’accesso con Discord. Non ci sono cookie di statistica o pubblicità.'
+            'Usiamo solo cookie tecnici necessari: un cookie di sessione quando accedi, un cookie di breve durata che protegge l’accesso con Discord e un cookie che ricorda la lingua per un anno. Non ci sono cookie di statistica o pubblicità.'
           ] },
           { title: 'I tuoi diritti', body: [
             `Puoi chiedere di accedere ai tuoi dati, rettificarli o cancellarli, limitarne od opporti al trattamento e riceverne una copia scrivendo a ${CONTACT_EMAIL}. Hai il diritto di presentare reclamo all’autorità di controllo (in Italia, il Garante per la protezione dei dati personali).`,
