@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import { useCopy, useLocale } from '../../../../_components/locale-context';
+import { format, type Locale } from '../../../../i18n';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
 type Answer = { id: string; label: string; type: string; value: string | string[] };
@@ -12,22 +14,62 @@ type Submission = {
   createdAt: string; answers: Answer[]; unreadable?: boolean;
 };
 
+const it = {
+  yes: 'Sì',
+  no: 'No',
+  noAnswer: 'Nessuna risposta',
+  loadError: 'Non hai il permesso di vedere gli invii di questo form.',
+  confirmDelete: 'Eliminare definitivamente questo invio?',
+  deleteFailed: 'Eliminazione fallita: {code}',
+  deleted: 'Invio eliminato.',
+  title: 'Invii form',
+  recent: (count: number) => count === 1 ? '1 invio recente' : `${count} invii recenti`,
+  backToForms: 'Torna ai form',
+  unreadable: 'Risposte non leggibili (dati cifrati non decifrabili).',
+  discordReport: 'Report Discord',
+  ticket: 'Ticket',
+  deleteSubmission: 'Elimina invio',
+  empty: 'Nessun invio.'
+};
+
+const en: typeof it = {
+  yes: 'Yes',
+  no: 'No',
+  noAnswer: 'No answer',
+  loadError: 'You do not have permission to view the submissions of this form.',
+  confirmDelete: 'Permanently delete this submission?',
+  deleteFailed: 'Delete failed: {code}',
+  deleted: 'Submission deleted.',
+  title: 'Form submissions',
+  recent: (count: number) => count === 1 ? '1 recent submission' : `${count} recent submissions`,
+  backToForms: 'Back to forms',
+  unreadable: 'Answers unreadable (encrypted data could not be decrypted).',
+  discordReport: 'Discord report',
+  ticket: 'Ticket',
+  deleteSubmission: 'Delete submission',
+  empty: 'No submissions.'
+};
+
+const copy: Record<Locale, typeof it> = { it, en };
+
 // Local mirror of @dispatch/shared displayAnswer (the web app does not depend on it).
-function formatAnswer(answer: Answer, question?: Question) {
+function formatAnswer(answer: Answer, c: typeof it, question?: Question) {
   const labels = new Map((question?.options ?? []).map((option) => [option.value, option.label]));
   if (Array.isArray(answer.value)) {
-    return answer.value.map((value) => labels.get(value) ?? value).join(', ') || 'Nessuna risposta';
+    return answer.value.map((value) => labels.get(value) ?? value).join(', ') || c.noAnswer;
   }
   if (answer.type === 'BOOLEAN') {
-    return answer.value === 'true' ? 'Sì' : answer.value === 'false' ? 'No' : 'Nessuna risposta';
+    return answer.value === 'true' ? c.yes : answer.value === 'false' ? c.no : c.noAnswer;
   }
-  if (!answer.value) return 'Nessuna risposta';
+  if (!answer.value) return c.noAnswer;
   return labels.get(answer.value) ?? answer.value;
 }
 
 export default function FormSubmissionsPage() {
   const params = useParams<{ guildId: string; formId: string }>();
   const { guildId, formId } = params;
+  const c = useCopy(copy);
+  const locale = useLocale();
   const [items, setItems] = useState<Submission[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [access, setAccess] = useState<AccessLevel | null>(null);
@@ -49,7 +91,7 @@ export default function FormSubmissionsPage() {
         return;
       }
       if (!response.ok) {
-        setError('Non hai il permesso di vedere gli invii di questo form.');
+        setError(c.loadError);
         return;
       }
       setItems(await response.json());
@@ -62,17 +104,17 @@ export default function FormSubmissionsPage() {
   }, [guildId, formId]);
 
   const removeSubmission = async (id: string) => {
-    if (!window.confirm('Eliminare definitivamente questo invio?')) return;
+    if (!window.confirm(c.confirmDelete)) return;
     setBusy(id); setError(''); setNotice('');
     try {
       const response = await fetch(`/backend/api/guilds/${guildId}/forms/${formId}/submissions/${id}`, { method: 'DELETE' });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setError(`Eliminazione fallita: ${body.error ?? response.status}`);
+        setError(format(c.deleteFailed, { code: body.error ?? response.status }));
         return;
       }
       setItems((current) => current.filter((item) => item.id !== id));
-      setNotice('Invio eliminato.');
+      setNotice(c.deleted);
     } finally {
       setBusy('');
     }
@@ -82,29 +124,29 @@ export default function FormSubmissionsPage() {
 
   return <main className="shell">
     <div className="row">
-      <div><p className="eyebrow">Dispatch</p><h1>Invii form</h1><p className="muted">{items.length} invii recenti</p></div>
-      <div className="actions"><a className="button secondary" href={`/dashboard/${guildId}/forms`}>Torna ai form</a></div>
+      <div><p className="eyebrow">Dispatch</p><h1>{c.title}</h1><p className="muted">{c.recent(items.length)}</p></div>
+      <div className="actions"><a className="button secondary" href={`/dashboard/${guildId}/forms`}>{c.backToForms}</a></div>
     </div>
     {error && <p className="error">{error}</p>}
     {notice && <p className="success">{notice}</p>}
     <section className="ticket-list">
       {items.map((submission) => <article className="card" key={submission.id}>
         <div className="row">
-          <div><strong>{submission.username}</strong><div className="muted">{submission.userId} · {new Date(submission.createdAt).toLocaleString('it-IT')}</div></div>
+          <div><strong>{submission.username}</strong><div className="muted">{submission.userId} · {new Date(submission.createdAt).toLocaleString(locale === 'it' ? 'it-IT' : 'en-US')}</div></div>
           <span className="badge">{submission.status}</span>
         </div>
         {submission.unreadable
-          ? <p className="error">Risposte non leggibili (dati cifrati non decifrabili).</p>
+          ? <p className="error">{c.unreadable}</p>
           : <div className="member-list">
-            {submission.answers.map((answer) => <div className="list-item" key={answer.id}><strong>{answer.label}</strong><p className="preserve">{formatAnswer(answer, questionById.get(answer.id))}</p></div>)}
+            {submission.answers.map((answer) => <div className="list-item" key={answer.id}><strong>{answer.label}</strong><p className="preserve">{formatAnswer(answer, c, questionById.get(answer.id))}</p></div>)}
           </div>}
         <div className="actions">
-          {submission.reportChannelId && <a className="button secondary" target="_blank" rel="noreferrer" href={`https://discord.com/channels/${guildId}/${submission.reportChannelId}/${submission.reportMessageId ?? ''}`}>Report Discord</a>}
-          {submission.ticketChannelId && <a className="button secondary" target="_blank" rel="noreferrer" href={`https://discord.com/channels/${guildId}/${submission.ticketChannelId}`}>Ticket</a>}
-          {isAdmin && <button className="danger" disabled={busy === submission.id} onClick={() => void removeSubmission(submission.id)}>Elimina invio</button>}
+          {submission.reportChannelId && <a className="button secondary" target="_blank" rel="noreferrer" href={`https://discord.com/channels/${guildId}/${submission.reportChannelId}/${submission.reportMessageId ?? ''}`}>{c.discordReport}</a>}
+          {submission.ticketChannelId && <a className="button secondary" target="_blank" rel="noreferrer" href={`https://discord.com/channels/${guildId}/${submission.ticketChannelId}`}>{c.ticket}</a>}
+          {isAdmin && <button className="danger" disabled={busy === submission.id} onClick={() => void removeSubmission(submission.id)}>{c.deleteSubmission}</button>}
         </div>
       </article>)}
-      {!error && !items.length && <div className="card muted">Nessun invio.</div>}
+      {!error && !items.length && <div className="card muted">{c.empty}</div>}
     </section>
   </main>;
 }

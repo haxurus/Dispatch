@@ -19,6 +19,9 @@ export const CONTACT_EMAIL = 'haxurus@icloud.com';
 /** Locale request header set by middleware.ts, read by the root layout for <html lang>. */
 export const LOCALE_HEADER = 'x-dispatch-locale';
 
+/** Remembered language (public /en and /it pages, dashboard toggle). */
+export const LOCALE_COOKIE = 'dispatch_locale';
+
 /** English is the international default (x-default) for the public site. */
 export const DEFAULT_PUBLIC_LOCALE: Locale = 'en';
 

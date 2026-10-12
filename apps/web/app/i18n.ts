@@ -3,8 +3,9 @@ import type { IconName } from './_components/Brand';
 /*
  * UI copy. Italian is the source language. The public site is served in both
  * languages under /it and /en; the dashboard (/dashboard/**) and the super
- * console (/super) are Italian-only, but their chrome strings live here too so
- * a future /en mirror only needs routes.
+ * console (/super) pick the language from the dispatch_locale cookie (see
+ * middleware.ts and _components/locale-context.tsx); page copy lives next to
+ * each page.
  */
 
 export type Locale = 'it' | 'en';
