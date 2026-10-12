@@ -1,63 +1,79 @@
-# Deploy di produzione
+# GitHub -> VPS deployment
 
-Dispatch segue il modello di Sentinel: le immagini vengono costruite su GitHub Actions, pubblicate su GHCR e installate sulla VPS tramite digest SHA-256 immutabili, attraverso un account SSH ristretto. Sulla VPS non si esegue nessuna build e nessun `git pull` come root. I segreti applicativi restano sulla VPS e non transitano mai da GitHub.
+This procedure is intended for a production VPS with Docker Compose and Nginx Proxy Manager (NPM) already installed. Dispatch does not publish the database, Redis, the API or the dashboard on host ports.
+
+Reference example used throughout this guide: domain `dispatch.haxurus.com`, a Debian 13 VPS (VPS01) with Docker CE, NPM on the external Docker network `proxy_net`, Cloudflare in proxy mode with SSL **Full (strict)**.
+
+## Deployment model
+
+Images are built by GitHub Actions, published to GHCR and installed on the VPS by immutable SHA-256 digest through a restricted SSH account. Nothing is built and nothing is `git pull`ed as root on the VPS. Application secrets stay on the VPS and never pass through GitHub.
 
 ```text
-push main ─> Ticket protection tests ─> build runtime + migrate (SBOM, provenance) ─> GHCR
+push main ─> CI (Typecheck, tests and migrations · Compose and container images)
+          ─> build runtime + migrate (SBOM, provenance) ─> GHCR
           ─> SSH dispatch-deploy (forced command) ─> sudo dispatch-deploy deploy APP@sha256 MIGRATE@sha256
-             ─> backup DB ─> pull per digest ─> migrate ─> secure-db (grant) ─> api/bot/web/edge ─> healthcheck
-             ─> rollback automatico applicativo se i healthcheck falliscono
+             ─> DB backup ─> pull by digest ─> migrate ─> secure-db (grants) ─> api/bot/web/edge ─> health checks
+             ─> automatic application rollback if the health checks fail
 ```
 
-Esempio di riferimento in questa guida: dominio `dispatch.haxurus.com`, VPS Debian 13 con Docker CE, Nginx Proxy Manager (NPM) sulla rete esterna `proxy_net`, Cloudflare in modalità proxy con SSL Full (strict).
+GitHub Actions builds two images, both published to `ghcr.io/haxurus/dispatch`:
 
-## 1. Prerequisiti
+- `runtime`: API, bot and web;
+- `migrate`: one-shot image for `prisma migrate deploy`.
 
-### Applicazione Discord
+The VPS receives only **immutable digest references** (`ghcr.io/haxurus/dispatch@sha256:<64 hex>`).
 
-Nel Developer Portal, applicazione `Dispatch`:
+SSH deployment uses the dedicated `dispatch-deploy` user. Its `authorized_keys` entry uses a forced command and `restrict`, so it cannot open a shell, forward ports or run arbitrary commands.
 
-- **Bot > Privileged Gateway Intents**: Server Members ON, Message Content ON (necessario per transcript completi), Presence OFF.
-- **OAuth2 > Redirects**: `https://dispatch.haxurus.com/backend/auth/discord/callback`. Gli scope usati dal pannello sono `identify` e `guilds`. Il link di installazione generato da `/backend/bot/invite` (scope `bot applications.commands`, permessi elencati sotto, bitfield `361045814288`) non usa `redirect_uri`: non serve registrare redirect aggiuntivi, il redirect esistente resta invariato.
-- **Installazione**: Guild Install con i soli permessi View Channels, Manage Channels, Manage Roles, Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History, Manage Threads, Create Private Threads, Send Messages in Threads. Non concedere Administrator, Manage Server, Manage Webhooks, Mention Everyone, Kick/Ban o Manage Nicknames.
-- **Installazioni esistenti (thread staff)**: i tre permessi dei thread servono al pulsante **Thread staff** dei ticket (thread privato riservato allo staff, vedi [TICKET_PROTECTIONS.md](TICKET_PROTECTIONS.md#thread-staff-privati)). Discord consente al bot di concedere negli override dei canali solo i permessi che possiede: nei server dove il bot è già presente aggiungere **Gestisci thread**, **Crea thread privati** e **Invia messaggi nei thread** al ruolo del bot (Impostazioni server > Ruoli > ruolo `Dispatch`) oppure reinvitarlo con il nuovo link `/backend/bot/invite`, che aggiorna i permessi del ruolo gestito. Finché mancano, i nuovi ticket vengono creati come prima (senza permessi di thread) e il pulsante risponde «Il bot non ha i permessi per creare thread privati: aggiorna i permessi del suo ruolo»; il resto del sistema ticket non cambia.
-- Annotare l'**Application ID**, che serve per `DISCORD_CLIENT_ID`. Bot Token e Client Secret si scrivono **solo** nei file secret sulla VPS (sezione 3).
+### Prerequisites
 
-### DNS e Cloudflare
+**Discord application.** In the Developer Portal, application `Dispatch`:
 
-- Record `A` `dispatch` verso l'IPv4 della VPS, **Proxied**, TTL Auto. Nessun `AAAA` diretto.
-- SSL/TLS **Full (strict)**: NPM deve servire un certificato valido per `dispatch.haxurus.com`.
+- **Bot > Privileged Gateway Intents:** Server Members on, Message Content on (needed for complete transcripts), Presence off.
+- **Installation:** Guild Install with only View Channels, Manage Channels, Manage Roles, Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History, Manage Threads, Create Private Threads, Send Messages in Threads. Do not grant Administrator, Manage Server, Manage Webhooks, Mention Everyone, Kick/Ban or Manage Nicknames. The install link generated by `/backend/bot/invite` (scopes `bot applications.commands`, bitfield `361045814288`, see `INSTALL_PERMISSIONS` in `apps/api/src/super.ts`) requests exactly these.
+- **Existing installations (staff threads):** the three thread permissions are needed by the **Staff thread** button of tickets (a private thread reserved to staff, see [TICKET_PROTECTIONS.md](TICKET_PROTECTIONS.md#private-staff-threads)). Discord only lets the bot grant in channel overwrites the permissions it has itself: on servers where the bot is already present, add **Manage Threads**, **Create Private Threads** and **Send Messages in Threads** to the bot's role (Server Settings > Roles > role `Dispatch`), or re-invite it with the current `/backend/bot/invite` link, which updates the managed role's permissions. Until then, new tickets are created as before (without thread permissions) and the button replies that the bot cannot create private threads and its role permissions must be updated; the rest of the ticket system is unchanged.
+- **Public Bot** enabled (see [Installation access and status notifications](#installation-access-and-status-notifications)).
+- Note the **Application ID**: it is `DISCORD_CLIENT_ID`. The bot token and the client secret are written **only** into the secret files on the VPS (section 3).
 
-### VPS
+**DNS and Cloudflare.**
 
-- Docker CE con plugin Compose, `openssl`, `sudo`/`visudo`.
-- Rete Docker esterna `proxy_net` già esistente, condivisa con NPM.
-- `user007` resta fuori dal gruppo `docker`: tutti i comandi usano `sudo`.
+- `A` record `dispatch` pointing to the VPS IPv4 address, **Proxied**, TTL Auto. No direct `AAAA` record.
+- SSL/TLS **Full (strict)**: NPM must serve a valid certificate for `dispatch.haxurus.com`.
 
-### Accesso a GHCR
+**VPS.**
 
-La VPS scarica `ghcr.io/haxurus/dispatch@sha256:...`. Le soluzioni sono due:
+- Docker CE with the Compose plugin, `openssl`, `sudo`/`visudo`, `flock` (util-linux).
+- The external Docker network `proxy_net` already exists and is shared with NPM.
+- The administrative user (`user007` on VPS01) stays outside the `docker` group: every command uses `sudo`.
 
-- impostare il package GHCR `dispatch` come **public** (il repository è già pubblico e le immagini non contengono segreti); oppure
-- tenerlo privato ed eseguire una sola volta, come root, `sudo docker login ghcr.io -u haxurus` con un token *classic* che ha solo lo scope `read:packages`.
+**GHCR access:** see section 7. Without it, the first `docker pull` of the deployment fails.
 
-Senza una delle due, il primo `docker pull` del deploy fallisce.
+## 1. Generate the GitHub Actions key
 
-## 2. Installazione sulla VPS
-
-### Chiave di deploy dedicata
-
-Su una macchina fidata, mai sulla VPS e senza riusare la chiave admin:
+On a trusted machine, never on the VPS:
 
 ```bash
-ssh-keygen -t ed25519 -a 64 -f ~/.ssh/dispatch_deploy -C "dispatch-deploy"
+ssh-keygen -t ed25519 -a 100 -f ~/.ssh/dispatch_deploy -C "dispatch-github-actions"
 ```
 
-La chiave privata `dispatch_deploy` andrà nel secret GitHub `VPS_DEPLOY_KEY`. La pubblica `dispatch_deploy.pub` va copiata sulla VPS e deve contenere **una sola riga**: l'installer rifiuta file con più chiavi.
+This creates:
 
-### AllowUsers
+- `dispatch_deploy` - **private**, to be stored only in the GitHub secret `VPS_DEPLOY_KEY`;
+- `dispatch_deploy.pub` - public, to be copied to the VPS for installation.
 
-Se `sshd` usa `AllowUsers`, aggiungere l'utente di deploy **prima** dell'installer, che altrimenti si interrompe. Su VPS01 la riga è in `/etc/ssh/sshd_config.d/00-hardening.conf` e contiene già `user007` e gli utenti di deploy degli altri progetti (es. `sentinel-deploy`, `muse-deploy`): **aggiungere** `dispatch-deploy` in fondo alla riga esistente, senza sostituirla.
+The public key file must contain **exactly one line** and an Ed25519 key: the installer rejects files with several keys or other key types. Do not reuse your personal administrative SSH key.
+
+## 2. Install the infrastructure on the VPS
+
+### SSH preflight when using `AllowUsers`
+
+If `sshd` uses `AllowUsers`, add the deploy user **before** running the installer, which otherwise stops. On VPS01 the line is in `/etc/ssh/sshd_config.d/00-hardening.conf` and already contains `user007` and the deploy users of other projects (for example `sentinel-deploy`, `muse-deploy`): **append** `dispatch-deploy` to the existing line, do not replace it. For example:
+
+```text
+AllowUsers user007 sentinel-deploy muse-deploy dispatch-deploy
+```
+
+Then validate and reload SSH without closing the current administrative session:
 
 ```bash
 sudo sshd -T | grep '^allowusers'
@@ -65,11 +81,11 @@ sudoedit /etc/ssh/sshd_config.d/00-hardening.conf
 sudo sshd -t && sudo systemctl reload ssh && sudo sshd -T | grep '^allowusers'
 ```
 
-Prima di chiudere la sessione corrente, verificare da un secondo terminale che `user007` riesca ancora ad accedere.
+Before closing the current session, check from a second terminal that `user007` can still log in.
 
 ### Installer
 
-Da un clone temporaneo del repository sulla VPS (come Sentinel), allineato a `main`:
+From a temporary clone of the repository on the VPS, at `main`:
 
 ```bash
 git clone --branch main https://github.com/haxurus/Dispatch.git /tmp/Dispatch
@@ -77,221 +93,210 @@ cd /tmp/Dispatch
 sudo ./ops/install-vps.sh ~/dispatch_deploy.pub
 ```
 
-Per aggiornare in seguito i file infrastrutturali: `cd /tmp/Dispatch && git pull --ff-only && sudo ./ops/install-vps.sh` (senza chiave resta quella installata).
+The installer:
 
-L'installer:
+- creates the system user `dispatch-deploy`. Its home `/var/lib/dispatch-deploy`, `.ssh` and `authorized_keys` are owned by root, so the account cannot remove the forced command;
+- writes `authorized_keys` with `restrict,command="/usr/local/libexec/dispatch-deploy-entrypoint"`;
+- installs `/etc/sudoers.d/dispatch-deploy`, which allows only `/usr/local/sbin/dispatch-deploy`, without `setenv`;
+- installs the root-owned `/usr/local/sbin/dispatch-deploy` and `/usr/local/libexec/dispatch-deploy-entrypoint`;
+- creates `/srv/docker/dispatch/` (root, `700`) with `docker-compose.yml`, `runtime/nginx.conf`, `runtime/harden-users.sh`, `secrets/`, `backups/` and `.env`. `.env` is created from `deploy/.env.production.example` only if it is missing;
+- generates the missing internal secrets and creates `discord_token` and `discord_client_secret` empty;
+- installs and enables `dispatch-firewall.service`, which blocks the api and bot egress bridges from reaching the host and private/LAN networks;
+- checks that `proxy_net` exists and that `flock` is available.
 
-- crea l'utente di sistema `dispatch-deploy`. Home `/var/lib/dispatch-deploy`, `.ssh` e `authorized_keys` sono di proprietà di root, così l'account non può togliere il forced command;
-- scrive `authorized_keys` con `restrict,command="/usr/local/libexec/dispatch-deploy-entrypoint"`;
-- installa `/etc/sudoers.d/dispatch-deploy`, che permette solo `/usr/local/sbin/dispatch-deploy`, senza `setenv`;
-- crea `/srv/docker/dispatch/` (root, 700) con `docker-compose.yml`, `runtime/nginx.conf`, `runtime/harden-users.sh`, `secrets/`, `backups/` e `.env`. `.env` viene creato dal template solo se manca;
-- genera i segreti mancanti e crea vuoti `discord_token` e `discord_client_secret`;
-- installa e abilita `dispatch-firewall.service`, che blocca dai bridge di egress di api e bot l'accesso all'host e alle reti private/LAN;
-- verifica che `proxy_net` esista e che `flock` sia disponibile.
+The public key is required on the first install; later runs can omit it and the installed key is kept.
 
-Al primo install la chiave pubblica è obbligatoria; nelle esecuzioni successive si può omettere e resta quella installata.
+To update **only the static infrastructure** later, after reviewing it:
 
-> **Importante:** il deploy da GitHub aggiorna solo le **immagini**. Compose, `nginx.conf`, `harden-users.sh`, wrapper e firewall sulla VPS sono copie fatte dall'installer. Quando un commit modifica `deploy/`, `ops/` o `security/`, rieseguire l'installer dal checkout aggiornato **prima** del deploy di quel commit.
+```bash
+cd /tmp/Dispatch && git pull --ff-only && sudo ./ops/install-vps.sh
+```
 
-## 3. Configurazione
+> **Important:** the deployment from GitHub updates only the **images**. The Compose file, `nginx.conf`, `harden-users.sh`, the wrapper and the firewall on the VPS are copies made by the installer. When a commit changes `deploy/`, `ops/` or `security/`, re-run the installer from the updated checkout **before** deploying that commit. See [Updating the VPS infrastructure files](#updating-the-vps-infrastructure-files).
+
+## 3. Configure the VPS
 
 ### `.env`
+
+Edit the non-secret settings:
 
 ```bash
 sudoedit /srv/docker/dispatch/.env
 ```
 
-```env
+```dotenv
 DISCORD_CLIENT_ID=<Application ID>
 PUBLIC_BASE_URL=https://dispatch.haxurus.com/backend
 WEB_URL=https://dispatch.haxurus.com
 POSTGRES_ADMIN_USER=dispatch_owner
 POSTGRES_DB=dispatch
 LOG_LEVEL=info
-SUPER_ADMIN_USER_ID=<Discord user ID del proprietario dell'istanza>
+SUPER_ADMIN_USER_ID=<Discord user ID of the instance owner>
 ```
 
-- `SUPER_ADMIN_USER_ID` (opzionale, supporta anche `SUPER_ADMIN_USER_ID_FILE`): un solo Discord user ID (17-20 cifre). Abilita la super console su `/super` e le API `/api/super/*`; se vuoto nessuno vi accede. Un valore non valido blocca l'avvio dell'API.
-- Il bot ospitato è aperto a tutti i server: nel Developer Portal **Public Bot** deve essere attivo e `/backend/bot/invite` porta direttamente all'autorizzazione Discord. `INVITE_ALLOWED_USER_IDS` non è più usato e può essere tolto da `.env`.
-- Server e installatori in blacklist (super console → Blacklist installazioni) vengono abbandonati subito.
-- Il canale delle notifiche di stato (avvio, server aggiunti o rimossi, installazioni rifiutate) si sceglie in **Super console → Canale di stato**, con un messaggio di prova.
-- Quando il bot viene rimosso da un server, l'API cancella tutti i dati di quel server dopo 30 giorni (a meno che il bot non venga aggiunto di nuovo).
+- `SUPER_ADMIN_USER_ID` (optional, `SUPER_ADMIN_USER_ID_FILE` is also supported): a single Discord user ID (17-20 digits). It enables the super console at `/super` and the `/api/super/*` API; if empty, nobody can use them. An invalid value stops the API from starting.
+- `PUBLIC_BASE_URL` and `WEB_URL` must use HTTPS in production.
+- `WEB_URL` must match the browser origin exactly: state-changing requests with a different `Origin` are rejected (CSRF).
 
-`WEB_URL` deve coincidere esattamente con l'origine del browser: le richieste di modifica con un `Origin` diverso vengono rifiutate (CSRF).
+### Secrets
 
-### Segreti
+In `/srv/docker/dispatch/secrets/` (root directory, `700`):
 
-In `/srv/docker/dispatch/secrets/` (directory root, 700):
-
-| File | Origine | Usato da |
+| File | Origin | Used by |
 |---|---|---|
-| `discord_token` | **manuale** | bot |
-| `discord_client_secret` | **manuale** | api |
-| `session_secret` | generato | api |
-| `data_encryption_key` | generato (32 byte base64, AES-256-GCM) | api, bot |
-| `bot_internal_api_key` | generato | api, bot |
-| `postgres_admin_password` | generato (root 600) | postgres, migrate, secure-db |
-| `api_db_password` | generato | api, secure-db |
-| `bot_db_password` | generato | bot, secure-db |
-| `redis_password` | generato | redis, bot |
+| `discord_token` | **manual** | bot |
+| `discord_client_secret` | **manual** | api |
+| `session_secret` | generated | api |
+| `data_encryption_key` | generated (32 bytes base64, AES-256-GCM) | api, bot |
+| `bot_internal_api_key` | generated | api, bot |
+| `postgres_admin_password` | generated (root `600`) | postgres, migrate, secure-db |
+| `api_db_password` | generated | api, secure-db |
+| `bot_db_password` | generated | bot, secure-db |
+| `redis_password` | generated | redis, bot |
+
+Enter the two Discord secrets without passing them on the command line:
 
 ```bash
 sudoedit /srv/docker/dispatch/secrets/discord_token
 sudoedit /srv/docker/dispatch/secrets/discord_client_secret
 ```
 
-Incollare solo il valore, senza virgolette. I file restano `root:1000` 640 (gid 1000 = utente `node` e gruppo `redis` nei container). Non incollare mai questi valori in chat, issue o log.
+Paste only the value, without quotes. Verify permissions:
 
-> **Non perdere `data_encryption_key`.** Form, transcript, note, template, motivi di chiusura e blacklist sono cifrati con questa chiave: senza, i dati e i backup non si possono più leggere. Conservarne una copia offline, separata dai backup del database.
+```bash
+sudo find /srv/docker/dispatch/secrets -maxdepth 1 -type f -printf '%m %u:%g %p\n'
+```
 
-### Nginx Proxy Manager
+`postgres_admin_password` stays `600 root:root`; the other files are `640 root:1000` (gid 1000 is the `node` user and the `redis` group inside the containers). Never paste these values into chats, issues or logs.
 
-Proxy Host:
+> **Do not lose `data_encryption_key`.** Form answers, transcripts, notes, templates, close reasons and blacklist reasons are encrypted with this key: without it, the data and the backups can no longer be read. Keep an offline copy, separate from the database backups.
+
+## 4. Configure Nginx Proxy Manager
+
+The `edge` container joins the external Docker network `proxy_net` with the alias:
+
+```text
+dispatch-edge
+```
+
+Create a Proxy Host in NPM:
 
 - Domain: `dispatch.haxurus.com`
-- Scheme `http`, Forward Hostname `dispatch-edge`, Forward Port `8080`
-- SSL: certificato valido, Force SSL, HSTS attivo
-- Websockets non necessari
+- Scheme: `http`
+- Forward Hostname/IP: `dispatch-edge`
+- Forward Port: `8080`
+- SSL: valid certificate (on VPS01 the Cloudflare Origin certificate `*.haxurus.com`), Force SSL, HSTS on
+- Websockets: not needed
 
-L'edge Dispatch ricava l'IP reale del client da `CF-Connecting-IP`, ma accetta questo header **solo** da indirizzi privati Docker, cioè da NPM. L'IP serve a rate limit e audit. Se l'origin resta raggiungibile senza passare da Cloudflare, chi la contatta direttamente può falsificare quell'header ed eludere il rate limit per IP. Si consiglia di limitare l'ingresso 80/443 ai range IP di Cloudflare (o di usare Authenticated Origin Pulls).
+NPM sees only the small edge proxy. The `web` container is not connected to `proxy_net` and receives no secrets.
 
-Controllo da NPM verso Dispatch, dopo il primo deploy:
+The Dispatch edge takes the real client IP from `CF-Connecting-IP`, but accepts this header **only** from private Docker addresses, i.e. from NPM. The IP is used for rate limiting and audit. If the origin can be reached without going through Cloudflare, anyone contacting it directly can forge that header and evade the per-IP rate limit. Limit inbound 80/443 to Cloudflare's IP ranges (or use Authenticated Origin Pulls).
+
+Check from NPM to Dispatch, after the first deployment:
 
 ```bash
 sudo docker exec npm curl -sI http://dispatch-edge:8080/backend/health
 ```
 
-## 4. GitHub
+## 5. Configure Discord OAuth2
 
-### Environment `production`
+In the Discord Developer Portal, **OAuth2 > Redirects**, add:
+
+```text
+https://dispatch.haxurus.com/backend/auth/discord/callback
+```
+
+The value must be `<PUBLIC_BASE_URL>/auth/discord/callback` exactly. The dashboard uses the scopes `identify` and `guilds`. The install link generated by `/backend/bot/invite` does not use a `redirect_uri`: no additional redirect needs to be registered, and the existing redirect stays unchanged.
+
+## 6. Configure GitHub
+
+### `production` environment
 
 Settings > Environments > `production`:
 
-- **Deployment branches: solo `main`.** È questo il controllo reale: il workflow ha `workflow_dispatch` e, senza questa regola, chi ha accesso in scrittura potrebbe deployare un altro branch. Il controllo `github.ref` nei workflow è solo una difesa aggiuntiva.
-- **Required reviewers** consigliati.
-- Secrets **dell'environment**, non del repository:
-  - `VPS_DEPLOY_KEY`: chiave privata `dispatch_deploy`
-  - `VPS_KNOWN_HOSTS`: host key ed25519 della VPS, verificata a mano confrontando il fingerprint (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` sulla VPS). Non affidarsi solo a un `ssh-keyscan` non verificato.
-  - `VPS_HOST`
-  - `VPS_PORT` (facoltativo, default 22)
+- **Deployment branches: `main` only.** This is the real control: the deploy workflow has `workflow_dispatch` and, without this rule, anyone with write access could deploy another branch. The `github.ref` check in the workflows is only defence in depth.
+- **Required reviewers** recommended, when available on the plan in use.
+- Secrets **of the environment**, not of the repository:
+  - `VPS_DEPLOY_KEY` - complete contents of the private `dispatch_deploy` key;
+  - `VPS_KNOWN_HOSTS` - verified SSH host key of the VPS (see below);
+  - `VPS_HOST` - VPS hostname or IPv4 address;
+  - `VPS_PORT` - optional, default `22`.
 
-### Abilitazione
+For `VPS_KNOWN_HOSTS`, build the known_hosts line from the VPS itself and compare the fingerprint by hand (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the VPS). With port 22:
 
-Variable **di repository** (non di environment: la condizione `if:` del job non vede le variabili di environment) `ENABLE_VPS_DEPLOY=true`, da impostare **solo** dopo aver verificato SSH, segreti, `.env`, accesso GHCR e NPM.
+```text
+<VPS_IP> ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+```
 
-Verifica dell'accesso ristretto dalla macchina con la chiave:
+The first column must contain exactly the value used in `VPS_HOST`; for non-standard ports use the `[host]:port` syntax. Do not use `StrictHostKeyChecking=no`, and do not rely on an unverified `ssh-keyscan`.
+
+### Enabling deployment
+
+Create the **repository** variable (not an environment variable: the job's `if:` condition cannot see environment variables):
+
+```text
+ENABLE_VPS_DEPLOY=true
+```
+
+Set it **only** after verifying SSH, secrets, `.env`, GHCR access and NPM. Until it is `true`, the workflow builds and pushes the images but does not contact the VPS.
+
+Check the restricted access from the machine holding the key:
 
 ```bash
 ssh -i ~/.ssh/dispatch_deploy -o IdentitiesOnly=yes dispatch-deploy@<VPS_HOST> status
 ```
 
-Il risultato atteso è `No release recorded yet.`. Qualsiasi altro comando viene rifiutato con `command not allowed`.
+The expected answer is `No release recorded yet.`. Any other command is refused with `command not allowed`.
 
-## 5. Deploy
+## 7. GHCR
 
-Ogni push su `main` esegue:
+Images are published as a Container package in GitHub Container Registry. The VPS pulls `ghcr.io/haxurus/dispatch@sha256:...`. Two options:
 
-1. `Ticket protection tests`: PostgreSQL temporaneo, migration reali, policy dei privilegi DB, Discord simulato; in parallelo `CI` (validazione compose, sintassi script, build).
-2. Build delle immagini `runtime` e `migrate`, con SBOM e provenance, push su GHCR ed esportazione dei digest.
-3. Solo se `ENABLE_VPS_DEPLOY == 'true'` e il ref è `main`: SSH verso `deploy <app@sha256> <migrate@sha256>`.
+- make the GHCR package `dispatch` **public** (the repository is already public and the images contain no secrets), from `https://github.com/users/haxurus/packages/container/dispatch/settings`. The VPS can then pull without GitHub credentials;
+- keep it private and run once, as root, `sudo docker login ghcr.io -u haxurus` with a *classic* token that has only the `read:packages` scope. The Docker credentials then stay under the root account.
 
-Sulla VPS, `dispatch-deploy deploy`:
+## 8. First deployment
 
-1. prende un lock (`/run/dispatch-deploy.lock`): un deploy manuale non può sovrapporsi a uno da GitHub;
-2. valida i due riferimenti (`ghcr.io/haxurus/dispatch@sha256:<64 hex>`) e controlla lo spazio su `/var/lib/docker`: sotto 5 GiB elimina le immagini Dispatch non più necessarie, sotto 3 GiB si ferma (un disco pieno ha già fermato PostgreSQL su VPS01);
-3. se esiste una release corrente, fa il backup `pg_dump -Fc` in `backups/predeploy-<UTC>.dump` (600). Se il backup fallisce, il deploy si interrompe. I dump più vecchi di 14 giorni vengono rimossi solo dopo un backup riuscito;
-4. esegue il pull delle immagini per digest;
-5. esegue `docker compose up`. L'ordine è postgres → `migrate` (`prisma migrate deploy` come owner) → `secure-db` (utenti `dispatch_api`/`dispatch_bot` e grant) → api, bot e redis → web → edge;
-6. attende fino a 150 s che api, bot, web ed edge risultino healthy;
-7. se va a buon fine, aggiorna `.release` e `.previous-release`, rimuove i container one-shot ed elimina le immagini Dispatch diverse dalla release corrente e precedente;
-8. se fallisce, salva i log dei servizi in `/srv/docker/dispatch/logs/deploy-failed-<UTC>.log` (root, 700; mantenuti 30 giorni) e riavvia la release precedente. Nell'output SSH, e quindi nei log GitHub Actions di un repository pubblico, compare solo il percorso del file e mai il contenuto dei log.
+After completing the previous steps, every push or merge to `main` runs:
 
-Il primo deploy non ha una release precedente: niente backup e niente rollback automatico.
+1. the full CI pipeline: build and typecheck, migrations, database privilege policy and integration tests on a disposable PostgreSQL; shell script and Compose validation; image builds ([VALIDATION.md](VALIDATION.md)). Nothing below runs if it fails;
+2. the `runtime` and `migrate` image builds, with SBOM and provenance, the push to GHCR and the export of the digests;
+3. only if `ENABLE_VPS_DEPLOY == 'true'` and the ref is `main`: SSH to `deploy <app@sha256> <migrate@sha256>`.
 
-### Stato
+On the VPS, `dispatch-deploy deploy`:
+
+1. takes a lock (`/run/dispatch-deploy.lock`): a manual run cannot overlap with a GitHub deployment;
+2. validates the two references (`ghcr.io/haxurus/dispatch@sha256:<64 hex>`) and checks the free space on `/var/lib/docker`: below 5 GiB it removes Dispatch images that are no longer needed, below 3 GiB it stops (a full disk already stopped PostgreSQL on VPS01);
+3. if a current release exists, writes the backup `pg_dump -Fc` to `backups/predeploy-<UTC>.dump` (`600`). If the backup fails, the deployment stops. Dumps older than 14 days are removed only after a successful backup;
+4. pulls the images by digest;
+5. runs `docker compose up`. The order is postgres → `migrate` (`prisma migrate deploy` as owner) → `secure-db` (`dispatch_api`/`dispatch_bot` users and grants) → api, bot and redis → web → edge;
+6. waits up to 150 s for api, bot, web and edge to be healthy;
+7. on success, updates `.release` and `.previous-release`, removes the one-shot containers and deletes the Dispatch images that belong neither to the current nor to the previous release;
+8. on failure, saves the service logs to `/srv/docker/dispatch/logs/deploy-failed-<UTC>.log` (root, `700`; kept 30 days) and restarts the previous release. The SSH output, and therefore the GitHub Actions logs of a public repository, shows only the file path, never the log content.
+
+The first deployment has no previous release: no backup and no automatic rollback.
+
+> Pruning matters: every release pulls 1-2 GB of images. On 2026-10-06 images that were never removed filled the disk of VPS01 and stopped PostgreSQL.
+
+### Status
 
 ```bash
 sudo /usr/local/sbin/dispatch-deploy status
 ```
 
-Per usare `docker compose` direttamente servono le variabili delle immagini. Esempio:
+Using `docker compose` directly requires the image variables. Example:
 
 ```bash
 sudo sh -c 'cd /srv/docker/dispatch && . ./.release && DISPATCH_APP_IMAGE=$APP_IMAGE DISPATCH_MIGRATE_IMAGE=$MIGRATE_IMAGE docker compose -p dispatch --env-file .env -f docker-compose.yml logs --tail=100 api bot'
 ```
 
-## 6. Rollback e ripristino
+### First deployment checklist
 
-### Rollback applicativo
+Sign-in and sign-out, server list, RBAC (including the refusal of `@everyone` as an access role), publishing the menu, opening a ticket with a form, channel permissions (threads denied to the user and participants; **Staff thread** creates a private thread visible only to staff and, on close, sends its transcript to the archive channel or the log channel), claim, unclaim, statuses, priority, close with transcript, feedback (attributed to the moderator who handled the ticket), moderator leaderboard (preview in Analytics and **Invia ora** — *Send now*), reopening inside and outside the window, anti-spam, blacklist, SLA/escalation and retention with short values. Functional details and operational notes on `CREATING` reservations and retention are in [TICKET_PROTECTIONS.md](TICKET_PROTECTIONS.md).
 
-Workflow **Rollback production** (manuale, solo da `main`), oppure:
+Super console (with `SUPER_ADMIN_USER_ID` set): the "Super console" link appears only for that account; `/super` shows metrics and connected servers; "Blocca ed espelli" (*Block and remove*) makes the bot leave and leave again if it is re-added; every action appears in the super-admin audit. The status channel receives a message when the bot starts, joins or leaves a server.
 
-```bash
-sudo /usr/local/sbin/dispatch-deploy rollback
-```
-
-Avvia la coppia di immagini in `.previous-release` e, se va a buon fine, **scambia** `.release` e `.previous-release`. Ne seguono due conseguenze:
-
-- un secondo rollback consecutivo torna alla release da cui si era partiti, cioè un roll-forward;
-- dopo un rollback **automatico** (deploy fallito) `.previous-release` non cambia: un rollback manuale a quel punto porta alla release *precedente* a quella in esecuzione. Controllare sempre `status` prima di procedere.
-
-Il rollback **non** ripristina il database. Le migration già applicate restano, e la versione precedente deve essere compatibile con lo schema nuovo. Per questo le migration devono restare additive e retrocompatibili.
-
-### Migration fallita
-
-Se `migrate` fallisce a metà, Prisma registra la migration come fallita e ogni successivo `migrate deploy` si blocca (P3009). In questo caso anche il rollback automatico non riparte, perché api e bot dipendono dal completamento di `migrate`. La procedura è:
-
-1. leggere il log in `/srv/docker/dispatch/logs/`;
-2. ripristinare il backup pre-deploy (sotto) oppure correggere a mano lo schema;
-3. segnare la migration come annullata:
-
-```bash
-sudo sh -c 'cd /srv/docker/dispatch && . ./.release && DISPATCH_APP_IMAGE=$APP_IMAGE DISPATCH_MIGRATE_IMAGE=$MIGRATE_IMAGE docker compose -p dispatch --env-file .env -f docker-compose.yml run --rm migrate sh -c '"'"'export DATABASE_URL="postgresql://${POSTGRES_ADMIN_USER:-dispatch_owner}:$(cat /run/secrets/postgres_admin_password)@postgres:5432/${POSTGRES_DB:-dispatch}?schema=public"; ./node_modules/.bin/prisma migrate resolve --rolled-back <NOME_MIGRATION> --schema packages/db/prisma/schema.prisma'"'"''
-```
-
-### Ripristino di un backup
-
-`/srv/docker/dispatch` è accessibile solo a root: ogni comando entra nella directory dentro `sudo sh -c`.
-
-```bash
-sudo ls -l /srv/docker/dispatch/backups/
-# 1. fermare i servizi applicativi (postgres resta attivo)
-sudo sh -c 'cd /srv/docker/dispatch && . ./.release && DISPATCH_APP_IMAGE=$APP_IMAGE DISPATCH_MIGRATE_IMAGE=$MIGRATE_IMAGE docker compose -p dispatch --env-file .env -f docker-compose.yml stop edge web api bot'
-# 2. ripristinare
-sudo sh -c 'cd /srv/docker/dispatch && . ./.release && DISPATCH_APP_IMAGE=$APP_IMAGE DISPATCH_MIGRATE_IMAGE=$MIGRATE_IMAGE docker compose -p dispatch --env-file .env -f docker-compose.yml exec -T postgres sh -c '"'"'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; pg_restore --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB"'"'"' < backups/predeploy-<STAMP>.dump'
-# 3. riavviare la release desiderata
-sudo /usr/local/sbin/dispatch-deploy rollback   # oppure un nuovo deploy
-```
-
-I backup restano sulla stessa VPS. Copiarli periodicamente fuori dall'host, cifrati e separati da `data_encryption_key`.
-
-## 7. Isolamento a runtime
-
-| Servizio | Reti | Segreti |
-|---|---|---|
-| postgres | api_db, bot_db, migrate_db | postgres_admin_password |
-| redis (uid 999) | bot_queue | redis_password |
-| migrate / secure-db | migrate_db | owner (+ password app per secure-db) |
-| api | backend, api_db, bot_rpc, api_egress | discord_client_secret, session_secret, data_encryption_key, bot_internal_api_key, api_db_password |
-| bot | bot_db, bot_queue, bot_rpc, bot_egress | discord_token, bot_internal_api_key, data_encryption_key, bot_db_password, redis_password |
-| web | frontend, backend | nessuno |
-| edge (nginx, uid 101) | frontend, proxy_net | nessuno |
-
-- Tutte le reti tranne `api_egress`, `bot_egress` e `proxy_net` sono `internal`. Nessuna porta è pubblicata sull'host.
-- Le reti Dispatch usano sottoreti fisse `/28` in `10.251.0.0/24`, fuori dai pool predefiniti di Docker (su VPS01 esauriti dagli altri stack). Se quell'intervallo entrasse in conflitto con un'altra rete dell'host, cambiarlo in `deploy/docker-compose.prod.yml`, rieseguire l'installer e rimuovere le reti `dispatch_*` vuote prima del deploy.
-- Il token Discord è presente solo nel bot. L'API parla col bot tramite RPC autenticata su `bot_rpc`.
-- I container applicativi sono read-only, non-root, con `cap_drop: ALL`, `no-new-privileges` e limiti di pid e memoria. Nessun container monta `docker.sock`.
-- `dispatch_bot` non può leggere `PanelSession`, `TicketNote` e `_prisma_migrations`.
-- Il firewall di egress copre solo IPv4. Le reti Dispatch non abilitano IPv6: non attivarlo senza aggiungere regole `ip6tables` equivalenti.
-- Il firewall blocca host e reti private, ma non l'egress verso Internet pubblico.
-
-## 8. Collaudo dopo il primo deploy
-
-Login e logout, lista server, RBAC (incluso il rifiuto di `@everyone` come ruolo di accesso), pubblicazione del menu, apertura del ticket con modulo, permessi del canale (thread vietati a utente e partecipanti; **Thread staff** crea un thread privato visibile solo allo staff e, alla chiusura, ne invia il transcript al canale archivio o al canale log), claim, unclaim, stati, priorità, chiusura con transcript, feedback (attribuito al moderatore che gestiva il ticket), classifica moderatori (anteprima negli Analytics e **Invia ora**), riapertura dentro e fuori finestra, anti-spam, blacklist, SLA/escalation e retention con valori brevi. Dettagli funzionali e note operative su prenotazioni `CREATING` e retention sono in [TICKET_PROTECTIONS.md](TICKET_PROTECTIONS.md).
-
-Super console (con `SUPER_ADMIN_USER_ID` impostato): il link "Super console" compare solo per quell'account; `/super` mostra metriche e server collegati; "Blocca ed espelli" fa uscire il bot e lo fa riuscire se viene riaggiunto; ogni azione compare nell'audit super-admin. Il canale di stato riceve un messaggio quando il bot si avvia, entra o esce da un server.
-
-Comandi utili:
+Useful commands:
 
 ```bash
 sudo /usr/local/sbin/dispatch-deploy status
@@ -300,100 +305,229 @@ sudo iptables -L DOCKER-USER -n -v --line-numbers
 sudo docker exec npm curl -sI http://dispatch-edge:8080/backend/health
 ```
 
-## 9. Sequenza completa dei comandi
+## Updating the VPS infrastructure files
 
-Riepilogo operativo nello stesso ordine usato per Sentinel. `<VPS_IP>` è l'IPv4 di VPS01; i comandi "locali" vanno eseguiti in Git Bash (o in un terminale con OpenSSH e `gh` autenticato come `haxurus`).
+Files under `deploy/`, `ops/` and `security/` are installed by hand and are **not** updated by the application deploy. After a reviewed change (for example new grants in `harden-users.sh`), and **before** merging or deploying the commit that needs it, either re-run the installer from an up-to-date checkout:
 
-### A. Prima di iniziare
+```bash
+cd /tmp/Dispatch && git pull --ff-only && sudo ./ops/install-vps.sh
+```
 
-1. Unire su `main` le PR aperte, in ordine (prima quella delle funzioni, poi quelle basate su di essa), e attendere che **Build and deploy** sia verde: il job `deploy` risulterà *skipped* finché `ENABLE_VPS_DEPLOY` non è attivo, ma le immagini saranno già su GHCR.
-2. Discord Developer Portal: intents, redirect OAuth `https://dispatch.haxurus.com/backend/auth/discord/callback`, Application ID annotato (sezione 1).
-3. Cloudflare: record `A` `dispatch` → `<VPS_IP>`, Proxied.
-4. GHCR: rendere pubblico il package da `https://github.com/users/haxurus/packages/container/dispatch/settings` (oppure il `docker login` del punto C.6).
+or update a single file pinned to a commit and verify it before installing, for example the deploy wrapper:
 
-### B. Macchina locale: chiave di deploy
+```bash
+curl -fsSL -o /tmp/dispatch-deploy https://raw.githubusercontent.com/haxurus/Dispatch/<commit-sha>/ops/dispatch-deploy
+sha256sum /tmp/dispatch-deploy   # compare with: git show <commit-sha>:ops/dispatch-deploy | sha256sum
+sudo install -o root -g root -m 755 /tmp/dispatch-deploy /usr/local/sbin/dispatch-deploy
+```
+
+The Dispatch networks use fixed `/28` subnets in `10.251.0.0/24`, outside Docker's default address pools (exhausted by the other stacks on VPS01). If that range conflicts with another network on the host, change it in `deploy/docker-compose.prod.yml`, re-run the installer and remove the empty `dispatch_*` networks before deploying.
+
+## Installation access and status notifications
+
+- The hosted bot is open to every server: **Public Bot** must be enabled in the Discord Developer Portal, and `/backend/bot/invite` redirects straight to Discord's authorisation page.
+- Blacklisted servers and installers (super console → **Blacklist installazioni**, *installation blacklist*) are left immediately, also when they add the bot again. An installer is recognised only where the bot can read the server's audit log.
+- The status channel (startup, servers added or removed, rejected installations) is chosen in **Super console → Canale di stato** (*Status channel*), with a test message.
+- `INVITE_ALLOWED_USER_IDS` is no longer used and can be removed from `.env`.
+- When the bot is removed from a server, the API deletes all of that server's data 30 days later, unless the bot is added again in the meantime.
+
+## 9. Rollback
+
+From GitHub: **Actions -> Rollback production -> Run workflow** (manual, only from `main`), or from the VPS:
+
+```bash
+sudo /usr/local/sbin/dispatch-deploy rollback
+```
+
+It starts the image pair recorded in `.previous-release` and, if healthy, **swaps** `.release` and `.previous-release`. Two consequences:
+
+- a second consecutive rollback returns to the release you started from, i.e. a roll-forward;
+- after an **automatic** rollback (failed deployment) `.previous-release` does not change: a manual rollback at that point goes to the release *before* the one running. Always check `status` before proceeding.
+
+### Migration note
+
+Rollback does **not** restore the database. Migrations already applied stay, and the previous version must be compatible with the new schema. Migrations must therefore follow an expand/contract approach:
+
+1. add compatible schema;
+2. deploy the new code;
+3. migrate data if necessary;
+4. remove obsolete columns or tables only in a later release, once rollback no longer depends on them.
+
+### Failed migration
+
+If `migrate` fails halfway, Prisma records the migration as failed and every later `migrate deploy` stops (P3009). In that case the automatic rollback does not restart either, because api and bot depend on `migrate` completing. The procedure is:
+
+1. read the log in `/srv/docker/dispatch/logs/`;
+2. restore the pre-deploy backup (below) or fix the schema by hand;
+3. mark the migration as rolled back:
+
+```bash
+sudo sh -c 'cd /srv/docker/dispatch && . ./.release && DISPATCH_APP_IMAGE=$APP_IMAGE DISPATCH_MIGRATE_IMAGE=$MIGRATE_IMAGE docker compose -p dispatch --env-file .env -f docker-compose.yml run --rm migrate sh -c '"'"'export DATABASE_URL="postgresql://${POSTGRES_ADMIN_USER:-dispatch_owner}:$(cat /run/secrets/postgres_admin_password)@postgres:5432/${POSTGRES_DB:-dispatch}?schema=public"; ./node_modules/.bin/prisma migrate resolve --rolled-back <MIGRATION_NAME> --schema packages/db/prisma/schema.prisma'"'"''
+```
+
+### Backups
+
+Before every deployment after the first one, a PostgreSQL dump is stored in:
+
+```text
+/srv/docker/dispatch/backups/predeploy-<UTC>.dump
+```
+
+with root-only permissions and a local retention of 14 days.
+
+For an on-demand backup (before a manual intervention, or to copy off the host), run [`scripts/backup.sh`](../scripts/backup.sh) as root from a checkout of the repository:
+
+```bash
+cd /tmp/Dispatch && sudo sh scripts/backup.sh
+```
+
+It reads the running release from `.release`, runs `pg_dump -Fc` inside the `postgres` container of the Compose project `dispatch` and writes `/srv/docker/dispatch/backups/dispatch-<UTC>.dump` with `umask 077` and mode `600`. These dumps are not pruned automatically.
+
+Backups stay on the same VPS. Copy them off the host periodically, encrypted and separate from `data_encryption_key`.
+
+### Restoring a backup
+
+`/srv/docker/dispatch` is accessible only to root: every command enters the directory inside `sudo sh -c`.
+
+```bash
+sudo ls -l /srv/docker/dispatch/backups/
+# 1. stop the application services (postgres keeps running)
+sudo sh -c 'cd /srv/docker/dispatch && . ./.release && DISPATCH_APP_IMAGE=$APP_IMAGE DISPATCH_MIGRATE_IMAGE=$MIGRATE_IMAGE docker compose -p dispatch --env-file .env -f docker-compose.yml stop edge web api bot'
+# 2. restore
+sudo sh -c 'cd /srv/docker/dispatch && . ./.release && DISPATCH_APP_IMAGE=$APP_IMAGE DISPATCH_MIGRATE_IMAGE=$MIGRATE_IMAGE docker compose -p dispatch --env-file .env -f docker-compose.yml exec -T postgres sh -c '"'"'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; pg_restore --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB"'"'"' < backups/predeploy-<STAMP>.dump'
+# 3. restart the desired release
+sudo /usr/local/sbin/dispatch-deploy rollback   # or a new deployment
+```
+
+The same procedure restores an on-demand dump: use `backups/dispatch-<STAMP>.dump`.
+
+## 10. Repository protection
+
+Configured on GitHub for `haxurus/Dispatch`:
+
+- **Ruleset "Protect main":** changes only through pull requests, the `Typecheck, tests and migrations` and `Compose and container images` checks must pass, unresolved review threads block the merge, force pushes and branch deletion are blocked. No bypass.
+- **Environment `production`:** deployments allowed only from `main`; it holds the VPS secrets.
+- **Secret scanning with push protection**, **CodeQL** code scanning (default setup), **Dependabot** alerts and security updates, **private vulnerability reporting**.
+- **Actions:** `GITHUB_TOKEN` read-only by default and unable to approve pull requests, every action must be pinned to a full commit SHA, workflows from outside contributors need approval.
+
+Changes to `deploy/`, `ops/`, `security/`, `.github/workflows/` and migrations should always be reviewed carefully: they reach production or the VPS.
+
+## Runtime isolation
+
+| Service | Networks | Secrets |
+|---|---|---|
+| postgres | api_db, bot_db, migrate_db | postgres_admin_password |
+| redis (uid 999) | bot_queue | redis_password |
+| migrate / secure-db | migrate_db | owner (+ application passwords for secure-db) |
+| api | backend, api_db, bot_rpc, api_egress | discord_client_secret, session_secret, data_encryption_key, bot_internal_api_key, api_db_password |
+| bot | bot_db, bot_queue, bot_rpc, bot_egress | discord_token, bot_internal_api_key, data_encryption_key, bot_db_password, redis_password |
+| web | frontend, backend | none |
+| edge (nginx, uid 101) | frontend, proxy_net | none |
+
+- Every network except `api_egress`, `bot_egress` and `proxy_net` is `internal`. No port is published on the host.
+- The Discord token exists only in the bot. The API talks to the bot through authenticated RPC on `bot_rpc`.
+- Application containers are read-only, non-root, with `cap_drop: ALL`, `no-new-privileges` and PID and memory limits. No container mounts `docker.sock`.
+- `dispatch_bot` cannot read `PanelSession`, `TicketNote` and `_prisma_migrations`.
+- The egress firewall covers IPv4 only. The Dispatch networks do not enable IPv6: do not enable it without adding equivalent `ip6tables` rules.
+- The firewall blocks the host and private networks, but not egress to the public Internet.
+
+The full security model is in [SECURITY.md](SECURITY.md).
+
+## Step-by-step command sequence
+
+Operational summary, in the same order used for Sentinel. `<VPS_IP>` is the IPv4 address of VPS01; "local" commands run in Git Bash (or any terminal with OpenSSH and `gh` authenticated as `haxurus`).
+
+### A. Before starting
+
+1. Merge the open pull requests into `main`, in order (first the feature one, then those based on it), and wait for **Build and deploy** to be green: the `deploy` job is *skipped* until `ENABLE_VPS_DEPLOY` is enabled, but the images are already on GHCR.
+2. Discord Developer Portal: intents, OAuth redirect `https://dispatch.haxurus.com/backend/auth/discord/callback`, Public Bot, Application ID noted ([Prerequisites](#prerequisites) and section 5).
+3. Cloudflare: `A` record `dispatch` → `<VPS_IP>`, Proxied.
+4. GHCR: make the package public from `https://github.com/users/haxurus/packages/container/dispatch/settings` (or the `docker login` of step C.6).
+
+### B. Local machine: deploy key
 
 ```bash
 ssh-keygen -t ed25519 -a 100 -f ~/.ssh/dispatch_deploy -C "dispatch-github-actions"
 scp ~/.ssh/dispatch_deploy.pub user007@<VPS_IP>:~/
 ```
 
-### C. VPS (come `user007`)
+### C. VPS (as `user007`)
 
 ```bash
-# 1. AllowUsers: aggiungere dispatch-deploy in fondo alla riga esistente
+# 1. AllowUsers: append dispatch-deploy to the existing line
 sudo sshd -T | grep '^allowusers'
 sudoedit /etc/ssh/sshd_config.d/00-hardening.conf
 sudo sshd -t && sudo systemctl reload ssh && sudo sshd -T | grep '^allowusers'
-# (verificare da un secondo terminale che user007 entri ancora)
+# (check from a second terminal that user007 can still log in)
 
-# 2. Installer da clone temporaneo
+# 2. Installer from a temporary clone
 git clone --branch main https://github.com/haxurus/Dispatch.git /tmp/Dispatch
 cd /tmp/Dispatch
 sudo ./ops/install-vps.sh ~/dispatch_deploy.pub
 
-# 3. Configurazione
+# 3. Configuration
 sudoedit /srv/docker/dispatch/.env
 sudoedit /srv/docker/dispatch/secrets/discord_token
 sudoedit /srv/docker/dispatch/secrets/discord_client_secret
 sudo find /srv/docker/dispatch/secrets -maxdepth 1 -type f -printf '%m %u:%g %p\n'
 
-# 4. Copia offline della chiave di cifratura (conservarla fuori dalla VPS)
+# 4. Offline copy of the encryption key (keep it off the VPS)
 sudo cat /srv/docker/dispatch/secrets/data_encryption_key
 
-# 5. Firewall e host key (fingerprint da confrontare al punto D.3)
+# 5. Firewall and host key (fingerprint to compare in step D.3)
 sudo systemctl status dispatch-firewall.service --no-pager
 sudo iptables -L DOCKER-USER -n -v --line-numbers
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 printf '%s %s\n' "<VPS_IP>" "$(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"
 
-# 6. Solo se il package GHCR resta privato (token classic con il solo scope read:packages)
+# 6. Only if the GHCR package stays private (classic token with only the read:packages scope)
 sudo docker login ghcr.io -u haxurus
 ```
 
-7. Nginx Proxy Manager (tunnel SSH verso `127.0.0.1:81`): Proxy Host `dispatch.haxurus.com` → `http` `dispatch-edge` `8080`, certificato Origin `*.haxurus.com`, Force SSL, HSTS.
+7. Nginx Proxy Manager (SSH tunnel to `127.0.0.1:81`): Proxy Host `dispatch.haxurus.com` → `http` `dispatch-edge` `8080`, Origin certificate `*.haxurus.com`, Force SSL, HSTS.
 
-### D. GitHub (macchina locale)
+### D. GitHub (local machine)
 
 ```bash
-# 1. Environment production limitato a main
+# 1. production environment restricted to main
 gh api -X PUT repos/haxurus/Dispatch/environments/production \
   -F 'deployment_branch_policy[protected_branches]=false' \
   -F 'deployment_branch_policy[custom_branch_policies]=true'
 gh api -X POST repos/haxurus/Dispatch/environments/production/deployment-branch-policies -f name=main
 
-# 2. Secrets dell'environment
+# 2. Environment secrets
 gh secret set VPS_DEPLOY_KEY --env production -R haxurus/Dispatch < ~/.ssh/dispatch_deploy
 gh secret set VPS_HOST --env production -R haxurus/Dispatch --body "<VPS_IP>"
 gh secret set VPS_PORT --env production -R haxurus/Dispatch --body 22
 
-# 3. known_hosts: incollare la riga stampata al punto C.5, dopo aver verificato che
-#    il fingerprint di `ssh-keyscan -t ed25519 <VPS_IP> | ssh-keygen -lf -` coincida
+# 3. known_hosts: paste the line printed in step C.5, after checking that
+#    the fingerprint of `ssh-keyscan -t ed25519 <VPS_IP> | ssh-keygen -lf -` matches
 gh secret set VPS_KNOWN_HOSTS --env production -R haxurus/Dispatch
 
-# 4. Verifica del percorso SSH ristretto (atteso: "No release recorded yet.")
+# 4. Check the restricted SSH path (expected: "No release recorded yet.")
 ssh -i ~/.ssh/dispatch_deploy -o IdentitiesOnly=yes dispatch-deploy@<VPS_IP> status
 
-# 5. Abilitazione (variabile di REPOSITORY) e primo deploy
+# 5. Enable deployment (REPOSITORY variable) and run the first deployment
 gh variable set ENABLE_VPS_DEPLOY --body true -R haxurus/Dispatch
 gh workflow run "Build and deploy" -R haxurus/Dispatch --ref main
 gh run watch -R haxurus/Dispatch
 ```
 
-### E. Verifica
+### E. Verification
 
 ```bash
 # VPS
 sudo /usr/local/sbin/dispatch-deploy status
 sudo docker exec npm curl -sI http://dispatch-edge:8080/backend/health
-# Locale
+# Local
 curl -sI https://dispatch.haxurus.com/backend/health
 ```
 
-Poi il collaudo della sezione 8, accedendo da `https://dispatch.haxurus.com/it`.
+Then the [first deployment checklist](#first-deployment-checklist), signing in from `https://dispatch.haxurus.com/it`.
 
-### F. Operazioni successive
+### F. Later operations
 
-- Nuova versione: merge su `main` → deploy automatico.
-- Rollback: `gh workflow run "Rollback production" -R haxurus/Dispatch --ref main` oppure `sudo /usr/local/sbin/dispatch-deploy rollback` (vedi sezione 6 per la semantica).
-- Modifiche a `deploy/`, `ops/` o `security/` (es. nuovi grant in `harden-users.sh`): `cd /tmp/Dispatch && git pull --ff-only && sudo ./ops/install-vps.sh` **prima** del merge che le usa.
+- New version: merge into `main` → automatic deployment.
+- Rollback: `gh workflow run "Rollback production" -R haxurus/Dispatch --ref main` or `sudo /usr/local/sbin/dispatch-deploy rollback` (see section 9 for the semantics).
+- Changes to `deploy/`, `ops/` or `security/` (for example new grants in `harden-users.sh`): `cd /tmp/Dispatch && git pull --ff-only && sudo ./ops/install-vps.sh` **before** the merge that uses them.
+- On-demand backup: `cd /tmp/Dispatch && sudo sh scripts/backup.sh`.

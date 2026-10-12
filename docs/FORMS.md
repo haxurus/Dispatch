@@ -1,138 +1,140 @@
-# Form e questionari
+# Forms and questionnaires
 
-Dispatch supporta due flussi distinti ma integrati:
+Dispatch supports two separate but integrated flows:
 
-- domande iniziali dei ticket;
-- form generici, ad esempio candidature, segnalazioni o raccolte dati.
+- opening questions of tickets;
+- generic forms, for example applications, reports or data collection.
 
-## Domande iniziali dei ticket
+The dashboard is available in English and Italian; labels are quoted in Italian followed by their English equivalent.
 
-Ogni categoria ticket può configurare fino a 5 domande. Sono disponibili:
+## Ticket opening questions
 
-- risposta breve;
-- risposta lunga;
-- menu a scelta singola.
+Each ticket category can configure up to 5 questions. Available types:
 
-Le risposte vengono completate prima della creazione del ticket, salvate cifrate nel record del ticket e pubblicate automaticamente nel messaggio iniziale. Le selezioni intermedie vengono persistite nella prenotazione di apertura, quindi riavvii, doppio click e replay non generano ticket duplicati.
+- short answer;
+- long answer;
+- single-choice menu.
 
-## Form
+The answers are completed before the ticket is created, stored encrypted in the ticket record and posted automatically in the initial message. Intermediate selections are persisted in the opening reservation, so restarts, double clicks and replays do not create duplicate tickets.
 
-Un form può contenere fino a 25 domande:
+## Forms
 
-- testo breve o lungo;
-- numero intero o decimale;
+A form can contain up to 25 questions:
+
+- short or long text;
+- integer or decimal number;
 - email;
 - URL;
-- data;
-- sì/no;
-- scelta singola;
-- scelta multipla;
-- ID Discord.
+- date;
+- yes/no;
+- single choice;
+- multiple choice;
+- Discord ID.
 
-Ogni risposta viene validata in base al tipo. Le sessioni hanno scadenza, sono persistenti e le risposte parziali sono cifrate.
+Each answer is validated according to its type. Sessions expire, are persistent, and partial answers are encrypted.
 
-Vincoli di configurazione verificati dall'API:
+Configuration constraints checked by the API:
 
-- limiti di lunghezza solo per testo breve/lungo, email e URL; limiti numerici solo per intero/decimale;
-- `minSelections`/`maxSelections` solo per la scelta multipla, con `minSelections <= maxSelections <= numero opzioni`; una scelta multipla obbligatoria non può avere `minSelections = 0`;
-- valori delle opzioni univoci.
+- length limits only for short/long text, email and URL; numeric limits only for integer/decimal;
+- `minSelections`/`maxSelections` only for multiple choice, with `minSelections <= maxSelections <= number of options`; a required multiple choice cannot have `minSelections = 0`;
+- unique option values.
 
-In compilazione la scelta multipla usa gli stessi limiti del menu Discord: massimo `min(maxSelections ?? opzioni, opzioni)`, minimo `min(minSelections ?? (obbligatoria ? 1 : 0), massimo)`. Una domanda facoltativa può essere saltata (stringa vuota o nessuna selezione).
+When filling in, multiple choice uses the same limits as the Discord menu: maximum `min(maxSelections ?? options, options)`, minimum `min(minSelections ?? (required ? 1 : 0), maximum)`. An optional question can be skipped (empty string or no selection).
 
-Gli orari di apertura e chiusura si inseriscono nella dashboard in ora locale del browser e vengono salvati in UTC.
+Opening and closing times are entered in the dashboard in the browser's local time and stored in UTC.
 
-### Modalità di compilazione
+### Filling-in modes
 
-- **In chat**: il flusso usa risposte ephemeral, visibili soltanto all'utente che lo ha avviato.
-- **DM**: il flusso prosegue nei messaggi privati del bot.
+- **In chat**: the flow uses ephemeral replies, visible only to the user who started it.
+- **DM**: the flow continues in the bot's direct messages.
 
-## Apertura, chiusura e limiti
+## Opening, closing and limits
 
-Per ogni form si possono impostare:
+For each form you can set:
 
-- abilitazione manuale;
-- data/ora di apertura;
-- data/ora di chiusura;
-- numero massimo di invii per utente;
-- cooldown tra invii;
-- finestra anti-spam;
-- numero massimo di tentativi nella finestra;
-- ruoli autorizzati;
-- ruoli esclusi.
+- manual enabling;
+- opening date/time;
+- closing date/time;
+- maximum number of submissions per user;
+- cooldown between submissions;
+- anti-spam window;
+- maximum number of attempts in the window;
+- allowed roles;
+- excluded roles.
 
-Una compilazione attiva impedisce l'avvio parallelo dello stesso form da parte dello stesso utente. Le sessioni scadute o già consumate non possono essere riutilizzate.
+An active session prevents the same user from starting the same form in parallel. Expired or already consumed sessions cannot be reused.
 
-## Risultati
+## Results
 
-È possibile scegliere un canale Discord nel quale inviare il report e i ruoli da notificare. Il report contiene:
+You can choose a Discord channel to receive the report and the roles to notify. The report contains:
 
-- utente e ID Discord;
+- user and Discord ID;
 - timestamp;
-- ID della submission;
-- tutte le domande e le risposte.
+- submission ID;
+- every question and answer.
 
-Le risposte archiviate sono cifrate con la stessa chiave usata dagli altri dati privati di Dispatch.
+Stored answers are encrypted with the same key used for Dispatch's other private data.
 
-## Ticket automatico dopo un form
+## Automatic ticket after a form
 
-Un form può creare automaticamente un vero ticket Dispatch dopo l'invio.
+A form can automatically create a real Dispatch ticket after the submission.
 
-Si configurano:
+Configured with:
 
-- categoria ticket Dispatch;
-- eventuale categoria Discord alternativa;
-- eventuale categoria Discord per i ticket chiusi (override di quella della categoria ticket);
-- eventuali ruoli staff alternativi.
+- Dispatch ticket category;
+- optional alternative Discord category;
+- optional Discord category for closed tickets (overriding the ticket category's);
+- optional alternative staff roles.
 
-Il ticket creato:
+The created ticket:
 
-- viene registrato nel database Dispatch;
-- utilizza il contatore ticket del server;
-- aggiunge il compilatore come opener;
-- concede accesso ai ruoli staff configurati;
-- contiene il report del form;
-- dispone dei normali controlli Claim, Unclaim, stato e chiusura;
-- compare nella dashboard e negli audit;
-- ricorda il form di origine (`Ticket.sourceFormId`): alla chiusura viene spostato nella **Categoria Discord per i ticket chiusi (override)** del form (`ticketClosedParentCategoryId`), se impostata, altrimenti in quella della categoria ticket. Vedi [TICKET_PROTECTIONS.md](TICKET_PROTECTIONS.md#ticket-chiusi-categoria-dedicata-riapertura-ed-eliminazione-del-canale).
+- is recorded in the Dispatch database;
+- uses the server's ticket counter;
+- adds the submitter as opener;
+- grants access to the configured staff roles;
+- contains the form report;
+- has the usual Claim, Unclaim, status and close controls;
+- appears in the dashboard and in the audits;
+- remembers its source form (`Ticket.sourceFormId`): on close it is moved to the form's **Categoria Discord per i ticket chiusi (override)** (*closed-ticket Discord category, override*, `ticketClosedParentCategoryId`), if set, otherwise to the ticket category's. See [TICKET_PROTECTIONS.md](TICKET_PROTECTIONS.md#closed-tickets-dedicated-category-reopening-and-channel-deletion).
 
-Ogni invio genera l'evento di log `FORM_SUBMISSION` (nome del form, utente, ID invio ed eventuale ticket, mai le risposte) quando il canale log ticket è configurato.
+Each submission generates the log event `FORM_SUBMISSION` (form name, user, submission ID and any ticket, never the answers) when the ticket log channel is configured.
 
-## Permessi
+## Permissions
 
-Oltre ai livelli generali della dashboard, ogni form supporta binding per ruolo Discord (valutati sui ruoli **attuali** del membro, letti da Discord a ogni richiesta):
+Besides the general dashboard levels, each form supports Discord role bindings (evaluated on the member's **current** roles, read from Discord on every request):
 
-- **Manage**: modifica di domande, testi, pianificazione (apertura/chiusura), limiti anti-spam e ruoli autorizzati/esclusi;
-- **View**: il form compare nella dashboard dell'utente;
-- **Review**: visualizzazione degli invii;
-- **Submit**: autorizzazione esplicita alla compilazione.
+- **Manage**: editing questions, texts, schedule (opening/closing), anti-spam limits and allowed/excluded roles;
+- **View**: the form appears in the user's dashboard;
+- **Review**: viewing submissions;
+- **Submit**: explicit permission to fill in the form.
 
-Manage e Review implicano View. Un utente non Admin vede **solo** i form per cui almeno uno dei suoi ruoli ha View, Manage o Review; gli invii richiedono Review.
+Manage and Review imply View. A non-Admin user sees **only** the forms for which at least one of their roles has View, Manage or Review; submissions require Review.
 
-Restano riservati a Owner/Admin:
+Reserved to Owner/Admin:
 
-- creazione ed eliminazione dei form;
-- modifica dei binding (`PUT`/`DELETE /api/guilds/:guildId/forms/:formId/permissions/:roleId`): un manager delegato non può concedersi altri permessi;
-- canale risultati, ruoli da notificare, ticket automatico (`createTicketOnSubmit`, `ticketCategoryId`, `ticketParentCategoryId`, `ticketClosedParentCategoryId`, `ticketStaffRoleIds`). Un `PUT` di un manager delegato che cambia uno di questi campi riceve `403 FORM_FIELD_ADMIN_ONLY`;
-- tutta la gestione dei pannelli (elenco, creazione, modifica, pubblicazione ed eliminazione): vedi [PANELS.md](PANELS.md);
-- eliminazione di un singolo invio (`DELETE /api/guilds/:guildId/forms/:formId/submissions/:submissionId`, registrata nell'audit del pannello come `form.submission.delete`).
+- creating and deleting forms;
+- changing bindings (`PUT`/`DELETE /api/guilds/:guildId/forms/:formId/permissions/:roleId`): a delegated manager cannot grant themselves other permissions;
+- results channel, roles to notify, automatic ticket (`createTicketOnSubmit`, `ticketCategoryId`, `ticketParentCategoryId`, `ticketClosedParentCategoryId`, `ticketStaffRoleIds`). A `PUT` by a delegated manager that changes one of these fields receives `403 FORM_FIELD_ADMIN_ONLY`;
+- all panel management (list, creation, editing, publication and deletion): see [PANELS.md](PANELS.md);
+- deleting a single submission (`DELETE /api/guilds/:guildId/forms/:formId/submissions/:submissionId`, recorded in the dashboard audit as `form.submission.delete`).
 
-Un form con invii non può essere eliminato (`409 FORM_IN_USE`, anche in caso di invio concorrente). Una categoria ticket usata da un form per il ticket automatico non può essere eliminata (`409 CATEGORY_IN_USE_BY_FORM`): aggiornare il form o disabilitare la categoria.
+A form with submissions cannot be deleted (`409 FORM_IN_USE`, also in case of a concurrent submission). A ticket category used by a form for the automatic ticket cannot be deleted (`409 CATEGORY_IN_USE_BY_FORM`): update the form or disable the category.
 
-Se un invio non è decifrabile, l'elenco lo restituisce con `unreadable: true` e risposte vuote invece di fallire per intero.
+If a submission cannot be decrypted, the list returns it with `unreadable: true` and empty answers instead of failing entirely.
 
-## Pannelli
+## Panels
 
-I form vengono pubblicati tramite pannelli Discord gestiti nella sezione **Pannelli** della dashboard ([PANELS.md](PANELS.md)). Un pannello può offrire uno o più form (fino a 25, ordinati) con pulsanti o menu a tendina, embed personalizzato ed emoji. I pannelli creati prima di questa funzione continuano a mostrare un solo pulsante con il loro testo. Eliminando un form, questo viene tolto dagli altri pannelli; un pannello rimasto senza form viene disattivato o, se il form era il suo principale, eliminato.
+Forms are published through Discord panels managed in the **Pannelli** (*Panels*) section of the dashboard ([PANELS.md](PANELS.md)). A panel can offer one or more forms (up to 25, ordered) with buttons or a select menu, a custom embed and emoji. Panels created before this feature keep showing a single button with their text. When a form is deleted, it is removed from the other panels; a panel left without forms is disabled or, if the form was its main one, deleted.
 
-La ripubblicazione aggiorna il messaggio esistente quando possibile e crea un nuovo messaggio solo se quello precedente non esiste più.
+Republishing updates the existing message when possible and creates a new message only if the previous one no longer exists.
 
-## Transcript dei ticket
+## Ticket transcripts
 
-Ogni categoria ticket ha l'opzione **Conserva copia cifrata** (`transcriptRetain`, predefinita attiva):
+Each ticket category has the option **Conserva una copia cifrata lato Dispatch** (*keep an encrypted copy on the Dispatch side*, `transcriptRetain`, on by default):
 
-- attiva: la copia cifrata resta nel database fino alla retention o all'eliminazione del ticket e può essere scaricata più volte;
-- disattiva: il transcript generato dalla dashboard è monouso e il transcript automatico non viene salvato.
+- on: the encrypted copy stays in the database until retention or ticket deletion and can be downloaded several times;
+- off: the transcript generated from the dashboard is one-shot and the automatic transcript is not saved.
 
-Il download dalla dashboard usa `POST /api/guilds/:guildId/tickets/:ticketId/transcript/download`. Per una copia monouso l'eliminazione è atomica (solo una richiesta concorrente ottiene il contenuto, le altre ricevono `404 TRANSCRIPT_NOT_FOUND`), viene registrata come `ticket.transcript.consume` e la risposta riporta `X-Transcript-Consumed: 1`. `GET`/`HEAD /api/guilds/:guildId/tickets/:ticketId/transcript` non modificano mai i dati e per una copia monouso rispondono `409 TRANSCRIPT_ONE_SHOT`.
+The dashboard download uses `POST /api/guilds/:guildId/tickets/:ticketId/transcript/download`. For a one-shot copy the deletion is atomic (only one concurrent request gets the content, the others receive `404 TRANSCRIPT_NOT_FOUND`), it is recorded as `ticket.transcript.consume` and the response carries `X-Transcript-Consumed: 1`. `GET`/`HEAD /api/guilds/:guildId/tickets/:ticketId/transcript` never modify data and, for a one-shot copy, answer `409 TRANSCRIPT_ONE_SHOT`.
 
-La migrazione `20261008100100_forms_api_fixes` rinomina la vecchia colonna `transcriptStoreTemporary` (che aveva significato invertito) in `transcriptRetain` e imposta `true` per le categorie senza generazione automatica, così i transcript esistenti non vengono più eliminati al primo download. Le categorie con generazione automatica mantengono la scelta esplicita fatta in precedenza.
+Migration `20261008100100_forms_api_fixes` renames the old column `transcriptStoreTemporary` (which had the inverted meaning) to `transcriptRetain` and sets `true` for categories without automatic generation, so existing transcripts are no longer deleted at the first download. Categories with automatic generation keep the explicit choice made before.

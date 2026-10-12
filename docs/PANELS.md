@@ -1,61 +1,63 @@
-# Pannelli
+# Panels
 
-La sezione **Pannelli** della dashboard (`/dashboard/<guildId>/panels`) gestisce i messaggi Discord da cui gli utenti aprono un ticket o compilano un form. È riservata a Owner/Admin: anche le API (`/api/guilds/:guildId/panels…` e `/api/guilds/:guildId/form-panels…`, lettura inclusa) rispondono `403` agli altri livelli.
+The **Pannelli** (*Panels*) section of the dashboard (`/dashboard/<guildId>/panels`) manages the Discord messages from which users open a ticket or fill in a form. It is reserved to Owner/Admin: the API (`/api/guilds/:guildId/panels…` and `/api/guilds/:guildId/form-panels…`, reads included) also answers `403` to the other levels.
 
-L'elenco mostra tutti i pannelli (tipo Ticket/Form, nome, canale, numero di elementi, attivo/disattivo, pubblicato o no) con le azioni **Modifica**, **Pubblica / Aggiorna su Discord** ed **Elimina** (con conferma; il messaggio già pubblicato non viene cancellato da Discord e smette di rispondere). Il **menu principale** dei ticket compare in sola lettura e si configura sempre in *Sistema e menu*.
+The dashboard is available in English and Italian; labels are quoted in Italian followed by their English equivalent.
 
-## Creazione e modifica
+The list shows every panel (Ticket/Form type, name, channel, number of items, active/inactive, published or not) with the actions **Modifica** (*Edit*), **Pubblica / Aggiorna su Discord** (*Publish / Update on Discord*) and **Elimina** (*Delete*, with confirmation; a message already published is not deleted from Discord and stops responding). The ticket **main menu** appears read-only and is always configured in **Sistema e menu** (*System and menu*).
 
-**Nuovo pannello** chiede il tipo (Ticket o Form) e apre l'editor con anteprima live in stile Discord.
+## Creating and editing
 
-Campi comuni:
+**Nuovo pannello** (*New panel*) asks for the type (Ticket or Form) and opens the editor with a live Discord-style preview.
 
-| Campo | Limite |
+Common fields:
+
+| Field | Limit |
 | --- | --- |
-| Nome interno | 80 caratteri (facoltativo per i form) |
-| Canale | testuale o annunci del server |
-| Titolo embed | 256 |
-| Descrizione embed | 4000 |
-| Colore | `#rrggbb`, salvato come intero `0..0xFFFFFF` |
-| Immagine / miniatura | solo `https://`, 2048 caratteri |
-| Footer | 2048, predefinito `Dispatch` |
-| Totale titolo + descrizione + footer | 6000 (limite Discord degli embed) |
+| Internal name | 80 characters (optional for forms) |
+| Channel | text or announcement channel of the server |
+| Embed title | 256 |
+| Embed description | 4000 |
+| Colour | `#rrggbb`, stored as an integer `0..0xFFFFFF` |
+| Image / thumbnail | `https://` only, 2048 characters |
+| Footer | 2048, default `Dispatch` |
+| Total title + description + footer | 6000 (Discord embed limit) |
 
-Stile di interazione:
+Interaction style:
 
-- **Menu a tendina** (`SELECT`): un solo menu con segnaposto configurabile (150 caratteri).
-- **Pulsanti** (`BUTTONS`): un pulsante per elemento, 5 per riga, massimo 25.
+- **Select menu** (`SELECT`): a single menu with a configurable placeholder (150 characters).
+- **Buttons** (`BUTTONS`): one button per item, 5 per row, at most 25.
 
-Elementi (categorie ticket abilitate oppure form del server, ordinati, massimo 25) con personalizzazioni per singolo pannello: etichetta (80 caratteri per i pulsanti, 100 per il menu), emoji (unicode oppure `<:nome:id>` / `<a:nome:id>`; un valore non valido viene scartato), descrizione (solo menu, 100 caratteri), stile del pulsante (Primario, Secondario, Successo, Pericolo).
+Items (enabled ticket categories or forms of the server, ordered, at most 25) with per-panel customisation: label (80 characters for buttons, 100 for the menu), emoji (unicode or `<:name:id>` / `<a:name:id>`; an invalid value is discarded), description (menu only, 100 characters), button style (Primary, Secondary, Success, Danger).
 
-Le modifiche vengono applicate al messaggio con **Aggiorna su Discord**. La pubblicazione modifica il messaggio esistente e ne invia uno nuovo solo se Discord risponde *Unknown Message*; errori di permessi o di rete non generano duplicati. Cambiando canale il riferimento al vecchio messaggio viene azzerato.
+Changes are applied to the message with **Aggiorna su Discord**. Publishing edits the existing message and sends a new one only if Discord answers *Unknown Message*; permission or network errors do not create duplicates. Changing the channel clears the reference to the old message.
 
-## Modello dati
+## Data model
 
-Migrazione `20261010120000_panel_customization`:
+Migration `20261010120000_panel_customization`:
 
-- `TicketPanel`: `style` (`SELECT` predefinito, vincolo `CHECK`), `placeholder`, `color`, `imageUrl`, `thumbnailUrl`, `footerText`, `items` (JSONB, predefinito `[]`). `categoryIds` resta la lista ordinata degli elementi inclusi.
-- `FormPanel`: stesse colonne (`style` predefinito `BUTTONS`), `name` e `formIds TEXT[]`, popolato con `ARRAY["formId"]` per i pannelli esistenti. `formId` resta la FK del form principale (`formIds[0]`) e la sua cascata.
-- `items` è un array `[{ id, label, emoji, description, buttonStyle }]` indicizzato per id di categoria o di form.
+- `TicketPanel`: `style` (`SELECT` by default, `CHECK` constraint), `placeholder`, `color`, `imageUrl`, `thumbnailUrl`, `footerText`, `items` (JSONB, default `[]`). `categoryIds` stays the ordered list of included items.
+- `FormPanel`: the same columns (`style` default `BUTTONS`), `name` and `formIds TEXT[]`, filled with `ARRAY["formId"]` for existing panels. `formId` stays the FK of the main form (`formIds[0]`) with its cascade.
+- `items` is an array `[{ id, label, emoji, description, buttonStyle }]` indexed by category or form id.
 
-I valori predefiniti riproducono l'aspetto precedente: i pannelli già pubblicati continuano a funzionare senza ripubblicazione.
+The defaults reproduce the previous look: panels already published keep working without republishing.
 
-Eliminando una categoria ticket o un form, l'API lo rimuove dagli altri pannelli (anche dalle personalizzazioni) e disattiva i pannelli rimasti senza elementi. Un pannello form il cui form principale viene eliminato passa al form successivo; se non ne restano viene eliminato dalla cascata della FK.
+When a ticket category or a form is deleted, the API removes it from the other panels (customisations included) and disables the panels left without items. A form panel whose main form is deleted moves to the next form; if none is left, it is deleted by the FK cascade.
 
-## Interazioni Discord
+## Discord interactions
 
-| customId | Uso |
+| customId | Use |
 | --- | --- |
-| `dispatch:open:<panelId>` | menu del pannello ticket (valore = id categoria) |
-| `dispatch:panel-btn:<panelId>:<categoryId>` | pulsante del pannello ticket |
-| `dispatch:form:start:<panelId>:<formId>` | pulsante del pannello form |
-| `dispatch:form:pick:<panelId>` | menu del pannello form (valore = id form) |
-| `dispatch:form:start:<panelId>` | messaggi pubblicati prima dei pannelli multi-form: apre il primo form del pannello |
+| `dispatch:open:<panelId>` | ticket panel menu (value = category id) |
+| `dispatch:panel-btn:<panelId>:<categoryId>` | ticket panel button |
+| `dispatch:form:start:<panelId>:<formId>` | form panel button |
+| `dispatch:form:pick:<panelId>` | form panel menu (value = form id) |
+| `dispatch:form:start:<panelId>` | messages published before multi-form panels: opens the panel's first form |
 
-Tutti gli id restano sotto i 100 caratteri. Pulsanti e menu dei pannelli ticket seguono lo stesso flusso di apertura: limitatore di ingresso, prenotazione con chiave sorgente `p_<panelId>`, verifica che il messaggio sia quello attuale del pannello e che la categoria sia ancora inclusa e abilitata. Per i form il bot verifica che il form sia ancora incluso nel pannello e appartenga al server.
+Every id stays below 100 characters. Ticket panel buttons and menus follow the same opening flow: ingress limiter, reservation with source key `p_<panelId>`, check that the message is the panel's current one and that the category is still included and enabled. For forms the bot checks that the form is still included in the panel and belongs to the server.
 
-Codici di errore di pubblicazione (campo `reason` della risposta `502`): `PANEL_NOT_FOUND`, `PANEL_HAS_NO_CATEGORIES`, `PANEL_TOO_MANY_CATEGORIES`, `PANEL_CHANNEL_INVALID`, `FORM_PANEL_NOT_FOUND`, `PANEL_HAS_NO_ITEMS`, `FORM_PANEL_CHANNEL_INVALID`, `GUILD_NOT_FOUND`.
+Publication error codes (`reason` field of the `502` response): `PANEL_NOT_FOUND`, `PANEL_HAS_NO_CATEGORIES`, `PANEL_TOO_MANY_CATEGORIES`, `PANEL_CHANNEL_INVALID`, `FORM_PANEL_NOT_FOUND`, `PANEL_HAS_NO_ITEMS`, `FORM_PANEL_CHANNEL_INVALID`, `GUILD_NOT_FOUND`.
 
-## Selettori di canali e ruoli
+## Channel and role pickers
 
-In tutta la dashboard canali, ruoli e categorie si scelgono con un selettore ricercabile (`ResourcePicker`): ricerca per nome o ID senza distinzione di maiuscole e accenti, navigazione da tastiera (frecce, Invio, Esc, Backspace per togliere l'ultimo elemento), elementi selezionati come chip rimovibili. I canali mostrano la categoria padre; i ruoli il colore e mai `@everyone`.
+Throughout the dashboard, channels, roles and categories are chosen with a searchable picker (`ResourcePicker`): search by name or ID ignoring case and accents, keyboard navigation (arrows, Enter, Esc, Backspace to remove the last item), selected items as removable chips. Channels show their parent category; roles show their colour and never `@everyone`.
