@@ -17,18 +17,13 @@ env:
   IMAGE: ghcr.io/haxurus/dispatch
 
 jobs:
-  ticket-checks:
-    uses: ./.github/workflows/ticket-tests.yml
-    permissions:
-      contents: read
-
-  validate:
+  ci:
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
 
   build:
-    needs: [ticket-checks, validate]
+    needs: ci
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     outputs:
@@ -36,7 +31,7 @@ jobs:
       migrate_ref: ${{ steps.refs.outputs.migrate_ref }}
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Login to GHCR
         shell: bash

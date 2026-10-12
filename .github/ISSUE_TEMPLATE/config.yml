@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/haxurus/Dispatch/security/advisories/new
+    about: Report vulnerabilities privately. Never open a public issue for them.
+  - name: Questions and help
+    url: https://discord.gg/DDBGWP5fMX
+    about: Setup questions, how-to and support for the hosted instance on the Discord server.
