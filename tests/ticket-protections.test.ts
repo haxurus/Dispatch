@@ -500,10 +500,10 @@ test('ticket panel buttons re-check panel message and category before opening', 
   assert.equal(await handleTicketInteraction(interaction(included.id, '990000000000006103') as any), true);
   assert.match(replies.at(-1).content, /Pannello scaduto/);
   await handleTicketInteraction(interaction(excluded.id) as any);
-  assert.match(replies.at(-1).content, /non e piu disponibile/);
+  assert.match(replies.at(-1).content, /non è più disponibile/);
   await prisma.ticketCategory.update({ where: { id: included.id }, data: { enabled: false } });
   await handleTicketInteraction(interaction(included.id) as any);
-  assert.match(replies.at(-1).content, /non e piu disponibile/);
+  assert.match(replies.at(-1).content, /non è più disponibile/);
   assert.equal(await prisma.ticketUserGuard.count({ where: { guildId: G, userId: user } }), 0);
 });
 
