@@ -2,7 +2,7 @@
 
 | Need | Where |
 |---|---|
-| Questions, setup help, support for the hosted instance | [Discord server](https://discord.gg/DDBGWP5fMX) |
+| Questions, setup help, support for the hosted instance | [Discord server](https://discord.gg/P7ycBcBqtn) |
 | Something is broken | [Bug report](https://github.com/haxurus/Dispatch/issues/new/choose) |
 | An idea or improvement | [Feature request](https://github.com/haxurus/Dispatch/issues/new/choose) |
 | A security vulnerability | [Private vulnerability reporting](https://github.com/haxurus/Dispatch/security/advisories/new) |

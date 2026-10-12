@@ -9,7 +9,7 @@ Copy for the public bot directories, ready to paste, and the website's search en
 - **Public Bot** must be enabled in the Discord Developer Portal, otherwise reviewers cannot add the bot.
 - Privacy policy: https://dispatch.haxurus.com/en/legal#privacy
 - Terms of service: https://dispatch.haxurus.com/en/legal#terms
-- Support server: https://discord.gg/DDBGWP5fMX
+- Support server: https://discord.gg/P7ycBcBqtn
 - In **Developer Portal → General Information**, set the description, tags and the *Terms of Service* / *Privacy Policy URL* (required by the App Directory).
 
 ## Common fields
@@ -27,7 +27,7 @@ Copy for the public bot directories, ready to paste, and the website's search en
 | Source code | https://github.com/haxurus/Dispatch |
 | Licence | AGPL-3.0 (open source) |
 | Contact | haxurus@icloud.com |
-| Support server | https://discord.gg/DDBGWP5fMX |
+| Support server | https://discord.gg/P7ycBcBqtn |
 | Languages | English and Italian (bot messages per server, website, dashboard) |
 | Price | Free |
 | Invite URL | `https://dispatch.haxurus.com/backend/bot/invite` (redirects to Discord's authorisation page, scopes `bot applications.commands`, permissions `361045814288`) |

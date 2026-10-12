@@ -24,7 +24,7 @@ Never commit:
 - `secrets/*`;
 - Discord tokens;
 - OAuth client secrets;
-- PostgreSQL/Redis passwords;
+- PostgreSQL passwords;
 - `data_encryption_key`, `session_secret`, `bot_internal_api_key`;
 - private SSH keys;
 - database dumps, transcripts or log exports.

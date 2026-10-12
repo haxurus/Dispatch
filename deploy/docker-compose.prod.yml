@@ -21,34 +21,6 @@ services:
     read_only: true
     tmpfs: ["/tmp:rw,noexec,nosuid,size=32m", "/var/run/postgresql:rw,nosuid,size=8m"]
 
-  redis:
-    image: redis:8-alpine
-    restart: unless-stopped
-    # redis:alpine uid/gid; the overridden command bypasses the entrypoint's privilege drop.
-    user: "999:1000"
-    secrets: [redis_password]
-    command:
-      - sh
-      - -c
-      - |
-        umask 077
-        printf 'appendonly yes\nprotected-mode yes\nbind 0.0.0.0\nmaxmemory 256mb\nmaxmemory-policy noeviction\nrequirepass %s\n' "$$(cat /run/secrets/redis_password)" > /tmp/redis.conf
-        exec redis-server /tmp/redis.conf
-    volumes: [redis_data:/data]
-    networks: [bot_queue]
-    healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_password)\" redis-cli ping | grep -q PONG"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-    security_opt: ["no-new-privileges:true"]
-    cap_drop: ["ALL"]
-    pids_limit: 100
-    mem_limit: 384m
-    cpus: 0.5
-    read_only: true
-    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
-
   migrate:
     image: ${DISPATCH_MIGRATE_IMAGE:?DISPATCH_MIGRATE_IMAGE is required}
     restart: "no"
@@ -134,7 +106,7 @@ services:
   bot:
     image: ${DISPATCH_APP_IMAGE:?DISPATCH_APP_IMAGE is required}
     restart: unless-stopped
-    secrets: [discord_token, bot_internal_api_key, data_encryption_key, bot_db_password, redis_password]
+    secrets: [discord_token, bot_internal_api_key, data_encryption_key, bot_db_password]
     environment:
       NODE_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -147,12 +119,10 @@ services:
       - -c
       - |
         export DATABASE_URL="postgresql://dispatch_bot:$$(cat /run/secrets/bot_db_password)@postgres:5432/${POSTGRES_DB:-dispatch}?schema=public"
-        export REDIS_URL="redis://:$$(cat /run/secrets/redis_password)@redis:6379/0"
         exec node apps/bot/dist/index.js
     depends_on:
       secure-db: { condition: service_completed_successfully }
-      redis: { condition: service_healthy }
-    networks: [bot_db, bot_queue, bot_rpc, bot_egress]
+    networks: [bot_db, bot_rpc, bot_egress]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -229,7 +199,6 @@ networks:
   api_db: { internal: true, ipam: { config: [{ subnet: 10.251.0.32/28 }] } }
   bot_db: { internal: true, ipam: { config: [{ subnet: 10.251.0.48/28 }] } }
   migrate_db: { internal: true, ipam: { config: [{ subnet: 10.251.0.64/28 }] } }
-  bot_queue: { internal: true, ipam: { config: [{ subnet: 10.251.0.80/28 }] } }
   bot_rpc: { internal: true, ipam: { config: [{ subnet: 10.251.0.96/28 }] } }
   api_egress:
     driver: bridge
@@ -247,7 +216,6 @@ networks:
 
 volumes:
   postgres_data:
-  redis_data:
 
 secrets:
   discord_token: { file: ./secrets/discord_token }
@@ -258,4 +226,3 @@ secrets:
   postgres_admin_password: { file: ./secrets/postgres_admin_password }
   api_db_password: { file: ./secrets/api_db_password }
   bot_db_password: { file: ./secrets/bot_db_password }
-  redis_password: { file: ./secrets/redis_password }

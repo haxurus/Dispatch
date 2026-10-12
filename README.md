@@ -7,7 +7,7 @@
 
 Dispatch opens private ticket channels from menus, panels and forms, lets staff claim, assign, prioritise and close them, keeps encrypted transcripts and form answers, and measures response times, ratings and moderator activity. Everything is configured from a web dashboard.
 
-**[Add to Discord](https://dispatch.haxurus.com/backend/bot/invite)** · [Website](https://dispatch.haxurus.com/en) · [Support server](https://discord.gg/DDBGWP5fMX) · [Privacy & terms](https://dispatch.haxurus.com/en/legal)
+**[Add to Discord](https://dispatch.haxurus.com/backend/bot/invite)** · [Website](https://dispatch.haxurus.com/en) · [Support server](https://discord.gg/P7ycBcBqtn) · [Privacy & terms](https://dispatch.haxurus.com/en/legal)
 
 - **Hosted instance:** [dispatch.haxurus.com](https://dispatch.haxurus.com) — free and open to every server
 - **Self-hosting:** run your own copy with Docker — see the [distribution rules](docs/DISTRIBUTION.md)
@@ -91,7 +91,7 @@ A ticket bot handles private conversations, so Dispatch is designed to limit wha
 - **Separated secrets.** The Discord token exists only in the bot container, the OAuth client secret only in the API; the web container has no application secrets; secrets live in root-only files on the host.
 - **Encryption at rest.** Transcripts, form answers, staff notes, close reasons, feedback comments, blacklist reasons, response templates and audit details are encrypted with AES-256-GCM.
 - **Least-privilege database.** Distinct PostgreSQL roles for API and bot; the bot cannot read dashboard sessions, role bindings, staff notes, response templates or audit tables. CI verifies these grants on every change.
-- **Isolation.** Segmented Docker networks, private authenticated Redis, read-only non-root containers with `cap_drop: ALL` and resource limits, no Docker socket, egress blocked towards host/LAN.
+- **Isolation.** Segmented Docker networks, read-only non-root containers with `cap_drop: ALL` and resource limits, no Docker socket, egress blocked towards host/LAN.
 - **Web hardening.** HttpOnly/Secure session cookies (HMAC-hashed in the database), OAuth `state`, Origin-based CSRF checks, strict CSP, rate limiting, input validation, guild membership and access checks on every request.
 - **Restricted deployment.** GitHub Actions reaches the VPS through a dedicated SSH key with a forced command that can only run `deploy`, `rollback` and `status`; images are deployed by immutable SHA-256 digest.
 
@@ -195,7 +195,7 @@ Dispatch works only with what Discord exposes to the bot through the Gateway and
 
 ## Support and contributing
 
-- **Questions and help:** the [Discord server](https://discord.gg/DDBGWP5fMX) — see [SUPPORT.md](.github/SUPPORT.md).
+- **Questions and help:** the [Discord server](https://discord.gg/P7ycBcBqtn) — see [SUPPORT.md](.github/SUPPORT.md).
 - **Bugs and feature requests:** [open an issue](https://github.com/haxurus/Dispatch/issues/new/choose) using the forms.
 - **Security vulnerabilities:** report them [privately](https://github.com/haxurus/Dispatch/security/advisories/new), never in a public issue — see [SECURITY.md](SECURITY.md).
 - **Pull requests:** read [CONTRIBUTING.md](.github/CONTRIBUTING.md) first, including the project scope. Every pull request runs the full CI.

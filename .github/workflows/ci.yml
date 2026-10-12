@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p deploy/secrets
-          for name in discord_token discord_client_secret session_secret data_encryption_key bot_internal_api_key postgres_admin_password api_db_password bot_db_password redis_password; do
+          for name in discord_token discord_client_secret session_secret data_encryption_key bot_internal_api_key postgres_admin_password api_db_password bot_db_password; do
             : > "deploy/secrets/$name"
           done
           DISPATCH_APP_IMAGE=ghcr.io/haxurus/dispatch@sha256:$(printf 'a%.0s' {1..64})           DISPATCH_MIGRATE_IMAGE=ghcr.io/haxurus/dispatch@sha256:$(printf 'b%.0s' {1..64})           docker compose --env-file deploy/.env.production.example -f deploy/docker-compose.prod.yml config -q

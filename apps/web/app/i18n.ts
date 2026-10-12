@@ -160,7 +160,7 @@ const homeIt: HomeCopy = {
       ['Dati cifrati', 'Transcript, note dello staff, motivi della blacklist e sessioni sono cifrati con AES-256-GCM.'],
       ['Sessioni protette', 'Cookie httpOnly, controllo dell’origine sulle modifiche e rate limit sulle API del pannello.'],
       ['Database a privilegi minimi', 'Ruoli Postgres distinti per API e bot: il bot non legge sessioni, note né audit del pannello.'],
-      ['Rete segmentata', 'Database, Redis e API interna del bot non sono esposti; ogni container vede solo ciò che gli serve.']
+      ['Rete segmentata', 'Database e API interna del bot non sono esposti; ogni container vede solo ciò che gli serve.']
     ]
   },
   faq: {
@@ -252,7 +252,7 @@ const homeEn: HomeCopy = {
       ['Encrypted data', 'Transcripts, staff notes, blacklist reasons and sessions are encrypted with AES-256-GCM.'],
       ['Protected sessions', 'httpOnly cookies, origin checks on every change and rate limits on the panel API.'],
       ['Least-privilege database', 'Separate Postgres roles for API and bot: the bot cannot read sessions, notes or panel audit.'],
-      ['Segmented network', 'Database, Redis and the bot internal API are never exposed; each container reaches only what it needs.']
+      ['Segmented network', 'The database and the bot internal API are never exposed; each container reaches only what it needs.']
     ]
   },
   faq: {

@@ -66,7 +66,7 @@ secret_if_missing() {
 secret_if_missing session_secret "openssl rand -base64 48 | tr -d '\\n'"
 secret_if_missing bot_internal_api_key "openssl rand -base64 48 | tr -d '\\n'"
 secret_if_missing data_encryption_key "openssl rand -base64 32 | tr -d '\\n'"
-for name in postgres_admin_password api_db_password bot_db_password redis_password; do
+for name in postgres_admin_password api_db_password bot_db_password; do
   secret_if_missing "$name" "openssl rand -hex 32 | tr -d '\\n'"
 done
 
@@ -75,7 +75,7 @@ for name in discord_token discord_client_secret; do
   [ -e "$file" ] || install -o root -g root -m 600 /dev/null "$file"
 done
 
-for name in discord_token discord_client_secret session_secret data_encryption_key bot_internal_api_key api_db_password bot_db_password redis_password; do
+for name in discord_token discord_client_secret session_secret data_encryption_key bot_internal_api_key api_db_password bot_db_password; do
   file="$STATE_DIR/secrets/$name"
   chown root:1000 "$file"
   chmod 640 "$file"

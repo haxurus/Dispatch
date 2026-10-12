@@ -9,7 +9,7 @@ body:
         Thanks for taking the time to report a problem.
 
         - **Security vulnerability?** Do not open a public issue: use [private vulnerability reporting](https://github.com/haxurus/Dispatch/security/advisories/new).
-        - **Question or help with setup?** Ask in the [Discord server](https://discord.gg/DDBGWP5fMX).
+        - **Question or help with setup?** Ask in the [Discord server](https://discord.gg/P7ycBcBqtn).
         - Never paste tokens, passwords, `.env` files, database dumps, ticket transcripts or other people's messages.
   - type: checkboxes
     id: checks

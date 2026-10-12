@@ -9,7 +9,6 @@
 | `web` | Next.js: public site, dashboard, super console; proxies `/backend/*` to the API |
 | `edge` | Nginx in front of `web`, the only service reachable from the reverse proxy |
 | `postgres` | PostgreSQL 17, the single source of truth |
-| `redis` | Authenticated Redis reachable only by the bot; provisioned for job queues but not used by the current code |
 | `migrate`, `secure-db` | One-shot jobs: `prisma migrate deploy` as the database owner, then the role and grant policy |
 
 ## Event flow
@@ -128,7 +127,7 @@ For the current workload a single Docker Compose deployment is sufficient: one b
 
 1. introduce Discord sharding for the bot;
 2. move the per-session super console mutation budget and the access cache out of process memory before running several API replicas;
-3. move automations, retention and leaderboard cycles to a dedicated worker (Redis is already provisioned for a queue);
+3. move automations, retention and leaderboard cycles to a dedicated worker (adding a job queue such as Redis at that point);
 4. move heavy exports and transcript generation to controlled asynchronous jobs;
 5. partition audit tables by date.
 
