@@ -220,8 +220,43 @@ export function leaderboardPeriod(
   };
 }
 
-export function leaderboardTitle(period: Pick<LeaderboardPeriod, 'label'>) {
-  return `Classifica moderatori — ${period.label}`;
+const MONTHS_EN = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+] as const;
+const monthNameEn = (date: LocalDate) => MONTHS_EN[date.month - 1] ?? '';
+
+// 'week of 5–11 October 2026', 'week of 28 September – 4 October 2026'.
+function weekLabelEn(first: LocalDate, last: LocalDate) {
+  if (first.year !== last.year) {
+    return `week of ${first.day} ${monthNameEn(first)} ${first.year} – ${last.day} ${monthNameEn(last)} ${last.year}`;
+  }
+  if (first.month !== last.month) {
+    return `week of ${first.day} ${monthNameEn(first)} – ${last.day} ${monthNameEn(last)} ${last.year}`;
+  }
+  return `week of ${first.day}–${last.day} ${monthNameEn(last)} ${last.year}`;
+}
+
+export type LeaderboardLocale = 'it' | 'en';
+
+/** Period label in the server's language (`label` stays the Italian one). */
+export function leaderboardPeriodLabel(
+  period: Pick<LeaderboardPeriod, 'kind' | 'first' | 'last' | 'label'>,
+  locale: LeaderboardLocale = 'it'
+) {
+  if (locale === 'it') return period.label;
+  return period.kind === 'week'
+    ? weekLabelEn(period.first, period.last)
+    : `${monthNameEn(period.first)} ${period.first.year}`;
+}
+
+export function leaderboardTitle(
+  period: Pick<LeaderboardPeriod, 'kind' | 'first' | 'last' | 'label'>,
+  locale: LeaderboardLocale = 'it'
+) {
+  return locale === 'en'
+    ? `Moderator leaderboard — ${leaderboardPeriodLabel(period, 'en')}`
+    : `Classifica moderatori — ${period.label}`;
 }
 
 export type LeaderboardSchedule = {

@@ -21,8 +21,10 @@ import { invalidateTicketLogSettings, logTicketEvent } from '../apps/bot/src/tic
 import {
   isHttpsUrl, layoutPanelButtons, normalizePanelItems, normalizeTicketLogEvents, parseBlacklistLogPayload, parsePanelEmoji,
   dueLeaderboardPeriods, formatLeaderboardMinutes, isoWeek, leaderboardPeriod, leaderboardTitle, median, rankLeaderboard,
-  safeTimeZone, zonedTimeToUtc
+  safeTimeZone, zonedTimeToUtc, validateQuestionAnswer, displayAnswer
 } from '@dispatch/shared';
+import { messages, botLocale, invalidateGuildLocale, guildLocale, localizedMenuDefault } from '../apps/bot/src/i18n.js';
+import { ticketControlRows } from '../apps/bot/src/tickets.js';
 
 const db = new URL(process.env.DATABASE_URL ?? 'postgresql://invalid/invalid');
 assert.equal(process.env.DISPATCH_TEST_DATABASE, '1', 'Explicit test database opt-in required');
@@ -35,8 +37,9 @@ let number = 0;
 
 beforeEach(async () => {
   await prisma.guildSettings.deleteMany({ where: { guildId: G } });
+  // Italian: the assertions below check the Italian texts (new servers default to English).
   await prisma.guildSettings.create({ data: {
-    guildId: G, guildName: 'Disposable integration test',
+    guildId: G, guildName: 'Disposable integration test', locale: 'it',
     antiSpamGlobalCooldownSeconds: 0, antiSpamMaxAttempts: 100,
     transcriptRetentionDays: null, closedTicketRetentionDays: null,
     retentionDeleteDiscordChannel: false
@@ -1373,4 +1376,62 @@ test('the bot role can stamp leftAt and read the status channel, but cannot chan
       create: { id: 1, guildId: G, channelId: OTHER, updatedByUserId: U }
     }));
   } finally { await bot.$disconnect(); }
+});
+
+// Bot language (GuildSettings.locale): English by default, Italian on request.
+function keyShape(value: unknown): unknown {
+  if (typeof value === 'function') return 'fn';
+  if (!value || typeof value !== 'object') return typeof value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, keyShape((value as Record<string, unknown>)[key])]));
+}
+
+test('English and Italian bot dictionaries have exactly the same keys', () => {
+  assert.deepEqual(keyShape(messages.en), keyShape(messages.it));
+});
+
+test('the server language drives the bot texts and new servers default to English', async () => {
+  assert.equal(botLocale('it'), 'it');
+  assert.equal(botLocale('fr'), 'en');
+  assert.equal(botLocale(null), 'en');
+
+  invalidateGuildLocale(G);
+  assert.equal(await guildLocale(G), 'it');
+  await prisma.guildSettings.update({ where: { guildId: G }, data: { locale: 'en' } });
+  invalidateGuildLocale(G);
+  assert.equal(await guildLocale(G), 'en');
+  invalidateGuildLocale(G);
+
+  const fresh = await prisma.guildSettings.create({ data: { guildId: '990000000000000099', guildName: 'Locale default' } });
+  try {
+    assert.equal(fresh.locale, 'en');
+  } finally {
+    await prisma.guildSettings.delete({ where: { guildId: fresh.guildId } });
+  }
+
+  const english = ticketControlRows('c'.repeat(25), 'en').flatMap((row) => row.toJSON().components.map((button: any) => button.label));
+  assert.deepEqual(english, ['Claim', 'Unclaim', 'Waiting', 'Resolved', 'Close', 'Staff thread']);
+  const italian = ticketControlRows('c'.repeat(25), 'it').flatMap((row) => row.toJSON().components.map((button: any) => button.label));
+  assert.deepEqual(italian, ['Claim', 'Unclaim', 'In attesa', 'Risolto', 'Chiudi', 'Thread staff']);
+});
+
+test('main menu defaults follow the server language, custom texts never change', () => {
+  assert.equal(localizedMenuDefault('Centro assistenza', 'defaultTitle', 'en'), 'Help center');
+  assert.equal(localizedMenuDefault('Help center', 'defaultTitle', 'it'), 'Centro assistenza');
+  assert.equal(localizedMenuDefault('Supporto Celestia', 'defaultTitle', 'en'), 'Supporto Celestia');
+});
+
+test('leaderboard titles and form validation are localized', () => {
+  const rome = 'Europe/Rome';
+  const week = leaderboardPeriod('week', new Date('2026-10-10T10:00:00Z'), rome);
+  assert.equal(leaderboardTitle(week, 'en'), 'Moderator leaderboard — week of 5–11 October 2026');
+  const crossing = leaderboardPeriod('week', new Date('2026-10-01T10:00:00Z'), rome);
+  assert.equal(leaderboardTitle(crossing, 'en'), 'Moderator leaderboard — week of 28 September – 4 October 2026');
+  const month = leaderboardPeriod('month', new Date('2026-10-10T10:00:00Z'), rome, 1);
+  assert.equal(leaderboardTitle(month, 'en'), 'Moderator leaderboard — September 2026');
+
+  const question = { id: 'q1', label: 'Age', type: 'INTEGER' as const, required: true, minValue: 13 };
+  assert.deepEqual(validateQuestionAnswer(question, '', 'en'), { ok: false, message: 'This answer is required.' });
+  assert.deepEqual(validateQuestionAnswer(question, '9', 'en'), { ok: false, message: 'The minimum value is 13.' });
+  assert.deepEqual(validateQuestionAnswer(question, '9'), { ok: false, message: 'Il valore minimo è 13.' });
+  assert.equal(displayAnswer({ id: 'b', label: 'Ok?', type: 'BOOLEAN', value: 'true' }, undefined, 'en'), 'Yes');
 });

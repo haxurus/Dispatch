@@ -18,6 +18,7 @@ import {
   type LeaderboardPeriod,
   type LeaderboardPeriodKind
 } from '@dispatch/shared';
+import { guildLocale, messages, type BotLocale } from './i18n.js';
 
 /*
  * Moderator leaderboard: scheduled weekly/monthly posts and the dashboard
@@ -34,13 +35,13 @@ const MEDALS = ['🥇', '🥈', '🥉'] as const;
 
 const clip = (value: string, max: number) => (value.length > max ? value.slice(0, max - 1) + '…' : value);
 
-export function leaderboardLine(entry: LeaderboardEntry) {
+export function leaderboardLine(entry: LeaderboardEntry, locale: BotLocale) {
   const position = entry.rank <= 3 ? MEDALS[entry.rank - 1] : `**${entry.rank}.**`;
   const rating = entry.averageRating === null
     ? `⭐ — (${entry.feedbackCount})`
     : `⭐ ${entry.averageRating.toFixed(2)} (${entry.feedbackCount})`;
-  return `${position} <@${entry.userId}> · ${entry.handled} ticket · ${rating} · ` +
-    `1ª risposta ${formatLeaderboardMinutes(entry.medianFirstResponseMinutes)}`;
+  return `${position} <@${entry.userId}> · ` +
+    messages[locale].leaderboard.line(entry.handled, rating, formatLeaderboardMinutes(entry.medianFirstResponseMinutes));
 }
 
 /** Empty period: nobody was credited with a closed ticket. */
@@ -48,17 +49,21 @@ export function leaderboardIsEmpty(entries: readonly LeaderboardEntry[]) {
   return !entries.some((entry) => entry.handled > 0);
 }
 
-export function buildLeaderboardEmbed(period: LeaderboardPeriod, entries: readonly LeaderboardEntry[], minRatings: number) {
+export function buildLeaderboardEmbed(
+  period: LeaderboardPeriod,
+  entries: readonly LeaderboardEntry[],
+  minRatings: number,
+  locale: BotLocale
+) {
+  const m = messages[locale].leaderboard;
   const embed = new EmbedBuilder()
-    .setTitle(clip(leaderboardTitle(period), 256))
+    .setTitle(clip(leaderboardTitle(period, locale), 256))
     .setColor(0xf5a524)
     .setFooter({ text: 'Dispatch · ' + period.key })
     .setTimestamp();
-  if (leaderboardIsEmpty(entries)) return embed.setDescription('Nessun ticket gestito in questo periodo.');
-  const legend = `Ordine: ticket gestiti, poi valutazione media (conteggiata con almeno ${minRatings} ` +
-    `${minRatings === 1 ? 'valutazione' : 'valutazioni'}, altrimenti “—”), poi numero di valutazioni. ` +
-    '1ª risposta = mediana dei ticket in cui il moderatore ha risposto per primo.';
-  return embed.setDescription(clip(entries.map(leaderboardLine).join('\n') + '\n\n' + legend, 4096));
+  if (leaderboardIsEmpty(entries)) return embed.setDescription(m.empty);
+  const lines = entries.map((entry) => leaderboardLine(entry, locale)).join('\n');
+  return embed.setDescription(clip(lines + '\n\n' + m.legend(minRatings), 4096));
 }
 
 // Same rule as the ticket log: a text or announcement channel of this guild.
@@ -87,8 +92,9 @@ async function postLeaderboard(
   minRatings: number
 ) {
   const channel = await resolveLeaderboardChannel(client, guildId, channelId);
+  const locale = await guildLocale(guildId);
   try {
-    await channel.send({ embeds: [buildLeaderboardEmbed(period, entries, minRatings)], allowedMentions: NO_MENTIONS });
+    await channel.send({ embeds: [buildLeaderboardEmbed(period, entries, minRatings, locale)], allowedMentions: NO_MENTIONS });
   } catch {
     throw new Error('LEADERBOARD_SEND_FAILED');
   }

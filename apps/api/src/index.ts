@@ -524,6 +524,9 @@ const categorySchema = z.object({
 ));
 
 const ticketSystemSettingsSchema = z.object({
+  // Language of everything the bot posts in this server. Optional: older
+  // clients that do not send it leave it unchanged.
+  locale: z.enum(['en', 'it']).optional(),
   antiSpamEnabled: z.boolean().default(true),
   antiSpamGlobalCooldownSeconds: z.number().int().min(0).max(86400).default(30),
   antiSpamWindowMinutes: z.number().int().min(1).max(1440).default(10),
@@ -1100,6 +1103,7 @@ app.put('/api/guilds/:guildId/ticket-system-settings', async (request, reply) =>
   });
 
   await panelAudit(request, session, guildId, 'ticket_system_settings.update', {
+    locale: settings.locale,
     antiSpamEnabled: settings.antiSpamEnabled,
     transcriptRetentionDays: settings.transcriptRetentionDays,
     closedTicketRetentionDays: settings.closedTicketRetentionDays,

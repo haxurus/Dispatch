@@ -19,6 +19,7 @@ type Category = {
 };
 
 type Settings = {
+  locale: 'en' | 'it';
   antiSpamEnabled: boolean;
   antiSpamGlobalCooldownSeconds: number;
   antiSpamWindowMinutes: number;
@@ -100,7 +101,12 @@ export default function TicketSystemPage() {
   const applySettings = (body: Settings & { ticketLogEventCatalog?: LogEventInfo[] }) => {
     const { ticketLogEventCatalog, ...rest } = body;
     if (ticketLogEventCatalog) setLogCatalog(ticketLogEventCatalog);
-    setSettings({ ...rest, ticketLogEvents: rest.ticketLogEvents ?? [], ticketLogChannelId: rest.ticketLogChannelId ?? null });
+    setSettings({
+      ...rest,
+      locale: rest.locale === 'it' ? 'it' : 'en',
+      ticketLogEvents: rest.ticketLogEvents ?? [],
+      ticketLogChannelId: rest.ticketLogChannelId ?? null
+    });
   };
 
   const putSettings = async (current: Settings) => {
@@ -230,6 +236,25 @@ export default function TicketSystemPage() {
 
       <form className="form" onSubmit={save}>
         <section className="grid settings-grid">
+          <article className="card form">
+            <h2>Lingua del bot</h2>
+            <p className="muted">
+              Lingua di tutto ciò che il bot scrive in questo server: pannelli, messaggi nei ticket,
+              risposte ai pulsanti, form, log, transcript e classifiche. I testi che hai scritto tu restano come sono.
+            </p>
+            <label>
+              Lingua
+              <select
+                value={settings.locale}
+                onChange={(event) => setSettings({ ...settings, locale: event.target.value === 'it' ? 'it' : 'en' })}
+              >
+                <option value="en">English</option>
+                <option value="it">Italiano</option>
+              </select>
+            </label>
+            <p className="muted">Dopo il cambio, ripubblica pannelli e menu principale per aggiornare i messaggi già inviati.</p>
+          </article>
+
           <article className="card form">
             <h2>Anti-spam globale</h2>
 

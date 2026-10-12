@@ -13,6 +13,7 @@ import { runTicketRetention } from './retention.js';
 import { runLeaderboardCycle } from './leaderboard.js';
 import { checkInstall, isGuildInstallBlocked } from './install-guard.js';
 import { createStatusNotifier, guildFields } from './status.js';
+import { guildMessages } from './i18n.js';
 
 const log = pino({ level: config.logLevel });
 
@@ -159,7 +160,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
   } catch (error) {
     log.error({ errorType: error instanceof Error ? error.name : 'UnknownError' }, 'Ticket interaction failed');
 
-    const message = 'Si è verificato un errore durante la gestione della richiesta.';
+    const message = (await guildMessages(interaction.guildId).catch(() => null))?.common.interactionError ??
+      'Something went wrong while handling the request.';
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(message).catch(() => null);
     } else {

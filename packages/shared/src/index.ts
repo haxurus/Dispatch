@@ -130,7 +130,54 @@ export type QuestionValidation =
   | { ok: true; value: string | string[] }
   | { ok: false; message: string };
 
-export function validateQuestionAnswer(question: FormQuestion, raw: unknown): QuestionValidation {
+/** Language of form validation messages and displayed answers (the server's bot language). */
+export type FormLocale = 'it' | 'en';
+
+const FORM_TEXT = {
+  it: {
+    required: 'Questa risposta è obbligatoria.',
+    invalidSelection: 'Selezione non valida.',
+    selectRange: (min: number, max: number) => `Seleziona da ${min} a ${max} opzioni.`,
+    yesOrNo: 'Scegli Sì oppure No.',
+    integer: 'Inserisci un numero intero valido.',
+    number: 'Inserisci un numero valido.',
+    min: (value: number) => `Il valore minimo è ${value}.`,
+    max: (value: number) => `Il valore massimo è ${value}.`,
+    email: 'Inserisci un indirizzo email valido.',
+    url: 'Inserisci un URL http/https valido.',
+    dateFormat: 'Usa il formato AAAA-MM-GG.',
+    date: 'Inserisci una data valida.',
+    discordId: 'Inserisci un ID Discord valido.',
+    minLength: (value: number) => `Servono almeno ${value} caratteri.`,
+    maxLength: (value: number) => `Sono ammessi al massimo ${value} caratteri.`,
+    yes: 'Sì',
+    no: 'No',
+    noAnswer: 'Nessuna risposta'
+  },
+  en: {
+    required: 'This answer is required.',
+    invalidSelection: 'Invalid selection.',
+    selectRange: (min: number, max: number) => `Select from ${min} to ${max} options.`,
+    yesOrNo: 'Choose Yes or No.',
+    integer: 'Enter a valid whole number.',
+    number: 'Enter a valid number.',
+    min: (value: number) => `The minimum value is ${value}.`,
+    max: (value: number) => `The maximum value is ${value}.`,
+    email: 'Enter a valid email address.',
+    url: 'Enter a valid http/https URL.',
+    dateFormat: 'Use the YYYY-MM-DD format.',
+    date: 'Enter a valid date.',
+    discordId: 'Enter a valid Discord ID.',
+    minLength: (value: number) => `At least ${value} characters are required.`,
+    maxLength: (value: number) => `At most ${value} characters are allowed.`,
+    yes: 'Yes',
+    no: 'No',
+    noAnswer: 'No answer'
+  }
+} as const;
+
+export function validateQuestionAnswer(question: FormQuestion, raw: unknown, locale: FormLocale = 'it'): QuestionValidation {
+  const t = FORM_TEXT[locale];
   if (question.type === 'MULTI_SELECT') {
     // Accepts string[] or a single string (wrapped); '' / [] mean "no selection".
     const list: unknown[] = Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : [];
@@ -141,15 +188,15 @@ export function validateQuestionAnswer(question: FormQuestion, raw: unknown): Qu
     const clean = [...new Set(values)];
     if (!clean.length) {
       return question.required
-        ? { ok: false, message: 'Questa risposta è obbligatoria.' }
+        ? { ok: false, message: t.required }
         : { ok: true, value: [] };
     }
     const allowed = new Set((question.options ?? []).map((option) => option.value));
-    if (clean.some((value) => !allowed.has(value))) return { ok: false, message: 'Selezione non valida.' };
+    if (clean.some((value) => !allowed.has(value))) return { ok: false, message: t.invalidSelection };
     // Same bounds as the Discord select menu built by the bot.
     const { min, max } = selectionBounds(question);
     if (clean.length < min || clean.length > max) {
-      return { ok: false, message: `Seleziona da ${min} a ${max} opzioni.` };
+      return { ok: false, message: t.selectRange(min, max) };
     }
     return { ok: true, value: clean };
   }
@@ -157,7 +204,7 @@ export function validateQuestionAnswer(question: FormQuestion, raw: unknown): Qu
   const value = typeof raw === 'string' ? raw.trim() : '';
   if (!value) {
     return question.required
-      ? { ok: false, message: 'Questa risposta è obbligatoria.' }
+      ? { ok: false, message: t.required }
       : { ok: true, value: '' };
   }
 
@@ -165,34 +212,34 @@ export function validateQuestionAnswer(question: FormQuestion, raw: unknown): Qu
     const allowed = new Set((question.options ?? []).map((option) => option.value));
     return allowed.has(value)
       ? { ok: true, value }
-      : { ok: false, message: 'Selezione non valida.' };
+      : { ok: false, message: t.invalidSelection };
   }
 
   if (question.type === 'BOOLEAN') {
     return value === 'true' || value === 'false'
       ? { ok: true, value }
-      : { ok: false, message: 'Scegli Sì oppure No.' };
+      : { ok: false, message: t.yesOrNo };
   }
 
   if (question.type === 'INTEGER' || question.type === 'NUMBER') {
     if (question.type === 'INTEGER' && !/^[+-]?\d+$/.test(value)) {
-      return { ok: false, message: 'Inserisci un numero intero valido.' };
+      return { ok: false, message: t.integer };
     }
     const parsed = Number(value.replace(',', '.'));
     if (!Number.isFinite(parsed) || (question.type === 'INTEGER' && !Number.isSafeInteger(parsed))) {
-      return { ok: false, message: 'Inserisci un numero valido.' };
+      return { ok: false, message: t.number };
     }
     if (question.minValue != null && parsed < question.minValue) {
-      return { ok: false, message: `Il valore minimo è ${question.minValue}.` };
+      return { ok: false, message: t.min(question.minValue) };
     }
     if (question.maxValue != null && parsed > question.maxValue) {
-      return { ok: false, message: `Il valore massimo è ${question.maxValue}.` };
+      return { ok: false, message: t.max(question.maxValue) };
     }
     return { ok: true, value: String(parsed) };
   }
 
   if (question.type === 'EMAIL' && !EMAIL.test(value)) {
-    return { ok: false, message: 'Inserisci un indirizzo email valido.' };
+    return { ok: false, message: t.email };
   }
 
   if (question.type === 'URL') {
@@ -200,41 +247,42 @@ export function validateQuestionAnswer(question: FormQuestion, raw: unknown): Qu
       const parsed = new URL(value);
       if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('protocol');
     } catch {
-      return { ok: false, message: 'Inserisci un URL http/https valido.' };
+      return { ok: false, message: t.url };
     }
   }
 
   if (question.type === 'DATE') {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-      return { ok: false, message: 'Usa il formato AAAA-MM-GG.' };
+      return { ok: false, message: t.dateFormat };
     }
     const date = new Date(`${value}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
-      return { ok: false, message: 'Inserisci una data valida.' };
+      return { ok: false, message: t.date };
     }
   }
 
   if (question.type === 'DISCORD_ID' && !SNOWFLAKE.test(value)) {
-    return { ok: false, message: 'Inserisci un ID Discord valido.' };
+    return { ok: false, message: t.discordId };
   }
 
   const minLength = question.minLength ?? 0;
   const maxLength = question.maxLength ?? 4000;
-  if (value.length < minLength) return { ok: false, message: `Servono almeno ${minLength} caratteri.` };
-  if (value.length > maxLength) return { ok: false, message: `Sono ammessi al massimo ${maxLength} caratteri.` };
+  if (value.length < minLength) return { ok: false, message: t.minLength(minLength) };
+  if (value.length > maxLength) return { ok: false, message: t.maxLength(maxLength) };
   return { ok: true, value };
 }
 
-export function displayAnswer(answer: FormAnswer, question?: FormQuestion) {
+export function displayAnswer(answer: FormAnswer, question?: FormQuestion, locale: FormLocale = 'it') {
+  const t = FORM_TEXT[locale];
   if (Array.isArray(answer.value)) {
     const map = new Map((question?.options ?? []).map((option) => [option.value, option.label]));
-    return answer.value.map((value) => map.get(value) ?? value).join(', ') || 'Nessuna risposta';
+    return answer.value.map((value) => map.get(value) ?? value).join(', ') || t.noAnswer;
   }
-  if (answer.type === 'BOOLEAN') return answer.value === 'true' ? 'Sì' : answer.value === 'false' ? 'No' : 'Nessuna risposta';
+  if (answer.type === 'BOOLEAN') return answer.value === 'true' ? t.yes : answer.value === 'false' ? t.no : t.noAnswer;
   if (answer.type === 'SINGLE_SELECT') {
-    return question?.options?.find((option) => option.value === answer.value)?.label ?? (answer.value || 'Nessuna risposta');
+    return question?.options?.find((option) => option.value === answer.value)?.label ?? (answer.value || t.noAnswer);
   }
-  return answer.value || 'Nessuna risposta';
+  return answer.value || t.noAnswer;
 }
 
 export * from './panels.js';

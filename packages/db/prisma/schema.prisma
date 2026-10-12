@@ -11,7 +11,8 @@ model GuildSettings {
   guildId       String   @id
   guildName     String
   timezone      String   @default("Europe/Rome")
-  locale        String   @default("it")
+  // Bot language in this server ('en' | 'it'); new servers start in English.
+  locale        String   @default("en")
   ticketCounter Int      @default(0)
 
   antiSpamEnabled               Boolean @default(true)

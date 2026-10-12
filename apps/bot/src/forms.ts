@@ -31,6 +31,7 @@ import { ticketControlRows } from './tickets.js';
 import { botCanManageThreads, ticketChannelOverwrites } from './ticket-operations.js';
 import { logTicketEvent, userMention } from './ticket-log.js';
 import { panelComponents, panelEmbed, panelStyle } from './panels.js';
+import { guildLocale, messages, type BotLocale, type BotMessages } from './i18n.js';
 import {
   reserveTicketOpen, consumeTicketOpenReservation, commitTicketOpen,
   releaseTicketOpenReservation, ticketOpenReservationMessage, formVersion
@@ -66,6 +67,12 @@ const errorInfo = (error: unknown) => ({
   code: (error as { code?: unknown } | null)?.code
 });
 
+// Interactions without a usable session (expired, foreign token): the server
+// language when the interaction comes from a guild, English in DMs.
+async function interactionMessages(interaction: FormInteraction) {
+  return messages[await guildLocale(interaction.guildId)];
+}
+
 function answersFrom(value: string | null): FormAnswer[] {
   if (!value) return [];
   try {
@@ -100,25 +107,26 @@ async function canSubmit(
     maxAttemptsPerWindow: number;
   },
   client: Client,
+  m: BotMessages,
   activeSessionId?: string
 ) {
   const guild = client.guilds.cache.get(guildId);
-  if (!guild) return { ok: false, message: 'Server non disponibile.' };
+  if (!guild) return { ok: false, message: m.forms.serverUnavailable };
   const member = await guild.members.fetch(userId).catch(() => null);
-  if (!member) return { ok: false, message: 'Devi essere nel server per compilare questo form.' };
+  if (!member) return { ok: false, message: m.forms.mustBeMember };
 
   const now = new Date();
   const blacklisted = await prisma.guildBlacklist.findFirst({
     where: { guildId, userId, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
     select: { id: true }
   });
-  if (blacklisted) return { ok: false, message: 'Non puoi compilare form in questo server.' };
+  if (blacklisted) return { ok: false, message: m.forms.cannotSubmitHere };
 
   if (form.deniedRoleIds.some((id) => member.roles.cache.has(id))) {
-    return { ok: false, message: 'Non puoi compilare questo form.' };
+    return { ok: false, message: m.forms.cannotSubmit };
   }
   if (form.allowedRoleIds.length && !form.allowedRoleIds.some((id) => member.roles.cache.has(id))) {
-    return { ok: false, message: 'Non hai un ruolo autorizzato a compilare questo form.' };
+    return { ok: false, message: m.forms.roleNotAllowed };
   }
 
   // Submit bindings are an allow-list: once any role is granted canSubmit,
@@ -129,7 +137,7 @@ async function canSubmit(
     select: { discordRoleId: true }
   });
   if (submitters.length && !submitters.some((binding) => member.roles.cache.has(binding.discordRoleId))) {
-    return { ok: false, message: 'I tuoi ruoli non consentono l’invio di questo form.' };
+    return { ok: false, message: m.forms.rolesNotAllowed };
   }
 
   const [total, recent, latest, active] = await Promise.all([
@@ -153,26 +161,26 @@ async function canSubmit(
     })
   ]);
 
-  if (active) return { ok: false, message: 'Hai già una compilazione in corso.' };
+  if (active) return { ok: false, message: m.forms.inProgress };
   if (form.maxSubmissionsPerUser > 0 && total >= form.maxSubmissionsPerUser) {
-    return { ok: false, message: 'Hai raggiunto il numero massimo di invii consentiti.' };
+    return { ok: false, message: m.forms.maxReached };
   }
   if (recent >= form.maxAttemptsPerWindow) {
-    return { ok: false, message: 'Troppi tentativi recenti. Riprova più tardi.' };
+    return { ok: false, message: m.forms.tooManyAttempts };
   }
   if (latest) {
     const remaining = latest.createdAt.getTime() + form.cooldownSeconds * 1000 - Date.now();
     if (remaining > 0) {
-      return { ok: false, message: `Riprova tra circa ${Math.ceil(remaining / 1000)} secondi.` };
+      return { ok: false, message: m.forms.retryIn(Math.ceil(remaining / 1000)) };
     }
   }
   return { ok: true as const, member };
 }
 
-function questionDescription(question: FormQuestion, index: number, total: number) {
+function questionDescription(question: FormQuestion, index: number, total: number, m: BotMessages) {
   const parts = [`**${index + 1}/${total} - ${question.label}**`];
   if (question.description) parts.push(question.description);
-  if (!question.required) parts.push('_Facoltativa_');
+  if (!question.required) parts.push(m.forms.optional);
   return parts.join('\n');
 }
 
@@ -206,9 +214,9 @@ function selectBounds(question: FormQuestion) {
   return { min: Math.max(0, Math.min(max, bounds.min)), max };
 }
 
-function promptComponents(sessionToken: string, question: FormQuestion, index: number) {
+function promptComponents(sessionToken: string, question: FormQuestion, index: number, m: BotMessages) {
   const suffix = `${sessionToken}:${index}`;
-  const cancelButton = new ButtonBuilder().setCustomId(CANCEL + sessionToken).setLabel('Annulla')
+  const cancelButton = new ButtonBuilder().setCustomId(CANCEL + sessionToken).setLabel(m.buttons.cancel)
     .setStyle(ButtonStyle.Danger);
   if (question.type === 'SINGLE_SELECT' || question.type === 'MULTI_SELECT') {
     const options = (question.options ?? []).slice(0, 25).map((option) => ({
@@ -223,14 +231,14 @@ function promptComponents(sessionToken: string, question: FormQuestion, index: n
       new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
         new StringSelectMenuBuilder()
           .setCustomId(SELECT + suffix)
-          .setPlaceholder('Seleziona...')
+          .setPlaceholder(m.forms.selectPlaceholder)
           .setMinValues(min)
           .setMaxValues(max)
           .addOptions(options)
       ),
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         ...(skippable
-          ? [new ButtonBuilder().setCustomId(SKIP + suffix).setLabel('Salta').setStyle(ButtonStyle.Secondary)]
+          ? [new ButtonBuilder().setCustomId(SKIP + suffix).setLabel(m.buttons.skip).setStyle(ButtonStyle.Secondary)]
           : []),
         cancelButton
       )
@@ -238,16 +246,16 @@ function promptComponents(sessionToken: string, question: FormQuestion, index: n
   }
   if (question.type === 'BOOLEAN') {
     return [new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId(BOOL + suffix + ':true').setLabel('Sì').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(BOOL + suffix + ':false').setLabel('No').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(BOOL + suffix + ':true').setLabel(m.buttons.yes).setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(BOOL + suffix + ':false').setLabel(m.buttons.no).setStyle(ButtonStyle.Secondary),
       ...(!question.required
-        ? [new ButtonBuilder().setCustomId(BOOL + suffix + ':skip').setLabel('Salta').setStyle(ButtonStyle.Secondary)]
+        ? [new ButtonBuilder().setCustomId(BOOL + suffix + ':skip').setLabel(m.buttons.skip).setStyle(ButtonStyle.Secondary)]
         : []),
       cancelButton
     )];
   }
   return [new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(TEXT + suffix).setLabel(question.required ? 'Rispondi' : 'Rispondi / salta')
+    new ButtonBuilder().setCustomId(TEXT + suffix).setLabel(question.required ? m.buttons.answer : m.buttons.answerOrSkip)
       .setStyle(ButtonStyle.Primary),
     cancelButton
   )];
@@ -256,9 +264,10 @@ function promptComponents(sessionToken: string, question: FormQuestion, index: n
 async function promptQuestion(interaction: FormInteraction, sessionToken: string) {
   const session = await getSession(sessionToken, interaction.user.id);
   if (!session) {
-    await sendPrivate(interaction, 'Questa compilazione è scaduta o non è più valida.');
+    await sendPrivate(interaction, (await interactionMessages(interaction)).forms.expired);
     return;
   }
+  const m = messages[await guildLocale(session.guildId)];
   const questions = normalizeQuestions(session.form.questions);
   const question = questions[session.currentQuestion];
   if (!question) {
@@ -267,21 +276,23 @@ async function promptQuestion(interaction: FormInteraction, sessionToken: string
   }
   await sendPrivate(
     interaction,
-    questionDescription(question, session.currentQuestion, questions.length),
-    promptComponents(sessionToken, question, session.currentQuestion)
+    questionDescription(question, session.currentQuestion, questions.length, m),
+    promptComponents(sessionToken, question, session.currentQuestion, m)
   );
 }
 
 async function storeAnswer(interaction: FormInteraction, sessionToken: string, index: number, raw: unknown) {
   const session = await getSession(sessionToken, interaction.user.id);
   if (!session || session.currentQuestion !== index) {
-    await sendPrivate(interaction, 'Questa domanda non è più valida.');
+    await sendPrivate(interaction, (await interactionMessages(interaction)).forms.questionStale);
     return;
   }
+  const locale = await guildLocale(session.guildId);
+  const m = messages[locale];
   const questions = normalizeQuestions(session.form.questions);
   const question = questions[index];
   if (!question) {
-    await sendPrivate(interaction, 'Domanda non valida.');
+    await sendPrivate(interaction, m.forms.questionInvalid);
     return;
   }
   // A select with exactly one chosen value (or the skip button) arrives as a
@@ -289,9 +300,9 @@ async function storeAnswer(interaction: FormInteraction, sessionToken: string, i
   const value = question.type === 'MULTI_SELECT' && typeof raw === 'string'
     ? (raw ? [raw] : [])
     : raw;
-  const result = validateQuestionAnswer(question, value);
+  const result = validateQuestionAnswer(question, value, locale);
   if (!result.ok) {
-    await sendPrivate(interaction, result.message, promptComponents(sessionToken, question, index));
+    await sendPrivate(interaction, result.message, promptComponents(sessionToken, question, index, m));
     return;
   }
 
@@ -308,7 +319,7 @@ async function storeAnswer(interaction: FormInteraction, sessionToken: string, i
     }
   });
   if (advanced.count !== 1) {
-    await sendPrivate(interaction, 'Questa domanda non è più valida.');
+    await sendPrivate(interaction, m.forms.questionStale);
     return;
   }
   await promptQuestion(interaction, sessionToken);
@@ -321,21 +332,23 @@ function reportMessages(
   submissionId: string,
   userId: string,
   answers: FormAnswer[],
-  questions: FormQuestion[]
+  questions: FormQuestion[],
+  locale: BotLocale
 ) {
+  const m = messages[locale];
   const footer = `Dispatch form - ${submissionId}`;
   const fields = answers.map((answer) => ({
-    name: answer.label.slice(0, 256) || 'Domanda',
-    value: displayAnswer(answer, questions.find((question) => question.id === answer.id)).slice(0, 1024) ||
-      'Nessuna risposta'
+    name: answer.label.slice(0, 256) || m.forms.reportQuestion,
+    value: displayAnswer(answer, questions.find((question) => question.id === answer.id), locale).slice(0, 1024) ||
+      m.common.noAnswer
   }));
   const messages: EmbedBuilder[][] = [];
   const state = { embeds: [] as EmbedBuilder[], used: 0, fieldCount: 0 };
   const startEmbed = (reserve: number) => {
     const first = !messages.length && !state.embeds.length;
-    const embedTitle = first ? title.slice(0, 256) : `${title.slice(0, 230)} - continua`;
+    const embedTitle = first ? title.slice(0, 256) : `${title.slice(0, 230)} - ${m.forms.continued}`;
     const description = first
-      ? (answers.length ? `Compilato da <@${userId}> (\`${userId}\`)` : `Compilato da <@${userId}> senza risposte.`)
+      ? (answers.length ? m.forms.filledBy(userId) : m.forms.filledByEmpty(userId))
       : '';
     const cost = embedTitle.length + description.length + footer.length;
     if (state.embeds.length >= 10 || (state.embeds.length && state.used + cost + reserve > REPORT_MESSAGE_BUDGET)) {
@@ -386,6 +399,8 @@ async function createFormTicket(
   reservationToken: string
 ) {
   const guildId = guild.id;
+  const locale = await guildLocale(guildId);
+  const m = messages[locale];
   if (!(await consumeTicketOpenReservation(guildId, userId, reservationToken))) return null;
   // Staff actions authorize against the category roles, so the form override
   // can only add roles, never drop the category staff.
@@ -393,7 +408,7 @@ async function createFormTicket(
   const formAnswers = answers.map((answer) => ({
     id: answer.id,
     label: answer.label,
-    value: displayAnswer(answer, questions.find((question) => question.id === answer.id))
+    value: displayAnswer(answer, questions.find((question) => question.id === answer.id), locale)
   }));
   let channel: TextChannel | undefined;
   let persisted = false;
@@ -444,9 +459,9 @@ async function createFormTicket(
       await createdChannel.send({
         content: [
           pings.map((id) => `<@&${id}>`).join(' '),
-          `Ticket #${number} aperto da <@${userId}> tramite il form **${form.name.slice(0, 100)}**.`
+          m.ticket.openedViaForm(number, userId, form.name.slice(0, 100))
         ].filter(Boolean).join('\n'),
-        components: ticketControlRows(ticket.id),
+        components: ticketControlRows(ticket.id, locale),
         allowedMentions: { parse: [], roles: pings, users: [] }
       });
       for (const embeds of reports) {
@@ -458,13 +473,13 @@ async function createFormTicket(
       } }).catch(() => null);
     }
     await logTicketEvent(interaction.client, guildId, 'TICKET_OPEN', {
-      title: 'Ticket aperto da un form',
+      title: m.log.ticketOpenedFromForm,
       ticket,
       actorId: userId,
       categoryName: category.name,
       fields: [
-        { name: 'Form', value: form.name, inline: true },
-        { name: 'Invio', value: submissionId, inline: true }
+        { name: m.log.form, value: form.name, inline: true },
+        { name: m.log.submission, value: submissionId, inline: true }
       ]
     });
     return createdChannel.id;
@@ -492,24 +507,26 @@ async function finalizeSubmission(interaction: FormInteraction, sessionToken: st
   }
   const session = await getSession(sessionToken, interaction.user.id);
   if (!session) {
-    await sendPrivate(interaction, 'Questa compilazione è scaduta o è già stata inviata.');
+    await sendPrivate(interaction, (await interactionMessages(interaction)).forms.expiredOrSent);
     return;
   }
+  const locale = await guildLocale(session.guildId);
+  const m = messages[locale];
   const questions = normalizeQuestions(session.form.questions);
   const answers = answersFrom(session.answersEncrypted);
   if (answers.length !== questions.length) {
-    await sendPrivate(interaction, 'La compilazione non è completa.');
+    await sendPrivate(interaction, m.forms.incomplete);
     return;
   }
 
   const guild = interaction.client.guilds.cache.get(session.guildId);
   if (!guild || !isOpen(session.form)) {
     await prisma.formSession.update({ where: { id: session.id }, data: { state: 'CANCELLED' } });
-    await sendPrivate(interaction, 'Il form è stato chiuso prima dell’invio.');
+    await sendPrivate(interaction, m.forms.closedBeforeSubmit);
     return;
   }
 
-  const permission = await canSubmit(session.guildId, session.userId, session.form, interaction.client, session.id);
+  const permission = await canSubmit(session.guildId, session.userId, session.form, interaction.client, m, session.id);
   if (!permission.ok) {
     await prisma.formSession.update({ where: { id: session.id }, data: { state: 'CANCELLED' } });
     await sendPrivate(interaction, permission.message);
@@ -537,8 +554,7 @@ async function finalizeSubmission(interaction: FormInteraction, sessionToken: st
       if (!temporary) {
         await prisma.formSession.updateMany({ where: { id: session.id, state: 'ACTIVE' }, data: { state: 'CANCELLED' } });
       }
-      await sendPrivate(interaction, ticketOpenReservationMessage(reservation) +
-        (temporary ? ' Le tue risposte restano salvate: premi di nuovo il pulsante del form per riprovare.' : ''));
+      await sendPrivate(interaction, ticketOpenReservationMessage(reservation, m) + (temporary ? m.forms.answersKept : ''));
       return;
     }
     reservationToken = reservation.token;
@@ -564,7 +580,7 @@ async function finalizeSubmission(interaction: FormInteraction, sessionToken: st
   } catch (error) {
     if (reservationToken) await releaseTicketOpenReservation(session.guildId, session.userId, reservationToken);
     if (error instanceof Error && error.message === 'FORM_SESSION_ALREADY_USED') {
-      await sendPrivate(interaction, 'Questa compilazione è scaduta o è già stata inviata.');
+      await sendPrivate(interaction, m.forms.expiredOrSent);
       return;
     }
     throw error;
@@ -576,7 +592,7 @@ async function finalizeSubmission(interaction: FormInteraction, sessionToken: st
   let reportMessageId: string | null = null;
   let ticketChannelId: string | null = null;
   let ticketFailed = wantsTicket && !category;
-  const reports = reportMessages(session.form.name, submission.id, session.userId, answers, questions);
+  const reports = reportMessages(session.form.name, submission.id, session.userId, answers, questions, locale);
 
   if (session.form.resultChannelId) {
     try {
@@ -631,22 +647,22 @@ async function finalizeSubmission(interaction: FormInteraction, sessionToken: st
 
   // Never the answers: they are encrypted and stay in the submission.
   await logTicketEvent(interaction.client, session.guildId, 'FORM_SUBMISSION', {
-    title: 'Form inviato',
+    title: m.log.formSubmitted,
     actorId: session.userId,
     fields: [
-      { name: 'Form', value: session.form.name, inline: true },
-      { name: 'Utente', value: userMention(session.userId), inline: true },
-      { name: 'Invio', value: submission.id, inline: true },
-      ...(ticketChannelId ? [{ name: 'Ticket', value: `<#${ticketChannelId}>`, inline: true }] : []),
-      ...(ticketFailed ? [{ name: 'Ticket', value: 'Creazione non riuscita', inline: true }] : [])
+      { name: m.log.form, value: session.form.name, inline: true },
+      { name: m.log.user, value: userMention(session.userId), inline: true },
+      { name: m.log.submission, value: submission.id, inline: true },
+      ...(ticketChannelId ? [{ name: m.log.ticket, value: `<#${ticketChannelId}>`, inline: true }] : []),
+      ...(ticketFailed ? [{ name: m.log.ticket, value: m.log.ticketCreationFailed, inline: true }] : [])
     ]
   });
 
   await sendPrivate(
     interaction,
-    'Form inviato correttamente.' +
-      (ticketChannelId ? ` È stato creato <#${ticketChannelId}>.` : '') +
-      (ticketFailed ? ' Non è stato possibile creare il ticket associato: contatta lo staff.' : '')
+    m.forms.sent +
+      (ticketChannelId ? m.forms.ticketCreated(ticketChannelId) : '') +
+      (ticketFailed ? m.forms.ticketFailed : '')
   );
 }
 
@@ -656,11 +672,12 @@ async function deliverQuestion(
   session: { id: string; token: string },
   questions: FormQuestion[],
   index: number,
-  resumed: boolean
+  resumed: boolean,
+  m: BotMessages
 ) {
   const question = questions[index]!;
-  const content = questionDescription(question, index, questions.length);
-  const components = promptComponents(session.token, question, index);
+  const content = questionDescription(question, index, questions.length, m);
+  const components = promptComponents(session.token, question, index, m);
   if (deliveryMode !== 'DM') {
     await sendPrivate(interaction, content, components);
     return;
@@ -671,13 +688,10 @@ async function deliverQuestion(
     .then(() => true, () => false);
   if (!delivered) {
     await prisma.formSession.updateMany({ where: { id: session.id, state: 'ACTIVE' }, data: { state: 'CANCELLED' } });
-    await sendPrivate(interaction,
-      'Non riesco a inviarti messaggi privati. Abilita i messaggi diretti da questo server e premi di nuovo il pulsante.');
+    await sendPrivate(interaction, m.forms.dmBlocked);
     return;
   }
-  await sendPrivate(interaction, resumed
-    ? 'Hai già una compilazione in corso: ti ho inviato di nuovo la domanda corrente in privato.'
-    : 'Ti ho inviato il form in privato.');
+  await sendPrivate(interaction, resumed ? m.forms.dmResumed : m.forms.dmSent);
 }
 
 // The forms a panel offers, in order. Rows written before multi-form panels
@@ -692,8 +706,9 @@ async function beginForm(
 ) {
   if (!interaction.guildId || !interaction.guild) return;
   await interaction.deferReply({ ephemeral: true });
+  const m = messages[await guildLocale(interaction.guildId)];
   if (!CUID.test(panelId) || (requestedFormId !== null && !CUID.test(requestedFormId))) {
-    await sendPrivate(interaction, 'Questo form non è disponibile.');
+    await sendPrivate(interaction, m.forms.unavailable);
     return;
   }
   const panel = await prisma.formPanel.findFirst({
@@ -712,12 +727,12 @@ async function beginForm(
     ? await prisma.formDefinition.findFirst({ where: { id: formId, guildId: interaction.guildId } })
     : null;
   if (!panel || !form || !isOpen(form)) {
-    await sendPrivate(interaction, 'Questo form non è disponibile.');
+    await sendPrivate(interaction, m.forms.unavailable);
     return;
   }
   const questions = normalizeQuestions(form.questions);
   if (!questions.length) {
-    await sendPrivate(interaction, 'Questo form non contiene domande valide.');
+    await sendPrivate(interaction, m.forms.noQuestions);
     return;
   }
 
@@ -739,11 +754,11 @@ async function beginForm(
       await finalizeSubmission(interaction, existing.token);
       return;
     }
-    await deliverQuestion(interaction, form.deliveryMode, existing, questions, existing.currentQuestion, true);
+    await deliverQuestion(interaction, form.deliveryMode, existing, questions, existing.currentQuestion, true, m);
     return;
   }
 
-  const permission = await canSubmit(interaction.guildId, interaction.user.id, form, interaction.client);
+  const permission = await canSubmit(interaction.guildId, interaction.user.id, form, interaction.client, m);
   if (!permission.ok) {
     await sendPrivate(interaction, permission.message);
     return;
@@ -762,13 +777,13 @@ async function beginForm(
     } });
   } catch (error) {
     if ((error as { code?: string }).code === 'P2002') {
-      await sendPrivate(interaction, 'Hai già una compilazione in corso.');
+      await sendPrivate(interaction, m.forms.inProgress);
       return;
     }
     throw error;
   }
 
-  await deliverQuestion(interaction, form.deliveryMode, session, questions, 0, false);
+  await deliverQuestion(interaction, form.deliveryMode, session, questions, 0, false, m);
 }
 
 async function openTextModal(interaction: ButtonInteraction) {
@@ -779,7 +794,7 @@ async function openTextModal(interaction: ButtonInteraction) {
 
   const session = await getSession(sessionToken, interaction.user.id);
   if (!session || session.currentQuestion !== index) {
-    await interaction.reply({ content: 'Questa domanda è scaduta.', ephemeral: interaction.inGuild() });
+    await interaction.reply({ content: (await interactionMessages(interaction)).forms.questionExpired, ephemeral: interaction.inGuild() });
     return;
   }
   const question = normalizeQuestions(session.form.questions)[index];
@@ -837,11 +852,15 @@ async function skipAnswer(interaction: ButtonInteraction) {
 async function cancel(interaction: ButtonInteraction) {
   const sessionToken = interaction.customId.slice(CANCEL.length);
   if (!TOKEN.test(sessionToken)) return;
+  const owner = await prisma.formSession.findFirst({
+    where: { token: sessionToken, userId: interaction.user.id },
+    select: { guildId: true }
+  });
   await prisma.formSession.updateMany({
     where: { token: sessionToken, userId: interaction.user.id, state: 'ACTIVE' },
     data: { state: 'CANCELLED' }
   });
-  await sendPrivate(interaction, 'Compilazione annullata.');
+  await sendPrivate(interaction, messages[await guildLocale(owner?.guildId ?? interaction.guildId)].forms.cancelled);
 }
 
 export async function publishFormPanel(client: Client, guildId: string, panelId: string) {
@@ -866,16 +885,17 @@ export async function publishFormPanel(client: Client, guildId: string, panelId:
 
   const style = panelStyle(panel.style, 'BUTTONS');
   const single = forms.length === 1 ? forms[0]! : null;
+  const m = messages[await guildLocale(guildId)];
   const payload = {
     allowedMentions: NO_MENTIONS,
     embeds: [panelEmbed(
       { ...panel, description: panel.description || single?.description || null },
-      style === 'SELECT' ? 'Scegli il form da compilare.' : 'Premi il pulsante per compilare il form.'
+      style === 'SELECT' ? m.panel.formSelectHint : m.panel.formButtonHint
     )],
     components: panelComponents({
       style,
       placeholder: panel.placeholder,
-      defaultPlaceholder: 'Scegli un form',
+      defaultPlaceholder: m.panel.formPlaceholder,
       items: panel.items,
       // A one-form button panel keeps its historical button label.
       entries: forms.map((form) => ({

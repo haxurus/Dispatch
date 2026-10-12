@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { prisma, type Prisma } from '@dispatch/db';
+import type { BotMessages } from './i18n.js';
 
 const ACTIVE = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED', 'REOPENING'];
 const TOKEN = /^[A-Za-z0-9_-]{32}$/;
@@ -180,13 +181,13 @@ export async function commitTicketOpen<T>(
   });
 }
 
-export function ticketOpenReservationMessage(result: Exclude<TicketOpenReservationResult, { ok: true }>) {
-  if (result.code === 'BLACKLISTED') return 'Non puoi aprire ticket in questo server.';
-  if (result.code === 'MAX_OPEN_TICKETS') return 'Hai raggiunto il limite di ticket aperti per questa richiesta.';
-  if (result.code === 'TICKET_OPEN_IN_PROGRESS') return 'Hai gia una richiesta in corso. Completa il modulo aperto.';
+export function ticketOpenReservationMessage(result: Exclude<TicketOpenReservationResult, { ok: true }>, m: BotMessages) {
+  if (result.code === 'BLACKLISTED') return m.open.cannotOpen;
+  if (result.code === 'MAX_OPEN_TICKETS') return m.open.maxOpen;
+  if (result.code === 'TICKET_OPEN_IN_PROGRESS') return m.open.inProgress;
   const seconds = result.retryAfterSeconds;
-  const wait = seconds >= 60 ? Math.ceil(seconds / 60) + ' minuti' : seconds + ' secondi';
-  return 'Apertura temporaneamente limitata. Riprova tra circa ' + wait + '.';
+  const wait = seconds >= 60 ? m.common.minutes(Math.ceil(seconds / 60)) : m.common.seconds(seconds);
+  return m.open.limited(wait);
 }
 
 // Cheap, bounded ingress protection before any database or Discord REST lookup.

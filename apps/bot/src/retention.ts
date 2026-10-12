@@ -1,6 +1,7 @@
 import { ChannelType, type Client } from 'discord.js';
 import { prisma, type Prisma } from '@dispatch/db';
 import { logTicketEvent } from './ticket-log.js';
+import { guildMessages } from './i18n.js';
 
 const DAY = 86_400_000;
 export function retentionDue(closedAt: Date | null, days: number | null, reopenHours: number | null, now = Date.now()) {
@@ -83,10 +84,11 @@ async function deleteExpiredTicket(client: Client, id: string) {
     id: ticket.id, status: 'CLOSED', retentionPendingAt: { not: null }
   } });
   if (channels) {
+    const m = await guildMessages(ticket.guildId);
     await logTicketEvent(client, ticket.guildId, 'TICKET_DELETE', {
-      title: 'Canale eliminato dalla retention',
+      title: m.log.channelDeletedByRetention,
       ticket: { id: ticket.id, ticketNumber: ticket.ticketNumber, channelId: ticket.channelId },
-      fields: [{ name: 'Canale', value: ticket.channelId, inline: true }]
+      fields: [{ name: m.log.channel, value: ticket.channelId, inline: true }]
     });
   }
   return { deleted: result.count, channels, failed: 0 };
