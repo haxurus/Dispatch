@@ -115,7 +115,7 @@ export function startInternalApi(client: Client, secret: string, port = 3002, st
         const result = await status.deliver({
           level: 'info',
           title: 'Notifiche di stato attive',
-          description: 'Messaggio di prova inviato dalla super console. Qui arriveranno avvio del bot, server aggiunti o rimossi e installazioni rifiutate.'
+          description: 'Messaggio di prova inviato dalla super console. Qui arriveranno avvio del bot, errori, disconnessioni dal gateway, server aggiunti o rimossi e installazioni rifiutate.'
         }, { force: true });
         res.end(JSON.stringify(result));
         return;
