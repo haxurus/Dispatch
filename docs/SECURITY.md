@@ -11,11 +11,10 @@ Production runs the services of [`deploy/docker-compose.prod.yml`](../deploy/doc
 | Service | Networks | Secrets |
 |---|---|---|
 | `postgres` | `api_db`, `bot_db`, `migrate_db` | `postgres_admin_password` |
-| `redis` (uid 999) | `bot_queue` | `redis_password` |
 | `migrate` | `migrate_db` | `postgres_admin_password` |
 | `secure-db` | `migrate_db` | `postgres_admin_password`, `api_db_password`, `bot_db_password` |
 | `api` | `backend`, `api_db`, `bot_rpc`, `api_egress` | `discord_client_secret`, `session_secret`, `data_encryption_key`, `bot_internal_api_key`, `api_db_password` |
-| `bot` | `bot_db`, `bot_queue`, `bot_rpc`, `bot_egress` | `discord_token`, `bot_internal_api_key`, `data_encryption_key`, `bot_db_password`, `redis_password` |
+| `bot` | `bot_db`, `bot_rpc`, `bot_egress` | `discord_token`, `bot_internal_api_key`, `data_encryption_key`, `bot_db_password` |
 | `web` | `frontend`, `backend` | none |
 | `edge` (Nginx, uid 101) | `frontend`, `proxy_net` | none |
 
@@ -24,7 +23,6 @@ Production runs the services of [`deploy/docker-compose.prod.yml`](../deploy/doc
 - `api`: OAuth, sessions, configuration and dashboard reads. It does not possess the bot's Discord token.
 - `bot`: possesses the Discord token and can access only the tables required by tickets and forms.
 - `postgres`: no published port; separate database networks for API, bot and migrations.
-- `redis`: visible only to the bot, authenticated, no published port.
 - `bot_rpc`: internal network shared only by API and bot. Every RPC call except the health check needs `BOT_INTERNAL_API_KEY`, compared in constant time; request bodies are limited to 16 KiB and every ID is validated.
 
 All networks except `api_egress`, `bot_egress` and `proxy_net` are `internal` (no route outside Docker). No port is published on the host. The networks use fixed `/28` subnets in `10.251.0.0/24`; the egress bridges are named `dispatch-api-eg` and `dispatch-bot-eg` and have inter-container communication disabled.
@@ -33,7 +31,7 @@ All networks except `api_egress`, `bot_egress` and `proxy_net` are `internal` (n
 
 Secrets are files under `/srv/docker/dispatch/secrets/` (directory `700 root:root`) mounted at `/run/secrets`. Services read them through `*_FILE` variables; they are not passed to the frontend and are not embedded in the Compose file. `postgres_admin_password` is `600 root:root`; secrets read by the application containers are `640 root:1000`, readable by the non-root `node` user (gid 1000) inside the containers.
 
-The installer generates `session_secret`, `bot_internal_api_key`, `data_encryption_key` and the database and Redis passwords; the Discord token and the OAuth client secret are entered by hand on the VPS. GitHub Actions never receives any of them.
+The installer generates `session_secret`, `bot_internal_api_key`, `data_encryption_key` and the database passwords; the Discord token and the OAuth client secret are entered by hand on the VPS. GitHub Actions never receives any of them.
 
 Never store `secrets/` in the same backup as the database. Keep `data_encryption_key` separate from PostgreSQL dumps.
 
@@ -108,7 +106,7 @@ For API, bot and web:
 - CPU, memory and PID limits;
 - `init: true`; Node.js runs with `--disable-proto=throw`.
 
-Redis (uid 999), the edge proxy (uid 101), `migrate` and `secure-db` also drop all capabilities and run read-only; PostgreSQL runs read-only with `no-new-privileges` and a PID limit. No API, database or Redis port is published on the host and no container mounts the Docker socket.
+The edge proxy (uid 101), `migrate` and `secure-db` also drop all capabilities and run read-only; PostgreSQL runs read-only with `no-new-privileges` and a PID limit. No API or database port is published on the host and no container mounts the Docker socket.
 
 ## Egress and exfiltration
 

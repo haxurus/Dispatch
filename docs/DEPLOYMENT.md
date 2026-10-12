@@ -1,6 +1,6 @@
 # GitHub -> VPS deployment
 
-This procedure is intended for a production VPS with Docker Compose and Nginx Proxy Manager (NPM) already installed. Dispatch does not publish the database, Redis, the API or the dashboard on host ports.
+This procedure is intended for a production VPS with Docker Compose and Nginx Proxy Manager (NPM) already installed. Dispatch does not publish the database, the API or the dashboard on host ports.
 
 Reference example used throughout this guide: domain `dispatch.haxurus.com`, a Debian 13 VPS (VPS01) with Docker CE, NPM on the external Docker network `proxy_net`, Cloudflare in proxy mode with SSL **Full (strict)**.
 
@@ -152,7 +152,6 @@ In `/srv/docker/dispatch/secrets/` (root directory, `700`):
 | `postgres_admin_password` | generated (root `600`) | postgres, migrate, secure-db |
 | `api_db_password` | generated | api, secure-db |
 | `bot_db_password` | generated | bot, secure-db |
-| `redis_password` | generated | redis, bot |
 
 Enter the two Discord secrets without passing them on the command line:
 
@@ -167,7 +166,7 @@ Paste only the value, without quotes. Verify permissions:
 sudo find /srv/docker/dispatch/secrets -maxdepth 1 -type f -printf '%m %u:%g %p\n'
 ```
 
-`postgres_admin_password` stays `600 root:root`; the other files are `640 root:1000` (gid 1000 is the `node` user and the `redis` group inside the containers). Never paste these values into chats, issues or logs.
+`postgres_admin_password` stays `600 root:root`; the other files are `640 root:1000` (gid 1000 is the `node` user inside the containers). Never paste these values into chats, issues or logs.
 
 > **Do not lose `data_encryption_key`.** Form answers, transcripts, notes, templates, close reasons and blacklist reasons are encrypted with this key: without it, the data and the backups can no longer be read. Keep an offline copy, separate from the database backups.
 
@@ -269,7 +268,7 @@ On the VPS, `dispatch-deploy deploy`:
 2. validates the two references (`ghcr.io/haxurus/dispatch@sha256:<64 hex>`) and checks the free space on `/var/lib/docker`: below 5 GiB it removes Dispatch images that are no longer needed, below 3 GiB it stops (a full disk already stopped PostgreSQL on VPS01);
 3. if a current release exists, writes the backup `pg_dump -Fc` to `backups/predeploy-<UTC>.dump` (`600`). If the backup fails, the deployment stops. Dumps older than 14 days are removed only after a successful backup;
 4. pulls the images by digest;
-5. runs `docker compose up`. The order is postgres → `migrate` (`prisma migrate deploy` as owner) → `secure-db` (`dispatch_api`/`dispatch_bot` users and grants) → api, bot and redis → web → edge;
+5. runs `docker compose up`. The order is postgres → `migrate` (`prisma migrate deploy` as owner) → `secure-db` (`dispatch_api`/`dispatch_bot` users and grants) → api and bot → web → edge;
 6. waits up to 150 s for api, bot, web and edge to be healthy;
 7. on success, updates `.release` and `.previous-release`, removes the one-shot containers and deletes the Dispatch images that belong neither to the current nor to the previous release;
 8. on failure, saves the service logs to `/srv/docker/dispatch/logs/deploy-failed-<UTC>.log` (root, `700`; kept 30 days) and restarts the previous release. The SSH output, and therefore the GitHub Actions logs of a public repository, shows only the file path, never the log content.
@@ -322,6 +321,13 @@ sudo install -o root -g root -m 755 /tmp/dispatch-deploy /usr/local/sbin/dispatc
 ```
 
 The Dispatch networks use fixed `/28` subnets in `10.251.0.0/24`, outside Docker's default address pools (exhausted by the other stacks on VPS01). If that range conflicts with another network on the host, change it in `deploy/docker-compose.prod.yml`, re-run the installer and remove the empty `dispatch_*` networks before deploying.
+
+Redis was removed (it was provisioned but never used). On an install that still has it, after re-running the installer and the next deploy, remove the leftovers:
+
+```bash
+sudo docker rm -f dispatch-redis-1 2>/dev/null; sudo docker network rm dispatch_bot_queue; sudo docker volume rm dispatch_redis_data
+sudo rm -f /srv/docker/dispatch/secrets/redis_password
+```
 
 ## Installation access and status notifications
 
@@ -417,10 +423,9 @@ Changes to `deploy/`, `ops/`, `security/`, `.github/workflows/` and migrations s
 | Service | Networks | Secrets |
 |---|---|---|
 | postgres | api_db, bot_db, migrate_db | postgres_admin_password |
-| redis (uid 999) | bot_queue | redis_password |
 | migrate / secure-db | migrate_db | owner (+ application passwords for secure-db) |
 | api | backend, api_db, bot_rpc, api_egress | discord_client_secret, session_secret, data_encryption_key, bot_internal_api_key, api_db_password |
-| bot | bot_db, bot_queue, bot_rpc, bot_egress | discord_token, bot_internal_api_key, data_encryption_key, bot_db_password, redis_password |
+| bot | bot_db, bot_rpc, bot_egress | discord_token, bot_internal_api_key, data_encryption_key, bot_db_password |
 | web | frontend, backend | none |
 | edge (nginx, uid 101) | frontend, proxy_net | none |
 

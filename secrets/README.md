@@ -12,4 +12,3 @@ Production secret files are created directly on the VPS by the installer:
 - postgres_admin_password
 - api_db_password
 - bot_db_password
-- redis_password

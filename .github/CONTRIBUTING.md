@@ -11,7 +11,7 @@ By taking part you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 | Report a bug | [New issue → Bug report](https://github.com/haxurus/Dispatch/issues/new/choose) |
 | Propose a feature | [New issue → Feature request](https://github.com/haxurus/Dispatch/issues/new/choose) |
 | Report a security vulnerability | [Private vulnerability reporting](https://github.com/haxurus/Dispatch/security/advisories/new) — never a public issue |
-| Ask a question or get help | [Discord server](https://discord.gg/DDBGWP5fMX) — see [SUPPORT.md](SUPPORT.md) |
+| Ask a question or get help | [Discord server](https://discord.gg/P7ycBcBqtn) — see [SUPPORT.md](SUPPORT.md) |
 | Run your own instance | [docs/DISTRIBUTION.md](../docs/DISTRIBUTION.md) and [docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md) |
 
 ## Reporting bugs
