@@ -172,7 +172,10 @@ export function registerSuperRoutes(app: FastifyInstance) {
         where: { guildId: { in: guildIds } },
         select: { guildId: true, createdAt: true }
       }),
+      // Until the VPS installer is re-run, the API role may lack the grant on
+      // the new table: the console must keep working without the status channel.
       prisma.statusChannel.findUnique({ where: { id: 1 }, select: { guildId: true, channelId: true, updatedAt: true } })
+        .catch(() => null)
     ]);
 
     const openMap = new Map(openByGuild.map((row) => [row.guildId, row._count._all]));
