@@ -13,6 +13,6 @@ Before asking, these usually answer the question:
 - [README](../README.md): features, how it works, Discord application setup.
 - [Ticket protections](../docs/TICKET_PROTECTIONS.md), [forms](../docs/FORMS.md) and [panels](../docs/PANELS.md).
 - [Deployment guide](../docs/DEPLOYMENT.md) and [distribution rules](../docs/DISTRIBUTION.md) for self-hosted instances.
-- The server's ticket log channel (Dashboard → Logs) records opens, claims, closes and delivery problems, which explains most unexpected behaviour.
+- The server's ticket log channel (dashboard: **Sistema e menu → Log ticket**, *System and menu → Ticket log*) records opens, claims, closes and delivery problems, which explains most unexpected behaviour.
 
 Support is provided on a best-effort basis. Self-hosted instances are supported through the Discord server and GitHub issues, as time allows.

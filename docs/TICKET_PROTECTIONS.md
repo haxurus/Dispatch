@@ -1,169 +1,173 @@
-# Menu principale, anti-spam e retention
+# Ticket protections: main menu, anti-spam and retention
 
-## Configurazione
+The dashboard is in Italian: labels are quoted as they appear, followed by an English gloss. Texts posted by the bot follow the server's bot language (English or Italian); they are quoted here in English.
 
-Aprire la dashboard del server, quindi **Configura ticket > Sistema ticket** (`/dashboard/<guildId>/tickets/system`). La pagina richiede Admin/Owner.
+## Configuration
 
-1. Creare le categorie di richiesta in **Configura ticket**, indicando categoria Discord, ruoli staff ed eventuali domande iniziali.
-2. In **Sistema ticket**, abilitare il menu principale, scegliere il canale, compilare titolo, descrizione e testo del pulsante, selezionare le richieste disponibili e pubblicare.
-3. Il messaggio pubblico mostra **Apri un ticket**. Il pulsante apre un selettore privato visibile solo all'utente; la scelta apre il modulo della richiesta, quando previsto, e infine il suo canale ticket privato. Sono ammesse fino a 25 richieste per menu. Le categorie disabilitate non sono selezionabili. I vecchi messaggi non piu associati alla configurazione vengono rifiutati.
+Open the server dashboard, then **Sistema e menu** (*System and menu*, `/dashboard/<guildId>/tickets/system`). The page requires Admin/Owner.
 
-La pubblicazione aggiorna il messaggio esistente. Un nuovo messaggio viene creato soltanto quando non ne esiste uno oppure Discord restituisce esplicitamente Unknown Message: errori di permessi/rete non causano una pubblicazione duplicata. Se si cambia canale, il vecchio messaggio resta inattivo e puo essere rimosso manualmente.
+1. Create the request categories in **Configurazione ticket** (*Ticket configuration*), with the Discord category, staff roles and any opening questions.
+2. In **Sistema e menu**, enable the main menu, choose the channel, fill in title, description and button text, select the available requests and publish.
+3. The public message shows **Open a ticket**. The button opens a private selector visible only to the user; the choice opens the request's form, when there is one, and finally its private ticket channel. Up to 25 requests per menu are allowed. Disabled categories cannot be selected. Old messages no longer associated with the configuration are rejected.
 
-### Pannelli ticket
+Publishing updates the existing message. A new message is created only when none exists or Discord explicitly returns Unknown Message: permission or network errors never cause a duplicate publication. If the channel is changed, the old message stays inactive and can be removed by hand.
 
-I pannelli ticket si gestiscono nella sezione **Pannelli** ([PANELS.md](PANELS.md)), con menu a tendina o pulsanti. Entrambi seguono lo stesso percorso protetto descritto sotto: limitatore di ingresso, prenotazione con chiave `p_<panelId>`, controllo che il messaggio sia quello attuale del pannello e che la categoria sia ancora inclusa nel pannello e abilitata. Anche la pubblicazione dei pannelli usa la regola Unknown Message per evitare duplicati.
+### Ticket panels
 
-## Anti-spam e cooldown
+Ticket panels are managed in the **Pannelli** (*Panels*) section ([PANELS.md](PANELS.md)), with a select menu or buttons. Both follow the same protected path described below: ingress limiter, reservation with key `p_<panelId>`, check that the message is the panel's current one and that the category is still included in the panel and enabled. Panel publication also uses the Unknown Message rule to avoid duplicates.
 
-Sono configurabili cooldown globale, cooldown per categoria, numero di tentativi e durata della finestra temporale globale/per categoria, durata base del blocco temporaneo. Valori iniziali: 30 secondi globale, 60 secondi per categoria, 5 tentativi globali/10 minuti, 3 per categoria/10 minuti, blocco base 15 minuti.
+## Anti-spam and cooldowns
 
-I blocchi ripetuti crescono con moltiplicatore 1, 2, 4, 8; il massimo assoluto e 7 giorni. Le infrazioni decadono dopo 24 ore senza nuove infrazioni. Un limite tecnico aggiuntivo di 5 interazioni di apertura ogni 5 secondi protegge il database e non riguarda i comandi staff.
+Configurable: global cooldown, per-category cooldown, number of attempts and length of the global/per-category time window, base duration of the temporary block. Initial values: 30 seconds global, 60 seconds per category, 5 global attempts per 10 minutes, 3 per category per 10 minutes, base block 15 minutes.
 
-Ogni apertura ha una prenotazione casuale monouso, persistita in PostgreSQL e legata a server, utente, categoria, origine e versione del modulo. Una transazione serializza le richieste concorrenti; invii duplicati, moduli scaduti/modificati e nonce appartenenti ad altri utenti vengono rifiutati. I limiti di ticket aperti e l'esclusione delle aperture simultanee restano attivi anche disabilitando i cooldown. La blacklist viene ricontrollata prima della creazione effettiva.
+Repeated blocks grow with multiplier 1, 2, 4, 8; the absolute maximum is 7 days. Infractions decay after 24 hours without new infractions. An additional technical limit of 5 opening interactions every 5 seconds protects the database and does not apply to staff commands.
 
-Un modulo abbandonato scade dopo 10 minuti. Una mutazione Discord dall'esito incerto NON viene sbloccata automaticamente: lo stato CREATING resta persistito per evitare doppi canali. L'operatore deve verificare eventuali canali creati prima di correggere la prenotazione. Non cancellare alla cieca le righe TicketUserGuard. Un errore nella risposta privata all'utente non elimina un ticket gia salvato.
+Every opening has a random single-use reservation, persisted in PostgreSQL and bound to server, user, category, source and form version. A transaction serialises concurrent requests; duplicate submissions, expired/changed forms and nonces belonging to other users are rejected. The open-ticket limits and the exclusion of simultaneous openings stay active even when cooldowns are disabled. The blacklist is checked again before the actual creation.
 
-## Transcript
+An abandoned form expires after 10 minutes. A Discord mutation with an uncertain outcome is NOT released automatically: the CREATING state stays persisted to avoid duplicate channels. The operator must check for any channels created before correcting the reservation. Do not blindly delete TicketUserGuard rows. An error in the private reply to the user does not delete a ticket that has already been saved.
 
-La generazione automatica è configurabile per singola categoria ticket ed è disattivata per impostazione predefinita.
+## Transcripts
 
-Alla chiusura è possibile scegliere, anche contemporaneamente, di:
+Automatic generation is configurable per ticket category and is disabled by default.
 
-- inviare il transcript HTML in DM all'utente che ha aperto il ticket;
-- inviarlo come file in un canale Discord dedicato;
-- mantenere una copia cifrata nel database Dispatch.
+On close, it is possible to choose, also at the same time, to:
 
-Se la copia lato Dispatch non è abilitata, il transcript automatico viene costruito esclusivamente in memoria, inviato alle destinazioni configurate e poi scartato. Non viene scritto su filesystem.
+- send the HTML transcript by DM to the user who opened the ticket;
+- send it as a file to a dedicated Discord channel;
+- keep an encrypted copy in the Dispatch database.
 
-La generazione manuale dalla dashboard salva una copia cifrata per consentire il download. Se la categoria non prevede conservazione lato Dispatch (`transcriptRetain` disattivo; predefinito attivo), la copia è monouso: il download avviene con `POST .../transcript/download`, che la elimina in modo atomico; `GET`/`HEAD` non eliminano mai nulla. In ogni caso la relazione `Transcript -> Ticket` usa cancellazione a cascata: eliminando il ticket viene eliminata anche qualsiasi copia transcript ancora presente.
+If the Dispatch-side copy is not enabled, the automatic transcript is built exclusively in memory, sent to the configured destinations and then discarded. It is never written to the filesystem.
 
-La consegna DM o nel canale archivio non blocca la chiusura del ticket in caso di errore Discord; l'esito viene registrato nell'audit. Una riapertura e una successiva nuova chiusura generano un transcript aggiornato.
+Manual generation from the dashboard saves an encrypted copy to allow the download. If the category does not keep a Dispatch-side copy (`transcriptRetain` off; on by default), the copy is one-shot: the download uses `POST .../transcript/download`, which deletes it atomically; `GET`/`HEAD` never delete anything. In every case the `Transcript -> Ticket` relation uses cascade deletion: deleting the ticket also deletes any transcript copy still present.
 
-## Ticket chiusi: categoria dedicata, riapertura ed eliminazione del canale
+Delivery by DM or to the archive channel does not block the close if Discord returns an error; the outcome is recorded in the audit. A reopening followed by a new close generates an updated transcript.
 
-### Categoria Discord per i ticket chiusi
+## Closed tickets: dedicated category, reopening and channel deletion
 
-Ogni categoria ticket può indicare una **Categoria Discord per i ticket chiusi** (`TicketCategory.closedParentCategoryId`, facoltativa). Un form con ticket automatico può sovrascriverla con **Categoria Discord per i ticket chiusi (override)** (`FormDefinition.ticketClosedParentCategoryId`): il bot collega il ticket al form che lo ha creato (`Ticket.sourceFormId`, FK `ON DELETE SET NULL`). L'API accetta solo categorie Discord (tipo 4) del server.
+### Discord category for closed tickets
 
-Alla chiusura (modulo Discord, dashboard o chiusura automatica), dopo l'aggiornamento condizionale dello stato e il blocco dei permessi, il canale viene spostato nella categoria di destinazione (override del form, altrimenti quella della categoria ticket) con `lockPermissions: false`: il canale conserva i propri permessi (opener, partecipanti, staff, `@everyone` negato e thread negati) e non eredita quelli della categoria. Il parent precedente viene salvato in `Ticket.openParentId`. Se Discord rifiuta lo spostamento (categoria piena: 50 canali, permessi mancanti, categoria inesistente) il canale resta dov'è, l'audit registra `ticket.close.move_failed` con il codice d'errore e la chiusura prosegue normalmente. Il canale viene rinominato `closed-XXXX` come prima.
+Each ticket category can set a **Discord category for closed tickets** (`TicketCategory.closedParentCategoryId`, optional). A form with an automatic ticket can override it with its own **closed-ticket Discord category (override)** (`FormDefinition.ticketClosedParentCategoryId`): the bot links the ticket to the form that created it (`Ticket.sourceFormId`, FK `ON DELETE SET NULL`). The API accepts only Discord categories (type 4) of the server.
 
-Alla riapertura, dopo il ripristino dei permessi, il canale torna in `openParentId` oppure, se mancante, nella categoria Discord della categoria ticket; `openParentId` viene azzerato. Un errore viene registrato come `ticket.reopen.move_failed` e non blocca la riapertura.
+On close (Discord form, dashboard or automatic close), after the conditional status update and the permission lock, the channel is moved to the destination category (the form's override, otherwise the ticket category's) with `lockPermissions: false`: the channel keeps its own permissions (opener, participants, staff, `@everyone` denied and threads denied) and does not inherit the category's. The previous parent is saved in `Ticket.openParentId`. If Discord rejects the move (category full: 50 channels, missing permissions, non-existent category) the channel stays where it is, the audit records `ticket.close.move_failed` with the error code and the close proceeds normally. The channel is renamed `closed-XXXX` as before.
 
-### Pulsanti del messaggio di chiusura
+On reopening, after the permissions are restored, the channel goes back to `openParentId` or, if missing, to the ticket category's Discord category; `openParentId` is cleared. An error is recorded as `ticket.reopen.move_failed` and does not block the reopening.
 
-Il messaggio di chiusura contiene, oltre alle stelle del feedback quando attivo:
+### Buttons of the closing message
 
-- **Riapri ticket** (`dispatch:reopen:<ticketId>`): lo staff della categoria (ruoli staff, Gestisci server o Gestisci canali) può sempre riaprire; l'utente che ha aperto il ticket solo entro la finestra di riapertura, come prima. Stesso percorso protetto della dashboard (prenotazione, lock del ticket, stato `REOPENING`).
-- **Elimina canale** (`dispatch:delete-channel:<ticketId>`): solo staff. Il primo click mostra una conferma privata con **Conferma eliminazione** (`dispatch:delete-confirm:<ticketId>:<scadenza base36>`, valida 2 minuti); alla conferma staff e stato vengono ricontrollati.
+Besides the feedback stars when enabled, the closing message contains:
 
-### Eliminazione del canale
+- **Reopen ticket** (`dispatch:reopen:<ticketId>`): the category's staff (staff roles, Manage Server or Manage Channels) can always reopen; the user who opened the ticket only within the reopen window, as before. Same protected path as the dashboard (reservation, ticket lock, `REOPENING` state).
+- **Delete channel** (`dispatch:delete-channel:<ticketId>`): staff only. The first click shows a private confirmation with **Confirm deletion** (`dispatch:delete-confirm:<ticketId>:<base36 expiry>`, valid for 2 minutes); on confirmation, staff and status are checked again.
 
-L'eliminazione è disponibile da Discord (pulsante sopra) e dalla dashboard (dettaglio ticket, **Elimina canale** con conferma, livello Moderator o superiore come le altre azioni sui ticket; `POST /api/guilds/:guildId/tickets/:ticketId/delete-channel`, azione RPC del bot `delete-channel`). Solo per ticket `CLOSED` senza marcatore di retention.
+### Channel deletion
 
-1. Il canale viene verificato come per la retention (stesso server, testuale, topic `Dispatch ticket #N - `): un canale riutilizzato non viene eliminato.
-2. Il transcript viene messo al sicuro secondo le impostazioni della categoria prima di eliminare: se la generazione automatica è attiva e la consegna di chiusura manca (o non ha raggiunto il canale archivio configurato) viene ripetuta; se la categoria conserva una copia cifrata e non esiste, viene salvata. Se non è possibile, l'eliminazione viene rifiutata (`TICKET_TRANSCRIPT_FAILED`). Un transcript già scaduto per retention non blocca l'eliminazione.
-3. Sotto lock del ticket un aggiornamento condizionale (`status = CLOSED`, nessun marcatore di retention, canale non ancora eliminato) imposta `Ticket.channelDeletedAt` e registra `ticket.channel.delete`.
-4. Il canale Discord viene eliminato. Unknown Channel equivale a canale già assente; qualsiasi altro errore ripristina il marcatore, registra `ticket.channel.delete_failed` e restituisce `TICKET_CHANNEL_DELETE_FAILED`.
+Deletion is available from Discord (button above) and from the dashboard (ticket detail, **Elimina canale** — *Delete channel* — with confirmation, Moderator level or higher like the other ticket actions; `POST /api/guilds/:guildId/tickets/:ticketId/delete-channel`, bot RPC action `delete-channel`). Only for `CLOSED` tickets without a retention marker.
 
-Il record del ticket resta per storico e analytics fino alla retention. La riapertura viene rifiutata con `TICKET_CHANNEL_DELETED` e la dashboard mostra lo stato *Canale eliminato* senza i pulsanti di riapertura.
+1. The channel is verified as for retention (same server, text channel, topic `Dispatch ticket #N - `): a reused channel is not deleted.
+2. The transcript is secured according to the category settings before deleting: if automatic generation is on and the closing delivery is missing (or did not reach the configured archive channel), it is repeated; if the category keeps an encrypted copy and none exists, it is saved. If this is not possible, the deletion is refused (`TICKET_TRANSCRIPT_FAILED`). A transcript already expired by retention does not block the deletion.
+3. Under the ticket lock, a conditional update (`status = CLOSED`, no retention marker, channel not yet deleted) sets `Ticket.channelDeletedAt` and records `ticket.channel.delete`.
+4. The Discord channel is deleted. Unknown Channel counts as an already missing channel; any other error restores the marker, records `ticket.channel.delete_failed` and returns `TICKET_CHANNEL_DELETE_FAILED`.
 
-## Log ticket
+The ticket record stays for history and analytics until retention. Reopening is refused with `TICKET_CHANNEL_DELETED` and the dashboard shows the *Canale eliminato* (*Channel deleted*) state without the reopen buttons.
 
-In **Sistema e menu** la scheda **Log ticket** sceglie un canale testuale o di annunci del server (`GuildSettings.ticketLogChannelId`) e gli eventi da registrare (`GuildSettings.ticketLogEvents`, chiavi definite una sola volta in `@dispatch/shared`):
+## Ticket logs
 
-| Evento | Contenuto |
+In **Sistema e menu**, the **Log ticket** (*Ticket log*) card selects a text or announcement channel of the server (`GuildSettings.ticketLogChannelId`) and the events to record (`GuildSettings.ticketLogEvents`, keys defined once in `@dispatch/shared`):
+
+| Event | Content |
 | --- | --- |
-| `TICKET_OPEN` | apertura da menu, pannello o form |
-| `TICKET_CLAIM` | claim, rilascio, assegnazione |
-| `TICKET_UPDATE` | stato, priorità, trasferimento di categoria |
-| `TICKET_MEMBERS` | aggiunta o rimozione di un membro |
-| `TICKET_CLOSE` | chiusura (solo se un motivo è stato indicato, mai il testo) |
-| `TICKET_REOPEN` | riapertura |
-| `TICKET_DELETE` | canale eliminato dallo staff o dalla retention |
-| `TICKET_TRANSCRIPT` | generazione manuale e consegna automatica |
-| `TICKET_FEEDBACK` | valutazione 1-5 e moderatore valutato, mai il commento |
-| `TICKET_STAFF_THREAD` | thread staff creato, transcript del thread inviato (mai il contenuto) |
-| `TICKET_AUTOMATION` | SLA superati, escalation, preavviso e chiusura per inattività |
-| `FORM_SUBMISSION` | nome del form, utente, ID invio, ticket collegato; mai le risposte |
-| `BLACKLIST` | aggiunta o rimozione dalla dashboard |
+| `TICKET_OPEN` | opened from menu, panel or form |
+| `TICKET_CLAIM` | claim, release, assignment |
+| `TICKET_UPDATE` | status, priority, category transfer |
+| `TICKET_MEMBERS` | member added or removed |
+| `TICKET_CLOSE` | close (only whether a reason was given, never the text) |
+| `TICKET_REOPEN` | reopening |
+| `TICKET_DELETE` | channel deleted by staff or by retention |
+| `TICKET_TRANSCRIPT` | manual generation and automatic delivery |
+| `TICKET_FEEDBACK` | 1-5 rating and rated moderator, never the comment |
+| `TICKET_STAFF_THREAD` | staff thread created, thread transcript sent (never the content) |
+| `TICKET_AUTOMATION` | SLA breaches, escalation, inactivity warning and close |
+| `FORM_SUBMISSION` | form name, user, submission ID, linked ticket; never the answers |
+| `BLACKLIST` | added or removed from the dashboard |
 
-Ogni evento è un embed compatto (titolo, ticket e canale, autore con ID, categoria, dati specifici, data) inviato con `allowedMentions: { parse: [] }`. I campi cifrati (motivo di chiusura, risposte dei form, note, commento del feedback) non vengono mai pubblicati. L'invio è best effort: errori di Discord o di configurazione vengono registrati nel log del bot con il solo codice e non interrompono mai l'azione sul ticket. Le impostazioni sono lette con una cache di 30 secondi; **Invia messaggio di prova** (`POST /api/guilds/:guildId/ticket-log/test`, Admin) salva, ricarica la configurazione e restituisce codici stabili (`TICKET_LOG_CHANNEL_REQUIRED`, `TICKET_LOG_CHANNEL_INVALID`, `TICKET_LOG_SEND_FAILED`).
+Each event is a compact embed (title, ticket and channel, author with ID, category, specific data, date) sent with `allowedMentions: { parse: [] }`. Encrypted fields (close reason, form answers, notes, feedback comment) are never posted. Delivery is best effort: Discord or configuration errors are recorded in the bot log with the error code only and never interrupt the ticket action. Settings are read with a 30-second cache; **Invia messaggio di prova** (*Send test message*, `POST /api/guilds/:guildId/ticket-log/test`, Admin) saves, reloads the configuration and returns stable codes (`TICKET_LOG_CHANNEL_REQUIRED`, `TICKET_LOG_CHANNEL_INVALID`, `TICKET_LOG_SEND_FAILED`).
 
-Gli eventi `BLACKLIST` nascono nell'API: dopo la modifica l'API invia al bot (`POST /guilds/:guildId/ticket-log/event`) solo un payload strutturato `{ event: 'BLACKLIST', action: 'add' | 'remove', targetUserId, actorId, expiresAt? }`. Il bot rifiuta qualunque altra chiave o testo libero (`INVALID_TICKET_LOG_EVENT`): il motivo della blacklist non viene mai inviato.
+`BLACKLIST` events originate in the API: after the change, the API sends the bot (`POST /guilds/:guildId/ticket-log/event`) only a structured payload `{ event: 'BLACKLIST', action: 'add' | 'remove', targetUserId, actorId, expiresAt? }`. The bot rejects any other key or free text (`INVALID_TICKET_LOG_EVENT`): the blacklist reason is never sent.
 
-## Valutazioni attribuite al moderatore
+## Ratings attributed to the moderator
 
-Migrazione `20261012100000_ratings_leaderboard_threads`. Prima gli analytics attribuivano feedback e chiusure al `claimedById` *attuale*, che viene azzerato da rilascio e riapertura. Ora l'attribuzione viene fissata nel momento in cui avviene:
+Migration `20261012100000_ratings_leaderboard_threads`. Previously analytics attributed feedback and closes to the *current* `claimedById`, which is cleared by unclaim and reopening. Now the attribution is fixed when it happens:
 
-- **Chiusura** (modulo Discord, dashboard, chiusura automatica): `Ticket.closedById` = chi ha chiuso, solo se ha accesso staff alla categoria (ruoli staff, Gestisci server o Gestisci canali; verificato dal bot sul membro Discord, anche per le chiusure dalla dashboard). Mai l'utente che ha aperto il ticket (anche se ha un ruolo staff) né il bot (chiusura per inattività). `Ticket.handledById` = claimer al momento della chiusura, altrimenti `closedById`, altrimenti `NULL`. La riapertura azzera entrambi; la chiusura successiva li ricalcola.
-- **Feedback**: `TicketFeedback.staffUserId` = claimer del ticket chiuso, altrimenti `closedById`, altrimenti `NULL` (non attribuito). Il valore resta anche se in seguito il claim cambia.
-- Il messaggio di chiusura nomina il moderatore («Valuta l’assistenza ricevuta da @moderatore», menzione **senza** notifica: `allowedMentions: { parse: [] }`), oppure il testo generico se il ticket non è attribuito.
-- Analytics (`GET /api/guilds/:guildId/analytics`): nella tabella staff `closures` conta i ticket con `handledById` = moderatore e `averageRating`/`feedbackCount` usano `staffUserId`. Gli altri campi restano invariati.
-- Backfill: i feedback esistenti vengono attribuiti al claimer attuale del ticket (ciò che gli analytics mostravano finora) e i ticket già chiusi ricevono `handledById` = claimer. Valori non snowflake restano `NULL`; vincoli `CHECK` snowflake sulle nuove colonne.
+- **Close** (Discord form, dashboard, automatic close): `Ticket.closedById` = whoever closed, only if they have staff access to the category (staff roles, Manage Server or Manage Channels; checked by the bot on the Discord member, also for closes from the dashboard). Never the user who opened the ticket (even with a staff role) nor the bot (inactivity close). `Ticket.handledById` = claimer at the time of the close, otherwise `closedById`, otherwise `NULL`. Reopening clears both; the next close recalculates them.
+- **Feedback**: `TicketFeedback.staffUserId` = claimer of the closed ticket, otherwise `closedById`, otherwise `NULL` (not attributed). The value stays even if the claim later changes.
+- The closing message names the moderator ("Rate the help you received from @moderator", a mention **without** notification: `allowedMentions: { parse: [] }`), or the generic text if the ticket is not attributed.
+- Analytics (`GET /api/guilds/:guildId/analytics`): in the staff table, `closures` counts the tickets with `handledById` = moderator and `averageRating`/`feedbackCount` use `staffUserId`. The other fields are unchanged.
+- Backfill: existing feedback is attributed to the ticket's current claimer (what analytics showed so far) and already closed tickets get `handledById` = claimer. Non-snowflake values stay `NULL`; snowflake `CHECK` constraints on the new columns.
 
-## Classifica moderatori
+## Moderator leaderboard
 
-Nella pagina **Analytics** la sezione **Classifica moderatori** mostra (livello Moderator o superiore, come gli analytics) la classifica della settimana o del mese corrente/precedente. Per periodo `[inizio, fine)` e per moderatore:
+On the **Analytics** page, the **Classifica moderatori** (*Moderator leaderboard*) section shows (Moderator level or higher, like analytics) the leaderboard of the current or previous week or month. For a period `[start, end)` and per moderator:
 
-- **ticket gestiti**: ticket chiusi nel periodo con `handledById` = moderatore;
-- **valutazione media** e numero di valutazioni: feedback creati nel periodo con `staffUserId` = moderatore; la media conta solo con almeno `leaderboardMinRatings` valutazioni (0..50, predefinito 3), altrimenti è mostrata come «—»;
-- **prima risposta**: mediana dei tempi dei ticket in cui il moderatore è stato il primo a rispondere (audit `ticket.first_staff_response` nel periodo);
-- **claim**: claim e assegnazioni nel periodo.
+- **tickets handled**: tickets closed in the period with `handledById` = moderator;
+- **average rating** and number of ratings: feedback created in the period with `staffUserId` = moderator; the average counts only with at least `leaderboardMinRatings` ratings (0..50, default 3), otherwise it is shown as "—";
+- **first response**: median time of the tickets in which the moderator was the first to answer (audit `ticket.first_staff_response` in the period);
+- **claims**: claims and assignments in the period.
 
-Ordine: ticket gestiti, poi valutazione media (chi non raggiunge il minimo sta sotto chi lo raggiunge), poi numero di valutazioni, poi ID; a parità completa la posizione è condivisa (1, 1, 3). Ranking e periodi sono funzioni pure in `@dispatch/shared` (`rankLeaderboard`, `leaderboardPeriod`, `dueLeaderboardPeriods`): settimane ISO 8601 (chiave `2026-W41`; la settimana appartiene all'anno del suo giovedì, quindi 28/12/2026-03/01/2027 è `2026-W53`) e mesi di calendario (chiave `2026-09`), con mezzanotte locale nel fuso del server (`GuildSettings.timezone`, predefinito `Europe/Rome`, API `Intl`, nessuna dipendenza): la settimana del cambio d'ora dura 7 giorni ± 1 ora.
+Order: tickets handled, then average rating (whoever does not reach the minimum ranks below those who do), then number of ratings, then ID; on a complete tie the position is shared (1, 1, 3). Ranking and periods are pure functions in `@dispatch/shared` (`rankLeaderboard`, `leaderboardPeriod`, `dueLeaderboardPeriods`): ISO 8601 weeks (key `2026-W41`; a week belongs to the year of its Thursday, so 28/12/2026-03/01/2027 is `2026-W53`) and calendar months (key `2026-09`), with local midnight in the server's time zone (`GuildSettings.timezone`, default `Europe/Rome`, `Intl` API, no dependency): the week of a DST change lasts 7 days ± 1 hour.
 
-### Pubblicazione automatica
+### Automatic posting
 
-Scheda **Pubblicazione della classifica** (Admin/Owner): canale testuale o di annunci (`leaderboardChannelId`), classifica settimanale e/o mensile, giorno della settimana (`leaderboardWeekday`, 1 = lunedì) e ora (`leaderboardHour`, 0..23) nel fuso del server, numero di moderatori (`leaderboardSize`, 3..25) e valutazioni minime. API: `GET/PUT /api/guilds/:guildId/leaderboard/settings` (Admin; `LEADERBOARD_CHANNEL_NOT_FOUND` se il canale non è testuale o di annunci del server), anteprima `GET /api/guilds/:guildId/leaderboard?period=week|month&offset=0` (Moderator), **Invia ora** `POST /api/guilds/:guildId/leaderboard/send` `{ period, offset }` (Admin; RPC del bot `POST /guilds/:guildId/leaderboard/send`, codici `LEADERBOARD_CHANNEL_REQUIRED`, `LEADERBOARD_CHANNEL_INVALID`, `LEADERBOARD_SEND_FAILED`). «Invia ora» pubblica il periodo mostrato nell'anteprima e non modifica la pianificazione.
+**Pubblicazione della classifica** (*Leaderboard posting*) card (Admin/Owner): text or announcement channel (`leaderboardChannelId`), weekly and/or monthly leaderboard, weekday (`leaderboardWeekday`, 1 = Monday) and hour (`leaderboardHour`, 0..23) in the server's time zone, number of moderators (`leaderboardSize`, 3..25) and minimum ratings. API: `GET/PUT /api/guilds/:guildId/leaderboard/settings` (Admin; `LEADERBOARD_CHANNEL_NOT_FOUND` if the channel is not a text or announcement channel of the server), preview `GET /api/guilds/:guildId/leaderboard?period=week|month&offset=0` (Moderator), **Invia ora** (*Send now*) `POST /api/guilds/:guildId/leaderboard/send` `{ period, offset }` (Admin; bot RPC `POST /guilds/:guildId/leaderboard/send`, codes `LEADERBOARD_CHANNEL_REQUIRED`, `LEADERBOARD_CHANNEL_INVALID`, `LEADERBOARD_SEND_FAILED`). "Send now" posts the period shown in the preview and does not change the schedule.
 
-Il bot controlla ogni 15 minuti (e all'avvio; cicli mai sovrapposti, errori isolati per server). Quando l'ora locale ha superato (giorno, ora) della settimana corrente pubblica la settimana precedente; quando ha superato (giorno 1, ora) del mese corrente, il mese precedente. Prima di pubblicare, la chiave del periodo (`leaderboardLastWeekly` / `leaderboardLastMonthly`) viene prenotata con un aggiornamento condizionale sul valore precedente: riavvii e due processi del bot non pubblicano mai due volte lo stesso periodo; se Discord rifiuta l'invio la chiave viene ripristinata e il ciclo successivo riprova. Un bot offline all'orario pubblica in ritardo lo stesso periodo. Abilitando la pianificazione dopo l'orario della settimana corrente, la settimana precedente viene pubblicata al ciclo successivo. Un periodo senza ticket gestiti produce il breve messaggio «Nessun ticket gestito in questo periodo» e viene comunque segnato come pubblicato.
+The bot checks every 15 minutes (and at startup; cycles never overlap, errors are isolated per server). When the local time has passed (weekday, hour) of the current week it posts the previous week; when it has passed (day 1, hour) of the current month, the previous month. Before posting, the period key (`leaderboardLastWeekly` / `leaderboardLastMonthly`) is claimed with a conditional update on the previous value: restarts and two bot processes never post the same period twice; if Discord rejects the message the key is restored and the next cycle retries. A bot that is offline at the scheduled time posts the same period late. Enabling the schedule after the current week's slot posts the previous week at the next cycle. A period without handled tickets produces the short message "No tickets handled in this period." and is still marked as posted.
 
-L'embed («Classifica moderatori — settimana dal 5 all’11 ottobre 2026» / «— settembre 2026») ha medaglie per i primi tre e una riga per moderatore: menzione, ticket gestiti, ⭐ media (numero di valutazioni), prima risposta. Le menzioni non notificano nessuno (`allowedMentions: { parse: [] }`).
+The embed ("Moderator leaderboard — week of 5–11 October 2026" / "— September 2026") has medals for the first three and one line per moderator: mention, tickets handled, ⭐ average (number of ratings), first response. Mentions notify nobody (`allowedMentions: { parse: [] }`).
 
-## Thread staff privati
+## Private staff threads
 
-I controlli del ticket hanno una seconda riga con **Thread staff** (`dispatch:staff-thread:<ticketId>`). Il pulsante è riservato allo staff della categoria (ruoli staff, Gestisci server o Gestisci canali; mai l'utente che ha aperto il ticket, anche se ha un ruolo staff) e ai ticket attivi (non chiusi, non in riapertura, canale non eliminato). Al primo click il bot crea un thread **privato** (`staff-NNNN`, non invitabile, archiviazione automatica dopo una settimana di inattività), vi aggiunge chi ha premuto **e tutti i membri attuali dei ruoli staff della categoria** (mai l'autore del ticket né i bot; massimo 200), pubblica un'introduzione che li menziona (ricevono la notifica) e salva `Ticket.staffThreadId` con un aggiornamento condizionale (due click contemporanei non creano due thread). Se il ticket viene trasferito, i moderatori della nuova categoria vengono aggiunti e menzionati nel thread. I click successivi (es. moderatori entrati nel ruolo dopo la creazione) aggiungono il membro dello staff al thread esistente (riattivandolo se archiviato) e rispondono in privato con il link. L'utente e i partecipanti non vengono mai aggiunti. I ticket aperti prima di questa versione non hanno il pulsante nel messaggio iniziale.
+The ticket controls have a second row with **Staff thread** (`dispatch:staff-thread:<ticketId>`). The button is reserved to the category's staff (staff roles, Manage Server or Manage Channels; never the user who opened the ticket, even with a staff role) and to active tickets (not closed, not reopening, channel not deleted). On the first click the bot creates a **private** thread (`staff-NNNN`, not invitable, auto-archived after one week of inactivity), adds whoever clicked **and all current members of the category's staff roles** (never the ticket author or bots; at most 200), posts an introduction that mentions them (they receive the notification) and saves `Ticket.staffThreadId` with a conditional update (two simultaneous clicks do not create two threads). If the ticket is transferred, the moderators of the new category are added and mentioned in the thread. Later clicks (for example moderators who joined the role after the creation) add the staff member to the existing thread (unarchiving it if archived) and reply privately with the link. The user and the participants are never added. Tickets opened before this version do not have the button in their initial message.
 
-Permessi del canale ticket:
+Ticket channel permissions:
 
-- `@everyone`, utente e partecipanti: thread negati come prima (creazione pubblica/privata e invio nei thread).
-- Ruoli staff: possono scrivere nei thread (`SendMessagesInThreads`), non crearli.
-- Bot: `CreatePrivateThreads`, `SendMessagesInThreads`, `ManageThreads` sul proprio override.
+- `@everyone`, user and participants: threads denied as before (public/private creation and sending in threads).
+- Staff roles: can write in threads (`SendMessagesInThreads`), not create them.
+- Bot: `CreatePrivateThreads`, `SendMessagesInThreads`, `ManageThreads` on its own overwrite.
 
-Discord permette al bot di concedere negli override solo i permessi che possiede: per questo il link di installazione richiede ora **Gestisci thread**, **Crea thread privati** e **Invia messaggi nei thread** (bitfield `361045814288`, vedi [DEPLOYMENT.md](DEPLOYMENT.md)). I nuovi canali ricevono i permessi dei thread solo se il ruolo del bot li possiede; per i ticket esistenti gli override di staff e bot vengono aggiornati alla creazione del primo thread. Se i permessi mancano il pulsante risponde «Il bot non ha i permessi per creare thread privati: aggiorna i permessi del suo ruolo» e l'audit registra `ticket.staff_thread.missing_permissions`. Un membro con Gestisci thread a livello di server può comunque vedere i thread privati: non concederlo agli utenti che aprono ticket.
+Discord only lets the bot grant in overwrites the permissions it has: this is why the install link now requests **Manage Threads**, **Create Private Threads** and **Send Messages in Threads** (bitfield `361045814288`, see [DEPLOYMENT.md](DEPLOYMENT.md#prerequisites)). New channels get the thread permissions only if the bot's role has them; for existing tickets the staff and bot overwrites are updated when the first thread is created. If the permissions are missing, the button replies "The bot cannot create private threads: update its role permissions" and the audit records `ticket.staff_thread.missing_permissions`. A member with Manage Threads at server level can still see private threads: do not grant it to users who open tickets.
 
-Riservatezza:
+Confidentiality:
 
-- I messaggi del thread non sono attività del ticket né prima risposta dello staff (il tracciamento considera solo il canale ticket) e non entrano nel transcript dell'utente, che legge soltanto il canale principale.
-- Alla chiusura (tutti i percorsi) il bot costruisce il transcript HTML del thread (stesso generatore con escaping del transcript ticket) e lo invia **solo** a un canale del server: il canale archivio transcript della categoria, se configurato, altrimenti il canale log ticket (`GuildSettings.ticketLogChannelId`). Mai all'utente, mai in DM, mai salvato nel database. Senza destinazione l'invio viene saltato con l'audit `ticket.staff_thread.transcript_skipped`; ogni invio è registrato come `ticket.staff_thread.transcript` (destinazione, esito, numero di messaggi). Poi il thread viene bloccato e archiviato; la riapertura lo sblocca.
-- Prima dell'eliminazione del canale da parte dello staff (che elimina anche i thread) il transcript viene inviato se la chiusura non lo aveva già consegnato. È best effort e non blocca l'eliminazione.
-- La dashboard (dettaglio ticket) mostra solo se il thread esiste, con il link Discord; mai il contenuto.
+- Thread messages are neither ticket activity nor the first staff response (tracking considers only the ticket channel) and do not enter the user's transcript, which reads only the main channel.
+- On close (every path) the bot builds the thread's HTML transcript (same generator, with the same escaping, as the ticket transcript) and sends it **only** to a channel of the server: the category's transcript archive channel, if configured, otherwise the ticket log channel (`GuildSettings.ticketLogChannelId`). Never to the user, never by DM, never saved in the database. Without a destination the delivery is skipped with the audit `ticket.staff_thread.transcript_skipped`; every delivery is recorded as `ticket.staff_thread.transcript` (destination, outcome, number of messages). The thread is then locked and archived; reopening unlocks it.
+- Before staff delete the channel (which also deletes its threads) the transcript is sent if the close had not already delivered it. This is best effort and does not block the deletion.
+- The dashboard (ticket detail) shows only whether the thread exists, with the Discord link; never the content.
 
-Eventi di log: `TICKET_STAFF_THREAD` (thread creato, transcript inviato).
+Log events: `TICKET_STAFF_THREAD` (thread created, transcript sent).
 
-## SLA ed escalation
+## SLA and escalation
 
-Nell’editor delle categorie l’escalation è facoltativa e si attiva con la casella **Escalation automatica** (disattivata per le nuove categorie). Da disattivata vengono salvati `escalationMinutes = null` e `escalationRoleIds = []` (l’API azzera i ruoli anche se un client li invia) e il bot non la esegue. SLA, auto-chiusura, preavviso e finestra di riapertura restano campi numerici: vuoto = disattivato. Gli eventi automatici sono registrabili nel log come `TICKET_AUTOMATION`.
+In the category editor, escalation is optional and is enabled with the **Escalation automatica** (*Automatic escalation*) checkbox (off for new categories). When off, `escalationMinutes = null` and `escalationRoleIds = []` are saved (the API clears the roles even if a client sends them) and the bot does not run it. SLA, auto-close, warning and reopen window remain numeric fields: empty = disabled. Automatic events can be logged as `TICKET_AUTOMATION`.
 
 ## Retention
 
-Le nuove installazioni non cancellano nulla finche non viene impostata una durata. I valori gia salvati vengono mantenuti durante l'aggiornamento. Sono separati:
+New installations delete nothing until a duration is set. Values already saved are kept during the upgrade. The settings are separate:
 
-- durata dei transcript dei ticket chiusi;
-- durata dei ticket chiusi e dei dati collegati;
-- cancellazione opzionale del canale Discord.
+- retention of closed tickets' transcripts;
+- retention of closed tickets and linked data;
+- optional deletion of the Discord channel.
 
-Il controllo parte quando il bot e pronto e si ripete ogni 6 ore, con elaborazione paginata. La scadenza parte dalla chiusura, mai dall'apertura o dalla rigenerazione del transcript. La finestra di riapertura utente viene sempre rispettata. Ticket aperti o in fase REOPENING non vengono eliminati. Eliminare il ticket comporta anche la cancellazione di transcript, note, partecipanti, feedback e audit collegati; l'audit amministrativo generale e i template non sono cancellati da questa politica.
+The check starts when the bot is ready and repeats every 6 hours, with paginated processing. Expiry counts from the close, never from the opening or from the regeneration of the transcript. The user's reopen window is always respected. Open tickets or tickets in the REOPENING phase are not deleted. Deleting the ticket also deletes the linked transcripts, notes, participants, feedback and audit; the general administrative audit and the templates are not deleted by this policy.
 
-Un canale già eliminato dallo staff (`channelDeletedAt`) è considerato assente: la retention non tenta di eliminarlo di nuovo ed elimina soltanto il record.
+A channel already deleted by staff (`channelDeletedAt`) is considered missing: retention does not try to delete it again and deletes only the record.
 
-Prima di eliminare un canale viene salvato un indicatore persistente di cancellazione. La riapertura non puo oltrepassarlo. Errori Discord di permessi, rete o disponibilita conservano il record per il tentativo successivo; soltanto Unknown Channel e considerato equivalente a un canale gia assente. Un canale riutilizzato per altri scopi, senza il topic Dispatch atteso, non viene eliminato. Se la cancellazione Discord e disabilitata, il record viene eliminato ma il canale resta: questa opzione NON rimuove i messaggi da Discord.
+Before deleting a channel a persistent deletion marker is saved. Reopening cannot go past it. Discord permission, network or availability errors keep the record for the next attempt; only Unknown Channel is considered equivalent to an already missing channel. A channel reused for other purposes, without the expected Dispatch topic, is not deleted. If Discord deletion is disabled, the record is deleted but the channel stays: this option does NOT remove the messages from Discord.
 
-I transcript scaduti non possono essere rigenerati per aggirare la retention. Le copie esportate, i backup della VPS e i sistemi di conservazione di Discord hanno un ciclo separato: questa funzione non garantisce la loro cancellazione. Gli aggregati analytics basati sui ticket eliminati cambiano di conseguenza.
+Expired transcripts cannot be regenerated to bypass retention. Exported copies, VPS backups and Discord's own retention have a separate lifecycle: this feature does not guarantee their deletion. Analytics aggregates based on deleted tickets change accordingly.
 
-## Verifica e deploy
+Independently of these settings, all of a server's data is deleted 30 days after the bot is removed from it ([ARCHITECTURE.md](ARCHITECTURE.md#post-removal-purge)).
 
-Il workflow `Ticket protection tests` usa PostgreSQL temporaneo, migration reali e simulazioni dell'API Discord. Verifica concorrenza, replay, limiti, blacklist, menu privato, retention, errori Discord e privilegi DB. La build di produzione dipende da questi test. I test NON equivalgono a una prova dal vivo con Discord o alla verifica della VPS.
+## Verification and deployment
 
-Il metodo di deploy resta quello di Sentinel: immagini costruite su GitHub, GHCR, digest immutabili e deploy SSH ristretto. Al primo setup usare la versione aggiornata di `deploy/runtime/harden-users.sh`; il bot deve poter usare TicketOpenAttempt, TicketUserGuard e TicketFeedback, ma non leggere PanelSession, TicketNote o _prisma_migrations. Valutazioni attribuite, classifica e thread staff aggiungono solo colonne a tabelle esistenti (`GuildSettings`, `Ticket`, `TicketFeedback`): i grant non cambiano.
+The CI job `Typecheck, tests and migrations` uses a disposable PostgreSQL, the real migrations and simulations of the Discord API. It verifies concurrency, replay, limits, blacklist, private menu, retention, Discord errors and database privileges ([VALIDATION.md](VALIDATION.md)). The production build depends on these tests. The tests are NOT equivalent to a live test on Discord or to a verification of the VPS.
+
+The deployment method is the same as Sentinel's: images built on GitHub, GHCR, immutable digests and restricted SSH deployment. On the first setup use the current version of `deploy/runtime/harden-users.sh`; the bot must be able to use TicketOpenAttempt, TicketUserGuard and TicketFeedback, but not read PanelSession, TicketNote or _prisma_migrations. Attributed ratings, the leaderboard and staff threads only add columns to existing tables (`GuildSettings`, `Ticket`, `TicketFeedback`): the grants do not change.
