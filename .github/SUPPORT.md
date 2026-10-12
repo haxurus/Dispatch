@@ -10,6 +10,7 @@
 
 Before asking, these usually answer the question:
 
+- [FAQ](../docs/DISCORD_FAQ.md): the most common setup and permission questions (also pinned on the Discord server).
 - [README](../README.md): features, how it works, Discord application setup.
 - [Ticket protections](../docs/TICKET_PROTECTIONS.md), [forms](../docs/FORMS.md) and [panels](../docs/PANELS.md).
 - [Deployment guide](../docs/DEPLOYMENT.md) and [distribution rules](../docs/DISTRIBUTION.md) for self-hosted instances.
