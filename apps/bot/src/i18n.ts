@@ -197,6 +197,7 @@ const en = {
     created: (threadId: string) => `Staff thread created: <#${threadId}>`,
     joined: (threadId: string) => `You were added to the staff thread: <#${threadId}>`,
     failed: 'The staff thread could not be opened.',
+    planRequired: 'Private staff threads are part of the Plus plan and above: see https://dispatch.haxurus.com/en/pricing',
     intro: (number: number) => `Private staff thread for ticket #${number}. ` +
       'The person who opened the ticket cannot see it; messages here do not count as a reply to the ticket.',
     transferred: (category: string) => `Ticket moved to **${category}**: `,
@@ -507,6 +508,7 @@ const it: BotMessages = {
     created: (threadId: string) => `Thread staff creato: <#${threadId}>`,
     joined: (threadId: string) => `Sei stato aggiunto al thread staff: <#${threadId}>`,
     failed: 'Impossibile aprire il thread staff.',
+    planRequired: 'I thread staff privati sono inclusi dal piano Plus in su: vedi https://dispatch.haxurus.com/it/pricing',
     intro: (number: number) => `Thread privato dello staff per il ticket #${number}. ` +
       'Chi ha aperto il ticket non può vederlo; i messaggi non contano come risposta al ticket.',
     transferred: (category: string) => `Ticket trasferito a **${category}**: `,

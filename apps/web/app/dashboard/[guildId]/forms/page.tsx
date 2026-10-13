@@ -4,6 +4,7 @@ import { type CSSProperties, FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ResourcePicker, { CHANNEL_TYPES } from '../../../_components/ResourcePicker';
 import { useCopy } from '../../../_components/locale-context';
+import { PlanHint, apiErrorText, usePlan } from '../../../_components/plan-client';
 import { format, type Locale } from '../../../i18n';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
@@ -127,7 +128,8 @@ const it = {
   errors: {
     FORM_FIELD_ADMIN_ONLY: 'Canale risultati, ruoli notificati e impostazioni ticket possono essere modificati solo da Admin/Owner.',
     FORBIDDEN: 'Permessi insufficienti per questa operazione.',
-    QUOTA_EXCEEDED: 'Limite raggiunto per questo server: elimina un elemento esistente prima di crearne uno nuovo.',
+    QUOTA_EXCEEDED: 'Limite di {limit} raggiunto con il tuo piano: passa a un piano superiore o elimina un elemento esistente.',
+    QUOTA_EXCEEDED_FIXED: 'Limite di {limit} raggiunto per questo form: rimuovi una regola esistente prima di aggiungerne un’altra.',
     FORM_IN_USE: 'Il form ha già invii e non può essere eliminato.',
     TICKET_PARENT_NOT_FOUND: 'La categoria Discord override non è una categoria del server.',
     TICKET_CLOSED_PARENT_NOT_FOUND: 'La categoria Discord per i ticket chiusi non è una categoria del server.'
@@ -173,6 +175,7 @@ const it = {
   useCategoryDefault: 'Usa quella della categoria ticket',
   closedParentOverride: 'Categoria Discord per i ticket chiusi (override)',
   closedParentHint: 'Alla chiusura i ticket creati da questo form vengono spostati qui invece che nella categoria dei ticket chiusi della categoria ticket.',
+  closedParentPlan: 'Lo spostamento dei ticket chiusi in una categoria dedicata richiede il piano Pro: l’impostazione viene salvata, ma i ticket restano dove sono finché non fai l’upgrade.',
   staffRoles: 'Ruoli staff',
   channelPrefix: 'Prefisso canale',
   questionsLegend: 'Domande ({count}/25)',
@@ -224,7 +227,8 @@ const en: typeof it = {
   errors: {
     FORM_FIELD_ADMIN_ONLY: 'Results channel, notified roles and ticket settings can only be changed by Admin/Owner.',
     FORBIDDEN: 'Insufficient permissions for this operation.',
-    QUOTA_EXCEEDED: 'Limit reached for this server: delete an existing item before creating a new one.',
+    QUOTA_EXCEEDED: 'Limit of {limit} reached on your plan: upgrade or delete an existing item.',
+    QUOTA_EXCEEDED_FIXED: 'Limit of {limit} reached for this form: remove an existing rule before adding another one.',
     FORM_IN_USE: 'The form already has submissions and cannot be deleted.',
     TICKET_PARENT_NOT_FOUND: 'The Discord category override is not a category of this server.',
     TICKET_CLOSED_PARENT_NOT_FOUND: 'The Discord category for closed tickets is not a category of this server.'
@@ -270,6 +274,7 @@ const en: typeof it = {
   useCategoryDefault: 'Use the ticket category one',
   closedParentOverride: 'Discord category for closed tickets (override)',
   closedParentHint: 'On close, tickets created by this form are moved here instead of the closed-tickets category of the ticket category.',
+  closedParentPlan: 'Moving closed tickets to a dedicated category requires the Pro plan: the setting is saved, but tickets stay where they are until you upgrade.',
   staffRoles: 'Staff roles',
   channelPrefix: 'Channel prefix',
   questionsLegend: 'Questions ({count}/25)',
@@ -325,6 +330,7 @@ export default function FormsPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
   const c = useCopy(copy);
+  const { plan } = usePlan(params.guildId);
   const [access, setAccess] = useState<AccessLevel | null>(null);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -427,7 +433,7 @@ export default function FormsPage() {
       );
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setError(c.errors[body.error] ?? format(c.saveFailed, { code: body.error ?? response.status }));
+        setError(apiErrorText(c.errors, body, format(c.saveFailed, { code: body.error ?? response.status })));
         return;
       }
       setNotice(editingId ? c.updated : c.created);
@@ -441,7 +447,7 @@ export default function FormsPage() {
     const response = await fetch(`/backend/api/guilds/${guildId}/forms/${id}`, { method: 'DELETE' });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      setError(c.errors[body.error] ?? c.deleteFailed);
+      setError(apiErrorText(c.errors, body, c.deleteFailed));
     } else {
       setNotice(c.deleted);
       await load();
@@ -485,7 +491,7 @@ export default function FormsPage() {
     if (response.ok) await loadPermissions(selectedPermissionForm);
     else {
       const body = await response.json().catch(() => ({}));
-      setError(c.errors[body.error] ?? c.permissionFailed);
+      setError(apiErrorText(c.errors, body, c.permissionFailed));
     }
   };
 
@@ -553,6 +559,7 @@ export default function FormsPage() {
                   <ResourcePicker label={c.staffRoles} kind="role" roles={roles} guildId={guildId} multiple max={20} disabled={!isAdmin}
                     value={form.ticketStaffRoleIds} onChange={(ticketStaffRoleIds) => setForm({ ...form, ticketStaffRoleIds })}/>
                 </div>
+                <PlanHint plan={plan} feature="closedCategory">{c.closedParentPlan}</PlanHint>
                 <label>{c.channelPrefix}<input value={form.ticketPrefix} onChange={(e) => setForm({ ...form, ticketPrefix: e.target.value })}/></label>
               </>}
             </fieldset>

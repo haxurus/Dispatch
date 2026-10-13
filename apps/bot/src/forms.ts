@@ -32,6 +32,7 @@ import { botCanManageThreads, ticketChannelOverwrites } from './ticket-operation
 import { logTicketEvent, userMention } from './ticket-log.js';
 import { panelComponents, panelEmbed, panelStyle } from './panels.js';
 import { guildLocale, messages, type BotLocale, type BotMessages } from './i18n.js';
+import { guildAllows } from './plan.js';
 import {
   reserveTicketOpen, consumeTicketOpenReservation, commitTicketOpen,
   releaseTicketOpenReservation, ticketOpenReservationMessage, formVersion
@@ -889,7 +890,11 @@ export async function publishFormPanel(client: Client, guildId: string, panelId:
   const payload = {
     allowedMentions: NO_MENTIONS,
     embeds: [panelEmbed(
-      { ...panel, description: panel.description || single?.description || null },
+      {
+        ...panel,
+        description: panel.description || single?.description || null,
+        footerText: (await guildAllows(guildId, 'customBranding')) ? panel.footerText : null
+      },
       style === 'SELECT' ? m.panel.formSelectHint : m.panel.formButtonHint
     )],
     components: panelComponents({

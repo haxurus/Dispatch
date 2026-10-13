@@ -56,6 +56,7 @@ export default function PublicHome({ locale }: { locale: Locale }) {
           { href: '#features', label: c.nav.features },
           { href: '#flow', label: c.nav.flow },
           { href: '#security', label: c.nav.security },
+          { href: `/${locale}/pricing`, label: chrome.pricing },
           { href: '#faq', label: c.nav.faq }
         ]}
         actions={<>
@@ -207,6 +208,7 @@ export default function PublicHome({ locale }: { locale: Locale }) {
           <nav aria-label={chrome.mainNav}>
             <a href="#features">{c.nav.features}</a>
             <a href="#security">{c.nav.security}</a>
+            <a href={`/${locale}/pricing`}>{chrome.pricing}</a>
             <a href="/dashboard">{chrome.dashboard}</a>
             <a href={invite}>{chrome.addToDiscord}</a>
           </nav>

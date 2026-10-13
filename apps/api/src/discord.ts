@@ -239,3 +239,8 @@ export async function sendStatusTest() {
 export async function refreshStatusChannel() {
   return api<{ ok: true }>('/status/refresh', 'POST');
 }
+
+// Brand plan: bot nickname and banner on one server (null resets them).
+export async function setBotBranding(guildId: string, profile: { nick?: string | null; banner?: string | null }) {
+  return api<{ ok: true; guildId: string }>(`/guilds/${id(guildId)}/branding`, 'POST', profile);
+}

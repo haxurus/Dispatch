@@ -27,6 +27,7 @@ import { reserveTicketOpen, getTicketOpenReservation, consumeTicketOpenReservati
   formVersion, allowOpeningInteraction } from './open-guard.js';
 import { panelComponents, panelEmbed, panelStyle } from './panels.js';
 import { guildLocale, guildMessages, localizedMenuDefault, messages, type BotLocale, type BotMessages } from './i18n.js';
+import { guildAllows } from './plan.js';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 const PANEL_SELECT_PREFIX = 'dispatch:open:';
@@ -210,7 +211,11 @@ export async function publishTicketPanel(client: Client, guildId: string, panelI
   const m = await guildMessages(guildId);
   const payload = {
     allowedMentions: { parse: [] as never[] },
-    embeds: [panelEmbed(panel, style === 'BUTTONS' ? m.panel.buttonsHint : m.panel.selectHint)],
+    // A custom footer is part of the Brand plan; otherwise the default footer.
+    embeds: [panelEmbed(
+      { ...panel, footerText: (await guildAllows(guildId, 'customBranding')) ? panel.footerText : null },
+      style === 'BUTTONS' ? m.panel.buttonsHint : m.panel.selectHint
+    )],
     components: panelComponents({
       style,
       placeholder: panel.placeholder,
@@ -1195,6 +1200,7 @@ const staffThreadErrors = (m: BotMessages): Record<string, string> => ({
   STAFF_THREAD_MISSING_PERMISSIONS: m.staffThread.missingPermissions,
   STAFF_THREAD_BUSY: m.staffThread.busy,
   STAFF_THREAD_FORBIDDEN: m.staffThread.forbidden,
+  PLAN_REQUIRED: m.staffThread.planRequired,
   TICKET_CLOSED: m.staffThread.inactive,
   TICKET_REOPENING: m.staffThread.inactive,
   TICKET_CHANNEL_DELETED: m.staffThread.inactive

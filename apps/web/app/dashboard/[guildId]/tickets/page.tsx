@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ResourcePicker, { CHANNEL_TYPES } from '../../../_components/ResourcePicker';
 import { useCopy } from '../../../_components/locale-context';
+import { PlanHint, apiErrorText, usePlan } from '../../../_components/plan-client';
 import { format, type Locale } from '../../../i18n';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
@@ -72,7 +73,7 @@ const it = {
   loadError: 'Impossibile caricare la configurazione ticket.',
   escalationMissing: 'Indica dopo quanti minuti attivare l’escalation automatica, oppure disattivala.',
   categoryErrors: {
-    QUOTA_EXCEEDED: 'Limite raggiunto per questo server: elimina un elemento esistente prima di crearne uno nuovo.'
+    QUOTA_EXCEEDED: 'Limite di {limit} categorie raggiunto con il tuo piano: passa a un piano superiore o elimina una categoria esistente.'
   } as Record<string, string>,
   categorySaveFailed: 'Salvataggio categoria fallito: {code}',
   categoryUpdated: 'Categoria aggiornata.',
@@ -82,7 +83,7 @@ const it = {
   categoryDeleteFailed: 'Eliminazione categoria fallita: {code}',
   categoryDeleted: 'Categoria eliminata.',
   templateErrors: {
-    QUOTA_EXCEEDED: 'Limite raggiunto per questo server: elimina un elemento esistente prima di crearne uno nuovo.'
+    QUOTA_EXCEEDED: 'Limite di {limit} risposte rapide raggiunto con il tuo piano: passa a un piano superiore o elimina un template esistente.'
   } as Record<string, string>,
   templateCreateFailed: 'Creazione template fallita: {code}',
   templateCreated: 'Template creato.',
@@ -110,6 +111,8 @@ const it = {
   closedCategory: 'Categoria Discord per i ticket chiusi',
   closedCategoryPlaceholder: 'Nessuna (restano dove sono)',
   closedCategoryHint: "Facoltativa. Alla chiusura il canale viene spostato qui mantenendo i propri permessi; alla riapertura torna nella categoria di origine. Una categoria Discord contiene al massimo 50 canali: se è piena il ticket resta dov'è.",
+  closedCategoryPlan: 'Lo spostamento dei ticket chiusi richiede il piano Pro: la categoria viene salvata, ma i ticket restano dove sono finché non fai l’upgrade.',
+  automationsPlan: 'SLA, escalation, preavviso e chiusura automatica per inattività richiedono il piano Plus: le impostazioni vengono salvate, ma il bot le applica solo dopo l’upgrade.',
   staffRoles: 'Ruoli staff',
   maxOpenPerUser: 'Massimo ticket aperti per utente',
   antiSpam: 'Anti-spam categoria',
@@ -184,7 +187,7 @@ const en: typeof it = {
   loadError: 'The ticket configuration could not be loaded.',
   escalationMissing: 'Enter after how many minutes automatic escalation should trigger, or turn it off.',
   categoryErrors: {
-    QUOTA_EXCEEDED: 'Limit reached for this server: delete an existing item before creating a new one.'
+    QUOTA_EXCEEDED: 'Limit of {limit} categories reached on your plan: upgrade or delete an existing category.'
   } as Record<string, string>,
   categorySaveFailed: 'Saving the category failed: {code}',
   categoryUpdated: 'Category updated.',
@@ -194,7 +197,7 @@ const en: typeof it = {
   categoryDeleteFailed: 'Deleting the category failed: {code}',
   categoryDeleted: 'Category deleted.',
   templateErrors: {
-    QUOTA_EXCEEDED: 'Limit reached for this server: delete an existing item before creating a new one.'
+    QUOTA_EXCEEDED: 'Limit of {limit} canned replies reached on your plan: upgrade or delete an existing canned reply.'
   } as Record<string, string>,
   templateCreateFailed: 'Creating the canned reply failed: {code}',
   templateCreated: 'Canned reply created.',
@@ -222,6 +225,8 @@ const en: typeof it = {
   closedCategory: 'Discord category for closed tickets',
   closedCategoryPlaceholder: 'None (they stay where they are)',
   closedCategoryHint: 'Optional. On close the channel is moved here, keeping its own permissions; on reopen it goes back to its original category. A Discord category holds at most 50 channels: if it is full, the ticket stays where it is.',
+  closedCategoryPlan: 'Moving closed tickets requires the Pro plan: the category is saved, but tickets stay where they are until you upgrade.',
+  automationsPlan: 'SLAs, escalation, the inactivity warning and auto-close require the Plus plan: the settings are saved, but the bot applies them only after upgrading.',
   staffRoles: 'Staff roles',
   maxOpenPerUser: 'Maximum open tickets per user',
   antiSpam: 'Category anti-spam',
@@ -343,6 +348,7 @@ export default function TicketConfigurationPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
   const c = useCopy(copy);
+  const { plan } = usePlan(guildId);
 
   const [access, setAccess] = useState<AccessLevel | null>(null);
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
@@ -476,7 +482,7 @@ export default function TicketConfigurationPage() {
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         const code = body.error ?? response.status;
-        setError(c.categoryErrors[String(code)] ?? format(c.categorySaveFailed, { code }));
+        setError(apiErrorText(c.categoryErrors, body, format(c.categorySaveFailed, { code })));
         return;
       }
 
@@ -591,7 +597,7 @@ export default function TicketConfigurationPage() {
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         const code = body.error ?? response.status;
-        setError(c.templateErrors[String(code)] ?? format(c.templateCreateFailed, { code }));
+        setError(apiErrorText(c.templateErrors, body, format(c.templateCreateFailed, { code })));
         return;
       }
 
@@ -714,6 +720,7 @@ export default function TicketConfigurationPage() {
                 value={categoryForm.closedParentCategoryId}
                 onChange={(closedParentCategoryId) => setCategoryForm({ ...categoryForm, closedParentCategoryId })}
               />
+              <PlanHint plan={plan} feature="closedCategory">{c.closedCategoryPlan}</PlanHint>
 
               <ResourcePicker
                 label={c.staffRoles}
@@ -787,6 +794,7 @@ export default function TicketConfigurationPage() {
               <fieldset>
                 <legend>{c.slaAutomations}</legend>
                 <p className="muted">{c.slaHelp}</p>
+                <PlanHint plan={plan} feature="automations">{c.automationsPlan}</PlanHint>
                 <div className="grid compact-grid">
                   <label>
                     {c.slaFirstResponse}

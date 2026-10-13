@@ -131,7 +131,7 @@ The rules cover IPv4 only; the Dispatch networks do not enable IPv6, and IPv6 mu
 
 ## Discord permissions
 
-Do not grant `Administrator` to the bot. The install link requests only View Channels, Manage Channels, Manage Roles, Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History, Manage Threads, Create Private Threads and Send Messages in Threads (bitfield `361045814288`, [`apps/api/src/super.ts`](../apps/api/src/super.ts)). Do not grant Manage Server, Manage Webhooks, Mention Everyone, Kick/Ban Members or Manage Nicknames. View Audit Log is not requested either; where a server grants it, the bot uses it only to recognise blacklisted installers.
+Do not grant `Administrator` to the bot. The install link requests only View Channels, Manage Channels, Manage Roles, Change Nickname, Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History, Manage Threads, Create Private Threads and Send Messages in Threads (bitfield `361112923152`, [`apps/api/src/super.ts`](../apps/api/src/super.ts)). Do not grant Manage Server, Manage Webhooks, Mention Everyone, Kick/Ban Members or Manage Nicknames. View Audit Log is not requested either; where a server grants it, the bot uses it only to recognise blacklisted installers.
 
 Ticket channels deny `@everyone`, and deny thread creation to the opener and participants; staff roles may write in threads but not create them. A member with Manage Threads at server level can see private staff threads: do not grant it to users who open tickets.
 

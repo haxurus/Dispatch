@@ -133,7 +133,7 @@ Ticket channel permissions:
 - Staff roles: can write in threads (`SendMessagesInThreads`), not create them.
 - Bot: `CreatePrivateThreads`, `SendMessagesInThreads`, `ManageThreads` on its own overwrite.
 
-Discord only lets the bot grant in overwrites the permissions it has: this is why the install link now requests **Manage Threads**, **Create Private Threads** and **Send Messages in Threads** (bitfield `361045814288`, see [DEPLOYMENT.md](DEPLOYMENT.md#prerequisites)). New channels get the thread permissions only if the bot's role has them; for existing tickets the staff and bot overwrites are updated when the first thread is created. If the permissions are missing, the button replies "The bot cannot create private threads: update its role permissions" and the audit records `ticket.staff_thread.missing_permissions`. A member with Manage Threads at server level can still see private threads: do not grant it to users who open tickets.
+Discord only lets the bot grant in overwrites the permissions it has: this is why the install link now requests **Manage Threads**, **Create Private Threads** and **Send Messages in Threads** (bitfield `361112923152`, see [DEPLOYMENT.md](DEPLOYMENT.md#prerequisites)). New channels get the thread permissions only if the bot's role has them; for existing tickets the staff and bot overwrites are updated when the first thread is created. If the permissions are missing, the button replies "The bot cannot create private threads: update its role permissions" and the audit records `ticket.staff_thread.missing_permissions`. A member with Manage Threads at server level can still see private threads: do not grant it to users who open tickets.
 
 Confidentiality:
 

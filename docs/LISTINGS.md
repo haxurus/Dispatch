@@ -30,7 +30,7 @@ Copy for the public bot directories, ready to paste, and the website's search en
 | Support server | https://discord.gg/P7ycBcBqtn |
 | Languages | English and Italian (bot messages per server, website, dashboard) |
 | Price | Free |
-| Invite URL | `https://dispatch.haxurus.com/backend/bot/invite` (redirects to Discord's authorisation page, scopes `bot applications.commands`, permissions `361045814288`) |
+| Invite URL | `https://dispatch.haxurus.com/backend/bot/invite` (redirects to Discord's authorisation page, scopes `bot applications.commands`, permissions `361112923152`) |
 
 Permissions in the invite (no Administrator): View Channels, Manage Channels, Manage Roles, Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History, Manage Threads, Create Private Threads, Send Messages in Threads.
 

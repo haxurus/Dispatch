@@ -15,6 +15,7 @@ import {
 } from './discord.js';
 import { superAdminAudit, type SuperAuditSubject } from './super-audit.js';
 import { unprotectJson } from './security.js';
+import { planOverview } from './plan-routes.js';
 
 /*
  * Super console: instance-owner endpoints plus the public bot invite.
@@ -37,16 +38,18 @@ const OPEN_TICKET_STATUSES: string[] = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOL
 
 /*
  * Permissions requested when the hosted bot is installed. Must stay in sync
- * with docs/DEPLOYMENT.md: View Channels, Manage Channels, Manage Roles,
- * Send Messages, Manage Messages, Embed Links, Attach Files, Read Message
- * History, Manage Threads, Create Private Threads, Send Messages in Threads
- * (private staff threads: the bot can only grant in channel overwrites what
- * it has itself). Bitfield 361045814288.
+ * with docs/DEPLOYMENT.md and the Developer Portal install link: View
+ * Channels, Manage Channels, Manage Roles, Change Nickname (Brand plan bot
+ * nickname), Send Messages, Manage Messages, Embed Links, Attach Files, Read
+ * Message History, Manage Threads, Create Private Threads, Send Messages in
+ * Threads (private staff threads: the bot can only grant in channel
+ * overwrites what it has itself). Bitfield 361112923152.
  */
 const INSTALL_PERMISSIONS = [
   1n << 10n, // View Channels
   1n << 4n, // Manage Channels
   1n << 28n, // Manage Roles
+  1n << 26n, // Change Nickname
   1n << 11n, // Send Messages
   1n << 13n, // Manage Messages
   1n << 14n, // Embed Links
@@ -98,7 +101,7 @@ function consumeMutationBudget(sessionId: string) {
   return true;
 }
 
-async function requireSuperMutation(request: FastifyRequest, reply: FastifyReply) {
+export async function requireSuperMutation(request: FastifyRequest, reply: FastifyReply) {
   const session = await requireSuperAdmin(request, reply);
   if (!session) return null;
   if (!consumeMutationBudget(session.id)) {
@@ -177,6 +180,11 @@ export function registerSuperRoutes(app: FastifyInstance) {
       prisma.statusChannel.findUnique({ where: { id: 1 }, select: { guildId: true, channelId: true, updatedAt: true } })
         .catch(() => null)
     ]);
+    // Plans, coupons and contacts (tables added with the plans migration).
+    const plans = await planOverview(guildIds).catch((error: unknown) => {
+      request.log.warn({ err: error }, 'Plan overview unavailable');
+      return null;
+    });
 
     const openMap = new Map(openByGuild.map((row) => [row.guildId, row._count._all]));
     const totalMap = new Map(totalByGuild.map((row) => [row.guildId, row._count._all]));
@@ -202,6 +210,7 @@ export function registerSuperRoutes(app: FastifyInstance) {
       })),
       blocks,
       statusChannel,
+      plans,
       audit: auditRows.map((row) => {
         let details: unknown = null;
         try {

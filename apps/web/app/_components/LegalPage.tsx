@@ -7,13 +7,14 @@ type Doc = { id: string; kicker: string; title: string; intro: string; sections:
 
 const UPDATED = { it: '13 ottobre 2026', en: '13 October 2026' };
 
-const copy: Record<Locale, { kicker: string; title: string; intro: string; updated: string; toc: string; home: string; docs: Doc[] }> = {
+const copy: Record<Locale, { kicker: string; title: string; intro: string; updated: string; toc: string; home: string; pricing: string; docs: Doc[] }> = {
   en: {
     kicker: 'Legal',
     title: 'Privacy policy and terms of service',
     intro: 'This page explains what data Dispatch processes, why, for how long and what rights you have, and the terms for using the hosted bot and dashboard at dispatch.haxurus.com.',
     updated: 'Last updated',
     toc: 'On this page',
+    pricing: 'Pricing',
     home: 'Home',
     docs: [
       {
@@ -50,7 +51,8 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
           ] },
           { title: 'How long we keep it', body: [
             [
-              'Tickets, transcripts, notes and form answers: for the retention periods chosen by the server’s administrators in the dashboard; without a retention period they are kept while the bot is in the server.',
+              'Tickets, transcripts and staff notes: for the retention periods chosen by the server’s administrators in the dashboard, up to the maximum of the server’s plan; without a retention period they are kept for that maximum, or while the bot is in the server on plans without one.',
+              'Form answers: until the server’s administrators delete them from the dashboard, or while the bot is in the server.',
               'When the bot is removed from a server, all of that server’s data is deleted 30 days later, unless the bot is added again in the meantime.',
               'Dashboard sessions: 8 hours.',
               'Database backups: up to 14 days.'
@@ -81,7 +83,7 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
         intro: 'By adding Dispatch to a Discord server or using its dashboard you agree to these terms.',
         sections: [
           { title: 'The service', body: [
-            `Dispatch is a Discord bot and web dashboard for tickets, forms and support teams. The hosted service is provided free of charge by Haxurus. The source code is published under the AGPL-3.0 licence at ${REPO_URL}; these terms govern the hosted service, not your use of the code.`
+            `Dispatch is a Discord bot and web dashboard for tickets, forms and support teams. The hosted service is provided by Haxurus, with a Free plan available to every server and optional paid plans. The source code is published under the AGPL-3.0 licence at ${REPO_URL}; these terms govern the hosted service, not your use of the code.`
           ] },
           { title: 'Your responsibilities', body: [
             [
@@ -92,7 +94,11 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
             ]
           ] },
           { title: 'Limits', body: [
-            'To keep the shared service fair, each server has limits on categories, panels, forms, response templates and blacklist entries. They are shown in the dashboard when reached.'
+            'To keep the shared service fair, each server has limits on categories, panels, forms, response templates, dashboard roles, blacklist entries and on how long closed tickets and transcripts can be kept. Most limits depend on the server’s plan and are listed on the pricing page; they are shown in the dashboard when reached.'
+          ] },
+          { title: 'Plans and payments', body: [
+            'The Free plan is available to everyone. Paid plans (Plus, Pro, Brand) are activated by the operator after the server owner requests them. Online payments are not available yet: the price and the payment are agreed directly with you before activation, and any refund is agreed case by case, without prejudice to your statutory rights.',
+            'A paid plan applies to one server for the agreed period. When it expires, the server returns to the Free plan: features outside it stop working and its limits apply again, including the maximum retention, so older closed tickets and transcripts are deleted by the regular retention. Your configuration is not deleted, except dashboard roles above the Free limit and the custom bot nickname and banner, which are reset.'
           ] },
           { title: 'Availability', body: [
             'We work to keep Dispatch available and reliable, but the service is provided “as is” and “as available”, without guaranteed uptime. Discord outages, missing bot permissions or maintenance can delay or prevent tickets, transcripts and logs.'
@@ -117,6 +123,7 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
     intro: 'Questa pagina spiega quali dati tratta Dispatch, perché, per quanto tempo e quali diritti hai, e le condizioni per usare il bot e la dashboard ospitati su dispatch.haxurus.com.',
     updated: 'Ultimo aggiornamento',
     toc: 'In questa pagina',
+    pricing: 'Prezzi',
     home: 'Home',
     docs: [
       {
@@ -153,7 +160,8 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
           ] },
           { title: 'Per quanto tempo li conserviamo', body: [
             [
-              'Ticket, transcript, note e risposte ai form: per i periodi di conservazione scelti dagli amministratori nella dashboard; senza un periodo impostato restano finché il bot è nel server.',
+              'Ticket, transcript e note dello staff: per i periodi di conservazione scelti dagli amministratori nella dashboard, entro il massimo previsto dal piano del server; senza un periodo impostato restano per quel massimo, o finché il bot è nel server con i piani che non ne hanno uno.',
+              'Risposte ai form: finché gli amministratori del server non le eliminano dalla dashboard, o finché il bot è nel server.',
               'Quando il bot viene rimosso da un server, tutti i dati di quel server vengono cancellati dopo 30 giorni, a meno che il bot non venga aggiunto di nuovo nel frattempo.',
               'Sessioni della dashboard: 8 ore.',
               'Backup del database: fino a 14 giorni.'
@@ -184,7 +192,7 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
         intro: 'Aggiungendo Dispatch a un server Discord o usando la sua dashboard accetti questi termini.',
         sections: [
           { title: 'Il servizio', body: [
-            `Dispatch è un bot Discord con dashboard web per ticket, form e team di supporto. Il servizio ospitato è fornito gratuitamente da Haxurus. Il codice sorgente è pubblicato con licenza AGPL-3.0 su ${REPO_URL}; questi termini regolano il servizio ospitato, non l’uso del codice.`
+            `Dispatch è un bot Discord con dashboard web per ticket, form e team di supporto. Il servizio ospitato è fornito da Haxurus, con un piano Free disponibile per ogni server e piani a pagamento facoltativi. Il codice sorgente è pubblicato con licenza AGPL-3.0 su ${REPO_URL}; questi termini regolano il servizio ospitato, non l’uso del codice.`
           ] },
           { title: 'Le tue responsabilità', body: [
             [
@@ -195,7 +203,11 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
             ]
           ] },
           { title: 'Limiti', body: [
-            'Per mantenere equo il servizio condiviso, ogni server ha dei limiti su categorie, pannelli, form, risposte rapide e voci della blacklist. Quando vengono raggiunti la dashboard lo segnala.'
+            'Per mantenere equo il servizio condiviso, ogni server ha dei limiti su categorie, pannelli, form, risposte rapide, ruoli della dashboard, voci della blacklist e sulla durata di conservazione di ticket chiusi e transcript. La maggior parte dei limiti dipende dal piano del server ed è indicata nella pagina dei prezzi; quando vengono raggiunti la dashboard lo segnala.'
+          ] },
+          { title: 'Piani e pagamenti', body: [
+            'Il piano Free è disponibile per tutti. I piani a pagamento (Plus, Pro, Brand) vengono attivati dal gestore su richiesta del proprietario del server. I pagamenti online non sono ancora disponibili: prezzo e pagamento vengono concordati direttamente con te prima dell’attivazione, e gli eventuali rimborsi caso per caso, fatti salvi i diritti previsti dalla legge.',
+            'Un piano a pagamento vale per un server per il periodo concordato. Alla scadenza il server torna al piano Free: le funzioni non incluse smettono di funzionare e si applicano di nuovo i suoi limiti, compresa la conservazione massima, quindi ticket chiusi e transcript più vecchi vengono cancellati dalla normale pulizia. La configurazione non viene cancellata, tranne i ruoli della dashboard oltre il limite del Free e il nickname e il banner personalizzati del bot, che vengono reimpostati.'
           ] },
           { title: 'Disponibilità', body: [
             'Lavoriamo per mantenere Dispatch disponibile e affidabile, ma il servizio è fornito “così com’è” e “come disponibile”, senza garanzie di continuità. Disservizi di Discord, permessi mancanti del bot o manutenzioni possono ritardare o impedire ticket, transcript e log.'
@@ -232,7 +244,10 @@ export default function LegalPage({ locale }: { locale: Locale }) {
         locale={locale}
         itHref="/it/legal"
         enHref="/en/legal"
-        links={[{ href: `/${locale}`, label: c.home }]}
+        links={[
+          { href: `/${locale}`, label: c.home },
+          { href: `/${locale}/pricing`, label: c.pricing }
+        ]}
       />
       <section className="page legal-page">
         <div className="site-container legal-layout">

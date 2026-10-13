@@ -56,6 +56,18 @@ model GuildSettings {
   // retention (see apps/api/src/guild-purge.ts).
   leftAt        DateTime?
 
+  // Plan (packages/shared/src/plans.ts), set from the super console.
+  // planNote and planCouponCode are visible to the instance owner only.
+  planTier       String    @default("FREE")
+  planBilling    String?
+  planExpiresAt  DateTime?
+  planCouponCode String?
+  planNote       String?
+  planUpdatedAt  DateTime?
+  // Brand plan: bot nickname and banner set on this server.
+  brandNickname  String?
+  brandBannerSet Boolean   @default(false)
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -76,6 +88,7 @@ model GuildSettings {
   formPermissions FormPermissionBinding[]
 
   @@index([leftAt])
+  @@index([planTier, planExpiresAt])
 }
 
 model TicketCategory {
@@ -566,4 +579,32 @@ model StatusChannel {
   channelId       String
   updatedByUserId String
   updatedAt       DateTime @updatedAt
+}
+
+model Coupon {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  description     String?
+  percentOff      Int?
+  amountOffCents  Int?
+  tiers           String[]  @default([])
+  billing         String    @default("ANY")
+  maxRedemptions  Int?
+  redemptions     Int       @default(0)
+  validFrom       DateTime?
+  validUntil      DateTime?
+  active          Boolean   @default(true)
+  public          Boolean   @default(false)
+  createdByUserId String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+// Single row (id = 1): contacts shown on the pricing page.
+model InstanceConfig {
+  id             Int      @id @default(1)
+  contactEmail   String?
+  contactDiscord String?
+  contactUrl     String?
+  updatedAt      DateTime @updatedAt
 }

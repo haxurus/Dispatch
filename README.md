@@ -24,6 +24,7 @@ Dispatch opens private ticket channels from menus, panels and forms, lets staff 
 - [Local development](#local-development)
 - [Self-hosting and deployment](#self-hosting-and-deployment)
 - [Discord application setup](#discord-application-setup)
+- [Plans](#plans)
 - [Super console](#super-console)
 - [Discord limitations](#discord-limitations)
 - [Support and contributing](#support-and-contributing)
@@ -166,7 +167,7 @@ Gateway intents requested by the bot: **Guilds**, **Guild Messages** and the two
 
 The Presence Intent is not used.
 
-Bot permissions (no `Administrator`), as requested by the install link (`apps/api/src/super.ts`, bitfield `361045814288`): View Channels, Manage Channels, Manage Roles, Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History, Manage Threads, Create Private Threads, Send Messages in Threads. Manage Roles is needed to set permission overwrites on ticket channels; the thread permissions are needed for private staff threads, because the bot can only grant in channel overwrites what it has itself.
+Bot permissions (no `Administrator`), as requested by the install link (`apps/api/src/super.ts`, bitfield `361112923152`): View Channels, Manage Channels, Manage Roles, Change Nickname, Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History, Manage Threads, Create Private Threads, Send Messages in Threads. Manage Roles is needed to set permission overwrites on ticket channels; the thread permissions are needed for private staff threads, because the bot can only grant in channel overwrites what it has itself.
 
 OAuth2 redirect URL (dashboard sign-in, scopes `identify` and `guilds`):
 
@@ -178,6 +179,29 @@ With the usual layout that is `https://<your-hostname>/backend/auth/discord/call
 
 Anyone can add the hosted bot: **Public Bot** must be enabled in the Developer Portal. The bot still leaves servers, and servers added by users, that are on the super console blacklist, and reports it in the status channel.
 
+## Plans
+
+The hosted instance has a Free plan and three paid plans, defined once in [`packages/shared/src/plans.ts`](packages/shared/src/plans.ts) and shown on the [pricing page](https://dispatch.haxurus.com/en/pricing):
+
+| | Free | Plus | Pro | Brand |
+|---|---|---|---|---|
+| Price | free | €1.99/month · €19.99/year | €4.99/month · €49.99/year | €8.99/month · €89.99/year |
+| Ticket categories | 3 | 10 | 50 | 50 |
+| Ticket panels | 2 | 5 | 25 | 25 |
+| Forms / form panels | 2 / 2 | 10 / 5 | 50 / 25 | 50 / 25 |
+| Canned replies | 10 | 50 | 100 | 100 |
+| Dashboard role bindings | 1 | 3 | 10 | 10 |
+| Longest retention | 30 days | 90 days | 365 days | unlimited |
+| Tickets, forms, transcripts, ticket log, ratings | ✓ | ✓ | ✓ | ✓ |
+| SLAs, escalation, inactivity warning and auto-close | | ✓ | ✓ | ✓ |
+| Private staff threads | | ✓ | ✓ | ✓ |
+| Moderator leaderboard | | | ✓ | ✓ |
+| Closed-ticket category | | | ✓ | ✓ |
+| Bot nickname and banner per server, custom panel footer | | | | ✓ |
+| Priority support | | ✓ | ✓ | ✓ |
+
+Paying for several servers at once: 15% off from 2, 20% from 3, 25% from 5. Plans are activated by the operator from the super console (no online payments): the server owner gets in touch, pays as agreed and the plan is set with its billing period and expiry. When a plan expires or is lowered, the server returns to the lower plan: features above it stop working in the bot (their settings are kept), retention is capped, extra dashboard role bindings are removed and the bot branding is reset. Servers that used Dispatch before plans existed received Brand as a gift.
+
 ## Super console
 
 The super console (`/super`, API `/api/super/*`) is available only to the Discord user set in `SUPER_ADMIN_USER_ID`; every route checks it on the server. It offers:
@@ -185,6 +209,7 @@ The super console (`/super`, API `/api/super/*`) is available only to the Discor
 - metrics and the list of connected servers, live from the bot, with their ticket counts; leave a server, or block it and leave;
 - the **installation blacklist**: servers and Discord users with an optional reason. Blocked servers are left even if the bot is added again. A blocked user is recognised only where the bot can read the server's audit log, which the default invite does not grant;
 - the **status channel**: one server and channel that receives bot startup, servers added or removed and rejected installations, with a test message. These notices never contain ticket content;
+- **plans**: plan, billing period, expiry, coupon and internal note per server, coupons (percentage or fixed amount, tiers, billing, validity, redemptions, public promotions) and the contacts shown on the pricing page;
 - an audit log of every super console action (details encrypted, IP addresses stored as keyed hashes). Changes are limited to 30 per minute per session.
 
 When the bot is removed from a server, the API deletes all of that server's data 30 days later, unless the bot is added again in the meantime.

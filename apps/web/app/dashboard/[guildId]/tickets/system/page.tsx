@@ -3,8 +3,18 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ResourcePicker, { CHANNEL_TYPES } from '../../../../_components/ResourcePicker';
-import { useCopy } from '../../../../_components/locale-context';
-import { format, type Locale } from '../../../../i18n';
+import { useCopy, useLocale } from '../../../../_components/locale-context';
+import {
+  PLAN_NAMES,
+  PlanBadge,
+  apiErrorText,
+  pricingHref,
+  usePlan,
+  type GuildPlan,
+  type PaidTier,
+  type PlanBranding
+} from '../../../../_components/plan-client';
+import { format, inviteHref, type Locale } from '../../../../i18n';
 
 type Channel = {
   id: string;
@@ -100,7 +110,9 @@ const it = {
   retentionTitle: 'Retention automatica',
   transcriptRetention: 'Conservazione transcript, giorni',
   closedRetention: 'Conservazione ticket chiusi, giorni',
-  retentionPlaceholder: 'Vuoto = disattivata',
+  retentionPlaceholder: 'Vuoto = massimo consentito dal piano',
+  retentionPlanCap: 'Con il piano {plan} transcript e ticket chiusi vengono conservati al massimo {days} giorni: un campo vuoto vale {days} giorni e i valori più alti vengono ridotti automaticamente al salvataggio.',
+  retentionPlanUnlimited: 'Il piano {plan} non ha limiti di retention: un campo vuoto conserva i dati senza scadenza.',
   retentionDeleteChannel: 'Elimina anche il canale Discord quando scade la retention del ticket',
   retentionHint: 'La retention transcript riguarda soltanto le copie cifrate conservate lato Dispatch, non i file già inviati in DM o nei canali Discord. Ogni copia nel database viene comunque eliminata insieme al ticket. Il worker viene eseguito all’avvio del bot e poi ogni 6 ore.',
   logTitle: 'Log ticket',
@@ -131,7 +143,36 @@ const it = {
   menuCategoriesHint: "Massimo 25. L'ordine di selezione è l'ordine del menu.",
   publishing: 'Pubblicazione...',
   updateMenu: 'Aggiorna menu su Discord',
-  publishMenu: 'Pubblica menu su Discord'
+  publishMenu: 'Pubblica menu su Discord',
+  branding: {
+    eyebrow: 'Brand',
+    title: 'Nome e banner del bot',
+    locked: 'Con il piano Brand puoi dare al bot un nome e un banner personalizzati, visibili solo in questo server.',
+    seePlans: 'Vedi i piani',
+    intro: 'Visibili solo in questo server. Il bot deve avere il permesso “Cambia nickname”. Il banner viene ritagliato al formato di Discord (680×240).',
+    nickname: 'Nome nel server',
+    nicknamePlaceholder: 'Dispatch',
+    saveNickname: 'Salva nome',
+    resetNickname: 'Ripristina',
+    banner: 'Banner',
+    bannerPreview: 'Anteprima del banner',
+    uploadBanner: 'Carica banner',
+    removeBanner: 'Rimuovi banner',
+    bannerActive: 'Un banner personalizzato è attivo.',
+    bannerNone: 'Nessun banner personalizzato: il bot usa il proprio profilo.',
+    saving: 'Salvataggio...',
+    saved: 'Profilo del bot aggiornato.',
+    invalidImage: 'Immagine non valida o troppo complessa: prova con un file PNG, JPEG, WebP o GIF più semplice.',
+    reinvite: 'Invita di nuovo il bot',
+    errors: {
+      PLAN_REQUIRED: 'Nome e banner personalizzati richiedono il piano {plan}.',
+      INVALID_BODY: 'Valori non validi: il nome deve avere da 1 a 32 caratteri e il banner deve essere un’immagine PNG, JPEG, WebP o GIF.',
+      BRANDING_MISSING_PERMISSION: 'Il bot non ha il permesso “Cambia nickname” in questo server: invitalo di nuovo per concedere i permessi aggiornati.',
+      BRANDING_FAILED: 'Discord ha rifiutato la modifica del profilo del bot. Riprova più tardi.',
+      TOO_LARGE: 'Il banner è troppo grande anche dopo la compressione: prova con un’immagine più semplice.'
+    } as Record<string, string>,
+    failed: 'Aggiornamento del profilo fallito: {code}'
+  }
 };
 
 const en: typeof it = {
@@ -188,7 +229,9 @@ const en: typeof it = {
   retentionTitle: 'Automatic retention',
   transcriptRetention: 'Transcript retention, days',
   closedRetention: 'Closed ticket retention, days',
-  retentionPlaceholder: 'Empty = off',
+  retentionPlaceholder: 'Empty = as long as the plan allows',
+  retentionPlanCap: 'On the {plan} plan transcripts and closed tickets are kept for at most {days} days: an empty field means {days} days and higher values are reduced automatically on save.',
+  retentionPlanUnlimited: 'The {plan} plan has no retention limit: an empty field keeps data with no expiry.',
   retentionDeleteChannel: 'Also delete the Discord channel when the ticket retention expires',
   retentionHint: 'Transcript retention only covers the encrypted copies kept by Dispatch, not files already sent in DMs or Discord channels. Every copy in the database is deleted together with the ticket anyway. The worker runs when the bot starts and then every 6 hours.',
   logTitle: 'Ticket log',
@@ -219,7 +262,36 @@ const en: typeof it = {
   menuCategoriesHint: 'Up to 25. The selection order is the menu order.',
   publishing: 'Publishing...',
   updateMenu: 'Update menu on Discord',
-  publishMenu: 'Publish menu on Discord'
+  publishMenu: 'Publish menu on Discord',
+  branding: {
+    eyebrow: 'Brand',
+    title: 'Bot name and banner',
+    locked: 'With the Brand plan you can give the bot a custom name and banner, visible only in this server.',
+    seePlans: 'See plans',
+    intro: 'Visible only in this server. The bot needs the “Change Nickname” permission. The banner is cropped to Discord’s format (680×240).',
+    nickname: 'Name in this server',
+    nicknamePlaceholder: 'Dispatch',
+    saveNickname: 'Save name',
+    resetNickname: 'Reset',
+    banner: 'Banner',
+    bannerPreview: 'Banner preview',
+    uploadBanner: 'Upload banner',
+    removeBanner: 'Remove banner',
+    bannerActive: 'A custom banner is active.',
+    bannerNone: 'No custom banner: the bot uses its own profile.',
+    saving: 'Saving...',
+    saved: 'Bot profile updated.',
+    invalidImage: 'Invalid or overly complex image: try a simpler PNG, JPEG, WebP or GIF file.',
+    reinvite: 'Invite the bot again',
+    errors: {
+      PLAN_REQUIRED: 'A custom name and banner require the {plan} plan.',
+      INVALID_BODY: 'Invalid values: the name must be 1 to 32 characters and the banner must be a PNG, JPEG, WebP or GIF image.',
+      BRANDING_MISSING_PERMISSION: 'The bot does not have the “Change Nickname” permission in this server: invite it again to grant the updated permissions.',
+      BRANDING_FAILED: 'Discord rejected the bot profile change. Try again later.',
+      TOO_LARGE: 'The banner is too large even after compression: try a simpler image.'
+    },
+    failed: 'Profile update failed: {code}'
+  }
 };
 
 const copy: Record<Locale, typeof it> = { it, en };
@@ -228,10 +300,194 @@ function nullableNumber(value: string) {
   return value === '' ? null : Number(value);
 }
 
+const NEXT_TIER: Record<GuildPlan['effectiveTier'], PaidTier | null> = { FREE: 'TIER1', TIER1: 'TIER2', TIER2: 'TIER3', TIER3: null };
+
+// Discord shows member banners at 680×240; the API accepts up to 90,000
+// characters, so the data URI stays under 85,000 with room for the JSON.
+const BANNER_WIDTH = 680;
+const BANNER_HEIGHT = 240;
+const BANNER_MAX_CHARS = 85_000;
+const BANNER_QUALITIES = [0.9, 0.82, 0.74, 0.66, 0.58, 0.5, 0.42, 0.35];
+
+async function encodeBanner(file: File) {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = BANNER_WIDTH;
+    canvas.height = BANNER_HEIGHT;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('CANVAS_UNAVAILABLE');
+    // Cover: fill the frame and crop the overflow from the centre.
+    const scale = Math.max(BANNER_WIDTH / bitmap.width, BANNER_HEIGHT / bitmap.height);
+    const width = bitmap.width * scale;
+    const height = bitmap.height * scale;
+    context.drawImage(bitmap, (BANNER_WIDTH - width) / 2, (BANNER_HEIGHT - height) / 2, width, height);
+    // WebP first (smaller); browsers without a WebP encoder return PNG, so
+    // the prefix is checked before falling back to JPEG.
+    for (const type of ['image/webp', 'image/jpeg']) {
+      for (const quality of BANNER_QUALITIES) {
+        const data = canvas.toDataURL(type, quality);
+        if (!data.startsWith(`data:${type};`)) break;
+        if (data.length <= BANNER_MAX_CHARS) return data;
+      }
+    }
+    throw new Error('BANNER_TOO_LARGE');
+  } finally {
+    bitmap.close();
+  }
+}
+
+type BrandingCopy = typeof it.branding;
+
+function BrandingCard({ guildId, plan, text, locale, onSaved }: {
+  guildId: string;
+  plan: GuildPlan;
+  text: BrandingCopy;
+  locale: Locale;
+  onSaved: (branding: PlanBranding) => void;
+}) {
+  const allowed = plan.plan.features.customBranding;
+  const [nickname, setNickname] = useState(plan.branding.nickname ?? '');
+  const [banner, setBanner] = useState<string | null>(null);
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string; reinvite?: boolean } | null>(null);
+
+  const send = async (body: { nickname?: string | null; banner?: string | null }, action: string) => {
+    setBusy(action);
+    setMessage(null);
+    try {
+      const response = await fetch(`/backend/api/guilds/${guildId}/branding`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        const code = response.status === 413 ? 'TOO_LARGE' : error.error;
+        setMessage({
+          kind: 'error',
+          text: apiErrorText(text.errors, { ...error, error: code }, format(text.failed, { code: code ?? response.status })),
+          reinvite: code === 'BRANDING_MISSING_PERMISSION'
+        });
+        return;
+      }
+      const saved = await response.json() as { nickname: string | null; bannerSet: boolean };
+      onSaved({ nickname: saved.nickname, bannerSet: saved.bannerSet });
+      setNickname(saved.nickname ?? '');
+      setBanner(null);
+      setMessage({ kind: 'ok', text: text.saved });
+    } catch {
+      setMessage({ kind: 'error', text: format(text.failed, { code: 'NETWORK' }) });
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const pick = async (file: File | undefined) => {
+    if (!file) return;
+    setMessage(null);
+    try {
+      setBanner(await encodeBanner(file));
+    } catch (error) {
+      setBanner(null);
+      setMessage({ kind: 'error', text: error instanceof Error && error.message === 'BANNER_TOO_LARGE' ? text.errors.TOO_LARGE : text.invalidImage });
+    }
+  };
+
+  const trimmed = nickname.trim();
+  const disabled = !allowed || Boolean(busy);
+
+  return (
+    <section className={`card form branding-card ${allowed ? '' : 'is-locked'}`.trim()}>
+      <div className="row">
+        <div>
+          <p className="eyebrow">{text.eyebrow}</p>
+          <h2 className="plan-heading">{text.title}{!allowed && <PlanBadge required="TIER3" />}</h2>
+          <p className="muted">{allowed ? text.intro : text.locked}</p>
+        </div>
+        {!allowed && <a className="button secondary" href={pricingHref(locale)}>{text.seePlans}</a>}
+      </div>
+
+      {message && (
+        <p className={message.kind === 'error' ? 'error' : 'success'} role={message.kind === 'error' ? 'alert' : 'status'}>
+          {message.text}
+          {message.reinvite && <> <a className="inline-link" href={inviteHref(locale)}>{text.reinvite}</a></>}
+        </p>
+      )}
+
+      <fieldset className="branding-grid" disabled={!allowed}>
+        <div className="form">
+          <label>
+            {text.nickname}
+            <input
+              value={nickname}
+              maxLength={32}
+              placeholder={text.nicknamePlaceholder}
+              onChange={(event) => setNickname(event.target.value)}
+            />
+          </label>
+          <div className="actions">
+            <button
+              type="button"
+              disabled={disabled || !trimmed || trimmed === (plan.branding.nickname ?? '')}
+              onClick={() => void send({ nickname: trimmed }, 'nickname')}
+            >
+              {busy === 'nickname' ? text.saving : text.saveNickname}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={disabled || !plan.branding.nickname}
+              onClick={() => void send({ nickname: null }, 'nickname-reset')}
+            >
+              {busy === 'nickname-reset' ? text.saving : text.resetNickname}
+            </button>
+          </div>
+        </div>
+
+        <div className="form">
+          <label>
+            {text.banner}
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              onChange={(event) => {
+                void pick(event.target.files?.[0]);
+                event.target.value = '';
+              }}
+            />
+          </label>
+          {banner && <img className="banner-preview" src={banner} alt={text.bannerPreview} />}
+          {!banner && <p className="muted">{plan.branding.bannerSet ? text.bannerActive : text.bannerNone}</p>}
+          <div className="actions">
+            <button
+              type="button"
+              disabled={disabled || !banner}
+              onClick={() => { if (banner) void send({ banner }, 'banner'); }}
+            >
+              {busy === 'banner' ? text.saving : text.uploadBanner}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={disabled || !plan.branding.bannerSet}
+              onClick={() => void send({ banner: null }, 'banner-remove')}
+            >
+              {busy === 'banner-remove' ? text.saving : text.removeBanner}
+            </button>
+          </div>
+        </div>
+      </fieldset>
+    </section>
+  );
+}
+
 export default function TicketSystemPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
   const c = useCopy(copy);
+  const locale = useLocale();
+  const { plan, setPlan } = usePlan(guildId);
 
   const [channels, setChannels] = useState<Channel[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -386,6 +642,8 @@ export default function TicketSystemPage() {
   }
 
   const enabledCategories = categories.filter((category) => category.enabled);
+  const retentionCap = plan ? plan.plan.limits.retentionDays : undefined;
+  const nextTier = plan ? NEXT_TIER[plan.effectiveTier] : null;
 
   return (
     <main className="shell">
@@ -544,6 +802,17 @@ export default function TicketSystemPage() {
               />
               {c.retentionDeleteChannel}
             </label>
+
+            {plan && (
+              <p className="plan-hint">
+                {retentionCap !== null && nextTier && <PlanBadge required={nextTier} />}
+                <span>
+                  {retentionCap === null || retentionCap === undefined
+                    ? format(c.retentionPlanUnlimited, { plan: PLAN_NAMES[plan.effectiveTier] })
+                    : format(c.retentionPlanCap, { plan: PLAN_NAMES[plan.effectiveTier], days: retentionCap })}
+                </span>
+              </p>
+            )}
 
             <p className="muted">
               {c.retentionHint}
@@ -737,6 +1006,16 @@ export default function TicketSystemPage() {
           </div>
         </section>
       </form>
+
+      {plan && (
+        <BrandingCard
+          guildId={guildId}
+          plan={plan}
+          text={c.branding}
+          locale={locale}
+          onSaved={(branding) => setPlan({ ...plan, branding })}
+        />
+      )}
     </main>
   );
 }

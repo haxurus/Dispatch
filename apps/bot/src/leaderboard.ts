@@ -19,6 +19,7 @@ import {
   type LeaderboardPeriodKind
 } from '@dispatch/shared';
 import { guildLocale, messages, type BotLocale } from './i18n.js';
+import { guildAllows } from './plan.js';
 
 /*
  * Moderator leaderboard: scheduled weekly/monthly posts and the dashboard
@@ -223,6 +224,8 @@ export async function runLeaderboardCycle(client: Client, now = new Date()) {
   let failed = 0;
   for (const settings of rows) {
     if (!client.guilds.cache.has(settings.guildId)) continue;
+    // Pro plan and above; the schedule stays configured for an upgrade.
+    if (!(await guildAllows(settings.guildId, 'leaderboard'))) continue;
     try {
       posted += await runGuildLeaderboards(client, settings, now);
     } catch (error) {
@@ -242,6 +245,7 @@ export async function sendLeaderboardNow(
   now = new Date()
 ) {
   if (!Number.isInteger(offset) || offset < 0 || offset > LEADERBOARD_LIMITS.maxOffset) throw new Error('INVALID_OFFSET');
+  if (!(await guildAllows(guildId, 'leaderboard'))) throw new Error('PLAN_REQUIRED');
   const settings = await prisma.guildSettings.findUnique({ where: { guildId }, select: settingsSelect });
   if (!settings) throw new Error('GUILD_NOT_FOUND');
   const period = leaderboardPeriod(kind, now, settings.timezone, offset);

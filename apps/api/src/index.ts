@@ -6,7 +6,7 @@ import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
 import { loadLeaderboardActivity, prisma, type Prisma } from '@dispatch/db';
 import {
-  GUILD_QUOTAS,
+  FIXED_LIMITS,
   LEADERBOARD_LIMITS,
   LEADERBOARD_PERIOD_KINDS,
   PANEL_BUTTON_STYLES,
@@ -20,10 +20,12 @@ import {
   leaderboardPeriod,
   leaderboardTitle,
   rankLeaderboard,
-  type GuildQuota
+  type PlanLimits
 } from '@dispatch/shared';
 import { config } from './config.js';
 import { startGuildPurge } from './guild-purge.js';
+import { registerPlanRoutes } from './plan-routes.js';
+import { guildAllows, guildTier, retentionWithinPlan, startPlanSweep } from './plan-service.js';
 import {
   createSession,
   destroySession,
@@ -294,6 +296,7 @@ app.get('/api/me', async (request, reply) => {
 
 // Super console API and gated bot invite (apps/api/src/super.ts).
 registerSuperRoutes(app);
+registerPlanRoutes(app);
 
 app.get('/api/guilds', async (request, reply) => {
   const session = await requireSession(request, reply);
@@ -1005,26 +1008,30 @@ async function validateFormPanelResources(
 const jsonValue = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 
 /*
- * Per-server limits of the hosted instance (GUILD_QUOTAS). Checked before a
- * create; for upserts only when the row would be new, so editing an existing
- * entry keeps working at the limit.
+ * Per-server limits: the plan's (packages/shared/src/plans.ts) plus fixed
+ * instance caps. Checked before a create; for upserts only when the row would
+ * be new, so editing an existing entry keeps working at the limit.
  */
-const quotaCounters: Record<GuildQuota, (guildId: string, scopeId?: string) => Promise<number>> = {
+type PlanQuota = Exclude<keyof PlanLimits, 'retentionDays'>;
+type Quota = PlanQuota | 'blacklistEntries' | 'formRoleBindings';
+
+const quotaCounters: Record<Quota, (guildId: string, scopeId?: string) => Promise<number>> = {
   categories: (guildId) => prisma.ticketCategory.count({ where: { guildId } }),
   ticketPanels: (guildId) => prisma.ticketPanel.count({ where: { guildId } }),
   forms: (guildId) => prisma.formDefinition.count({ where: { guildId } }),
   formPanels: (guildId) => prisma.formPanel.count({ where: { guildId } }),
   responseTemplates: (guildId) => prisma.responseTemplate.count({ where: { guildId } }),
+  roleBindings: (guildId) => prisma.panelRoleBinding.count({ where: { guildId } }),
   blacklistEntries: (guildId) => prisma.guildBlacklist.count({ where: { guildId } }),
-  roleBindings: (guildId, formId) => formId
-    ? prisma.formPermissionBinding.count({ where: { guildId, formId } })
-    : prisma.panelRoleBinding.count({ where: { guildId } })
+  formRoleBindings: (guildId, formId) => prisma.formPermissionBinding.count({ where: { guildId, formId } })
 };
 
-async function rejectOverQuota(reply: FastifyReply, guildId: string, quota: GuildQuota, scopeId?: string) {
+async function rejectOverQuota(reply: FastifyReply, guildId: string, quota: Quota, scopeId?: string) {
+  const { tier, limits } = await guildTier(guildId);
+  const limit = quota === 'blacklistEntries' || quota === 'formRoleBindings' ? FIXED_LIMITS[quota] : limits[quota];
   const count = await quotaCounters[quota](guildId, scopeId);
-  if (count < GUILD_QUOTAS[quota]) return false;
-  reply.code(409).send({ error: 'QUOTA_EXCEEDED', quota, limit: GUILD_QUOTAS[quota] });
+  if (count < limit) return false;
+  reply.code(409).send({ error: 'QUOTA_EXCEEDED', quota, limit, tier });
   return true;
 }
 
@@ -1092,10 +1099,14 @@ app.put('/api/guilds/:guildId/ticket-system-settings', async (request, reply) =>
   });
   if (!previous) return reply.code(404).send({ error: 'GUILD_NOT_FOUND' });
 
+  // Retention above the plan is capped (Free: 30 days, "forever" only on Brand).
+  const { tier } = await guildTier(guildId);
+  const retention = retentionWithinPlan(tier, parsed.data);
   const settings = await prisma.guildSettings.update({
     where: { guildId },
     data: {
       ...parsed.data,
+      ...retention,
       ...(previous.mainMenuChannelId !== parsed.data.mainMenuChannelId
         ? { mainMenuMessageId: null }
         : {})
@@ -1568,7 +1579,7 @@ app.put('/api/guilds/:guildId/forms/:formId/permissions/:roleId', async (request
     where: { formId_discordRoleId: { formId, discordRoleId: roleId } },
     select: { id: true }
   });
-  if (!existingFormBinding && await rejectOverQuota(reply, guildId, 'roleBindings', formId)) return;
+  if (!existingFormBinding && await rejectOverQuota(reply, guildId, 'formRoleBindings', formId)) return;
   const binding = await prisma.formPermissionBinding.upsert({
     where: { formId_discordRoleId: { formId, discordRoleId: roleId } },
     create: { guildId, formId, discordRoleId: roleId, ...parsed.data },
@@ -2182,6 +2193,7 @@ app.post('/api/guilds/:guildId/leaderboard/send', async (request, reply) => {
     offset: z.number().int().min(0).max(LEADERBOARD_LIMITS.maxOffset).default(1)
   }).safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+  if (!(await guildAllows(guildId, 'leaderboard'))) return reply.code(403).send({ error: 'PLAN_REQUIRED', required: 'TIER2' });
 
   try {
     const result = await sendLeaderboard(guildId, session.userId, parsed.data.period, parsed.data.offset);
@@ -2773,3 +2785,4 @@ await app.listen({
 });
 
 startGuildPurge(app.log);
+startPlanSweep(app.log);
