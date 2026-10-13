@@ -919,3 +919,56 @@ input[aria-invalid="true"] { border-color: var(--danger-line-strong); }
 .log-event > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .log-event strong { font-weight: 600; }
 .log-event .muted { font-size: .8rem; line-height: 1.45; }
+
+/* Super console: plans, coupons and pricing contacts. */
+.metric-row.plan-metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.plan-hint { color: var(--muted); font-size: .76rem; font-weight: 400; line-height: 1.45; }
+.card-head .plan-hint { margin-top: 8px; }
+.plan-hint-warn { color: var(--warn); }
+.plan-price { color: var(--muted); font-size: .78rem; }
+.plan-price s { color: var(--faint); }
+.plan-price strong { color: var(--text); font: 500 .8rem var(--font-mono-stack); }
+
+.super-guild-block { background: var(--bg-raised); }
+.super-guild-plan { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 0 16px 14px; color: var(--muted); font-size: .78rem; }
+.super-guild-plan > .button { margin-left: auto; }
+.super-guild-plan-note { max-width: 320px; overflow: hidden; color: var(--text-2); font-style: italic; text-overflow: ellipsis; white-space: nowrap; }
+
+.plan-editor { display: flex; flex-direction: column; gap: 14px; margin: 0 16px 16px; padding: 14px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); }
+.plan-editor-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; align-items: start; }
+.plan-editor label { margin: 0; }
+.plan-editor-wide { grid-column: 1 / -1; }
+.plan-editor-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
+.plan-editor-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.plan-editor .button-row, .contact-form .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.coupon-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; align-items: end; margin-bottom: 16px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raised); }
+.coupon-form label { margin: 0; }
+.coupon-form-wide { grid-column: 1 / -1; }
+.coupon-tiers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 10px 14px; background: var(--surface); }
+.coupon-form-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; }
+.coupon-form-foot .button { margin-left: auto; }
+.coupon-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 14px; align-items: center; padding: 12px 16px; background: var(--bg-raised); }
+.coupon-row > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.coupon-row > div > strong { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.coupon-row > div > span { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
+.coupon-row .checkbox-row { margin: 0; font-size: .8rem; }
+
+.contact-form { display: flex; flex-direction: column; gap: 14px; }
+.contact-form label { margin: 0; }
+
+@media (max-width: 960px) {
+  .metric-row.plan-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-row.plan-metrics .metric:last-child { grid-column: 1 / -1; }
+}
+
+@media (max-width: 640px) {
+  .super-guild-plan > .button { margin-left: 0; width: 100%; }
+  .super-guild-plan-note { max-width: 100%; }
+  .plan-editor { margin: 0 12px 12px; padding: 12px; }
+  .plan-editor-foot .button-row { width: 100%; }
+  .plan-editor-foot .button-row .button { flex: 1 1 auto; }
+  .coupon-form-foot .button { margin-left: 0; width: 100%; }
+  .coupon-row { grid-template-columns: 1fr 1fr; }
+  .coupon-row > div, .coupon-row .button { grid-column: 1 / -1; }
+}
