@@ -12,7 +12,7 @@ import { requireGuild } from './auth.js';
 import { panelAudit } from './audit.js';
 import { setBotBranding } from './discord.js';
 import { PlanError, changeGuildPlan, guildPlanUsage, guildTier } from './plan-service.js';
-import { requireSuperAdmin } from './super.js';
+import { requireSuperMutation } from './super.js';
 import { superAdminAudit } from './super-audit.js';
 
 /*
@@ -80,7 +80,7 @@ export function registerPlanRoutes(app: FastifyInstance) {
 
   // ------------------------------------------------------ super: contacts
   app.put('/api/super/config', async (request, reply) => {
-    const session = await requireSuperAdmin(request, reply);
+    const session = await requireSuperMutation(request, reply);
     if (!session) return;
     const parsed = z.object({
       contactEmail: z.union([z.literal(''), z.string().trim().email().max(200)]).nullable().optional(),
@@ -117,7 +117,7 @@ export function registerPlanRoutes(app: FastifyInstance) {
     Boolean(value.percentOff) !== Boolean(value.amountOffCents);
 
   app.post('/api/super/coupons', async (request, reply) => {
-    const session = await requireSuperAdmin(request, reply);
+    const session = await requireSuperMutation(request, reply);
     if (!session) return;
     const parsed = couponBody.extend({ code: z.string().trim().regex(/^[A-Za-z0-9_-]{3,32}$/) }).safeParse(request.body);
     if (!parsed.success || !discountValid(parsed.data)) return reply.code(400).send({ error: 'INVALID_COUPON' });
@@ -130,7 +130,7 @@ export function registerPlanRoutes(app: FastifyInstance) {
   });
 
   app.put('/api/super/coupons/:id', async (request, reply) => {
-    const session = await requireSuperAdmin(request, reply);
+    const session = await requireSuperMutation(request, reply);
     if (!session) return;
     const { id } = request.params as { id: string };
     const parsed = couponBody.safeParse(request.body);
@@ -146,7 +146,7 @@ export function registerPlanRoutes(app: FastifyInstance) {
   });
 
   app.delete('/api/super/coupons/:id', async (request, reply) => {
-    const session = await requireSuperAdmin(request, reply);
+    const session = await requireSuperMutation(request, reply);
     if (!session) return;
     const { id } = request.params as { id: string };
     const coupon = await prisma.coupon.findUnique({ where: { id } });
@@ -159,7 +159,7 @@ export function registerPlanRoutes(app: FastifyInstance) {
 
   // --------------------------------------------------------- super: plans
   app.put('/api/super/guilds/:guildId/plan', async (request, reply) => {
-    const session = await requireSuperAdmin(request, reply);
+    const session = await requireSuperMutation(request, reply);
     if (!session) return;
     const { guildId } = request.params as { guildId: string };
     const parsed = z.object({

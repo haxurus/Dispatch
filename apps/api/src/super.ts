@@ -101,7 +101,7 @@ function consumeMutationBudget(sessionId: string) {
   return true;
 }
 
-async function requireSuperMutation(request: FastifyRequest, reply: FastifyReply) {
+export async function requireSuperMutation(request: FastifyRequest, reply: FastifyReply) {
   const session = await requireSuperAdmin(request, reply);
   if (!session) return null;
   if (!consumeMutationBudget(session.id)) {
