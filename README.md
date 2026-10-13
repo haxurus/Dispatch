@@ -186,12 +186,12 @@ The hosted instance has a Free plan and three paid plans, defined once in [`pack
 | | Free | Plus | Pro | Brand |
 |---|---|---|---|---|
 | Price | free | €1.99/month · €19.99/year | €4.99/month · €49.99/year | €8.99/month · €89.99/year |
-| Ticket categories | 3 | 10 | 50 | 50 |
-| Ticket panels | 2 | 5 | 25 | 25 |
-| Forms / form panels | 2 / 2 | 10 / 5 | 50 / 25 | 50 / 25 |
-| Canned replies | 10 | 50 | 100 | 100 |
+| Ticket categories | 3 | 10 | 30 | 50 |
+| Ticket panels | 2 | 5 | 15 | 25 |
+| Forms / form panels | 2 / 2 | 5 / 5 | 15 / 25 | 30 / 25 |
+| Canned replies | 5 | 15 | 25 | 50 |
 | Dashboard role bindings | 1 | 3 | 10 | 10 |
-| Longest retention | 30 days | 90 days | 365 days | unlimited |
+| Longest retention | 15 days | 30 days | 60 days | 90 days |
 | Tickets, forms, transcripts, ticket log, ratings | ✓ | ✓ | ✓ | ✓ |
 | SLAs, escalation, inactivity warning and auto-close | | ✓ | ✓ | ✓ |
 | Private staff threads | | ✓ | ✓ | ✓ |

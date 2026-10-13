@@ -1478,13 +1478,13 @@ test('an expired plan behaves as Free and retention is capped by the plan', () =
   assert.equal(effectiveTier({ planTier: 'TIER2', planExpiresAt: new Date('2026-10-14T00:00:00Z') }, now), 'TIER2');
   assert.equal(effectiveTier({ planTier: 'TIER2', planExpiresAt: new Date('2026-10-12T00:00:00Z') }, now), 'FREE');
   assert.equal(effectiveTier({ planTier: 'NOPE' }, now), 'FREE');
-  assert.equal(effectiveRetentionDays(null, 'FREE'), 30);
-  assert.equal(effectiveRetentionDays(400, 'TIER2'), 365);
+  assert.equal(effectiveRetentionDays(null, 'FREE'), 15);
+  assert.equal(effectiveRetentionDays(400, 'TIER2'), 60);
   assert.equal(effectiveRetentionDays(7, 'TIER1'), 7);
-  assert.equal(effectiveRetentionDays(null, 'TIER3'), null);
+  assert.equal(effectiveRetentionDays(null, 'TIER3'), 90);
   assert.deepEqual(
     guildRetention({ transcriptRetentionDays: null, closedTicketRetentionDays: 90, planTier: 'FREE', planExpiresAt: null }),
-    { transcripts: 30, closedTickets: 30 }
+    { transcripts: 15, closedTickets: 15 }
   );
 });
 
@@ -1500,12 +1500,12 @@ test('coupons are checked against tier, billing, validity and redemptions', () =
   assert.equal(couponProblem(base, 'FREE', null), 'COUPON_FREE_PLAN');
 });
 
-test('Free servers: closed tickets expire after 30 days even without a retention setting', async () => {
+test('Free servers: closed tickets expire after 15 days even without a retention setting', async () => {
   await prisma.guildSettings.update({ where: { guildId: G }, data: { planTier: 'FREE' } });
   invalidateGuildPlan(G);
   assert.equal(await guildPlanTier(G), 'FREE');
   const cat = await category();
-  const old = await ticket(cat, { closedAt: new Date(Date.now() - 31 * DAY) });
+  const old = await ticket(cat, { closedAt: new Date(Date.now() - 16 * DAY) });
   const recent = await ticket(cat, { closedAt: new Date(Date.now() - 5 * DAY) });
   await runTicketRetention(client());
   assert.equal(await prisma.ticket.findUnique({ where: { id: old.id } }), null);

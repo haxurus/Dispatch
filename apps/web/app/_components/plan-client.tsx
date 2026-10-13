@@ -81,7 +81,7 @@ export const FEATURE_TIER: Record<PlanFeature, PaidTier> = {
 };
 
 /** Retention cap of each plan, in days (null = unlimited). */
-export const RETENTION_CAP: Record<PlanTier, number | null> = { FREE: 30, TIER1: 90, TIER2: 365, TIER3: null };
+export const RETENTION_CAP: Record<PlanTier, number | null> = { FREE: 15, TIER1: 30, TIER2: 60, TIER3: 90 };
 
 const isTier = (value: unknown): value is PlanTier =>
   value === 'FREE' || value === 'TIER1' || value === 'TIER2' || value === 'TIER3';
