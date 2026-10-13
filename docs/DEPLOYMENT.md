@@ -337,6 +337,12 @@ sudo rm -f /srv/docker/dispatch/secrets/redis_password
 - `INVITE_ALLOWED_USER_IDS` is no longer used and can be removed from `.env`.
 - When the bot is removed from a server, the API deletes all of that server's data 30 days later, unless the bot is added again in the meantime.
 
+## Plans
+
+- Plans are set per server in **Super console → server list → Edit plan** (tier, billing period, expiry, coupon, note). Coupons and the contacts shown on the pricing page are managed in the super console too.
+- The plans migration adds the `Coupon` and `InstanceConfig` tables: re-run the installer (new grants in `harden-users.sh`) **before** deploying it. Until then the super console shows the plans section as unavailable.
+- The Brand plan sets the bot's nickname on a server, which needs **Change Nickname**: the install link (and the Developer Portal guild install permissions) is now `361112923152`. Servers that added the bot earlier must re-authorise it from `/backend/bot/invite` to use a custom nickname.
+
 ## 9. Rollback
 
 From GitHub: **Actions -> Rollback production -> Run workflow** (manual, only from `main`), or from the VPS:

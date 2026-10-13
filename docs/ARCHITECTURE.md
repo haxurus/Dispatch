@@ -98,6 +98,14 @@ The texts live in [`apps/bot/src/i18n.ts`](../apps/bot/src/i18n.ts): both dictio
 
 The dashboard and the super console have no `/en` and `/it` URLs (they are not indexed): `middleware.ts` picks the language from the `dispatch_locale` cookie (set when the visitor opens `/en` or `/it`, or uses the IT/EN toggle), otherwise from `Accept-Language`, English by default. Each page keeps its own `it`/`en` copy objects read through `useCopy` ([`apps/web/app/_components/locale-context.tsx`](../apps/web/app/_components/locale-context.tsx)).
 
+## Plans
+
+`packages/shared/src/plans.ts` is the single source of truth: limits (categories, panels, forms, form panels, canned replies, dashboard role bindings, longest retention) and features (automations, staff threads, leaderboard, closed-ticket category, custom branding) for Free, Plus, Pro and Brand.
+
+- **Storage**: `GuildSettings.planTier`, `planBilling` (`MONTHLY`, `YEARLY`, `GIFT`), `planExpiresAt`, `planCouponCode`, `planNote`. `effectiveTier()` treats an expired plan as Free.
+- **API** ([`apps/api/src/plan-service.ts`](../apps/api/src/plan-service.ts), [`plan-routes.ts`](../apps/api/src/plan-routes.ts)): quotas on create (`409 QUOTA_EXCEEDED`), retention capped on save, `403 PLAN_REQUIRED` for the leaderboard "send now" and branding, `applyPlanLimits()` on every downgrade or expiry (retention capped, extra role bindings removed, branding reset — nothing else is deleted), an expiry sweep every 15 minutes, the public catalogue at `/api/public/info`, coupons and contacts for the super console.
+- **Bot** ([`apps/bot/src/plan.ts`](../apps/bot/src/plan.ts), cached 30 seconds): automations and staff threads need Plus, the leaderboard and the closed-ticket category need Pro, a custom panel footer needs Brand; retention uses the setting capped by the plan (`effectiveRetentionDays`). Gated settings stay saved and start working after an upgrade.
+
 ## Data lifecycle
 
 | Data | Lifetime |

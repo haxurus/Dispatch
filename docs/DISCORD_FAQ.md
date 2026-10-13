@@ -35,8 +35,8 @@ Check the bot's role: it needs *View Channels, Manage Channels, Manage Roles, Se
 **Members get "Opening is temporarily limited" or "limit of open tickets".**
 That's the anti-spam working: cooldown after opening, maximum open tickets per member and attempt limits. Adjust them per category in **Ticket setup** and globally in **System and menu** → *Global anti-spam*. Blacklisted members (**Blacklist**) cannot open tickets at all.
 
-**The "Staff thread" button gives a permissions error.**
-Give the bot's role *Create Private Threads*, *Send Messages in Threads* and *Manage Threads*. Staff threads automatically add every member of the category's staff roles; the person who opened the ticket never sees them.
+**The "Staff thread" button gives an error.**
+Staff threads are part of the **Plus** plan and above. If you have it, give the bot's role *Create Private Threads*, *Send Messages in Threads* and *Manage Threads*. Staff threads automatically add every member of the category's staff roles; the person who opened the ticket never sees them.
 
 **Where do transcripts go?**
 Per category, in **Ticket setup**: automatic transcript on close, sent to an archive channel, to the member by DM, and/or kept encrypted in the dashboard. If the DM doesn't arrive, the member has DMs from server members turned off.
@@ -52,20 +52,20 @@ Per category, in **Ticket setup**: automatic transcript on close, sent to an arc
 The member must allow DMs from server members (Server settings → Privacy). Otherwise switch the form to ephemeral delivery in **Forms**.
 
 **How do ratings and the moderator leaderboard work?**
-When a ticket is closed the member can rate it 1–5 ★; the rating goes to the moderator who claimed it (or closed it). In **Analytics** → *Moderator leaderboard* choose a channel and a weekly and/or monthly schedule. A leaderboard is posted after its period ends; *Send now* posts one immediately.
+When a ticket is closed the member can rate it 1–5 ★; the rating goes to the moderator who claimed it (or closed it). The leaderboard is part of the **Pro** plan: in **Analytics** → *Moderator leaderboard* choose a channel and a weekly and/or monthly schedule. A leaderboard is posted after its period ends; *Send now* posts one immediately.
 
-**Is there a limit on categories, panels or forms?**
-Yes, per server: 50 categories, 25 ticket panels, 50 forms, 25 form panels, 100 canned replies, 2000 blacklist entries. The dashboard tells you when you reach one.
+**Is Dispatch free? What do the paid plans add?**
+Free covers tickets, panels, forms, transcripts, ticket log and ratings, with limits (3 categories, 2 panels, 2 forms, 30-day retention). **Plus** adds SLAs, escalation, auto-close and staff threads; **Pro** the moderator leaderboard and the closed-ticket category; **Brand** a custom bot nickname, banner and panel footer. Limits grow with each plan: https://dispatch.haxurus.com/en/pricing — the dashboard **Overview** shows your plan and usage.
 
-**Is Dispatch free?**
-Yes. It is also open source (AGPL-3.0): https://github.com/haxurus/Dispatch
+**How do I upgrade?**
+Contact us (details on the pricing page): plans are activated by hand for your server, monthly or yearly, with discounts for several servers. Dispatch is open source (AGPL-3.0): https://github.com/haxurus/Dispatch
 
 ---
 
 ## ❓ Dispatch FAQ — Privacy, bugs and ideas
 
 **What data does Dispatch keep, and for how long?**
-Ticket details, transcripts, form answers and notes (encrypted), for the retention you set in **System and menu** → *Automatic retention*. When the bot is removed from a server, all its data is deleted after **30 days**. Full details: https://dispatch.haxurus.com/en/legal
+Ticket details, transcripts, form answers and notes (encrypted), for the retention you set in **System and menu** → *Automatic retention*, up to your plan's limit (Free 30 days, Plus 90, Pro 365, Brand unlimited). When the bot is removed from a server, all its data is deleted after **30 days**. Full details: https://dispatch.haxurus.com/en/legal
 
 **I want my data deleted.**
 Ask your server's admins, or write to haxurus@icloud.com.
