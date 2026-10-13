@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState, type CSSProperties } from 'react';
 import ResourcePicker, { CHANNEL_TYPES, type PickerChannel } from './ResourcePicker';
 import { useCopy } from './locale-context';
+import { PlanBadge, apiErrorText, planHas, usePlan } from './plan-client';
 import { format, type Locale } from '../i18n';
 
 /*
@@ -67,8 +68,10 @@ const it = {
     LEADERBOARD_CHANNEL_REQUIRED: 'Seleziona e salva un canale prima di inviare la classifica.',
     LEADERBOARD_CHANNEL_INVALID: 'Il canale non esiste più oppure non è un canale testuale o di annunci di questo server.',
     LEADERBOARD_SEND_FAILED: 'Discord ha rifiutato il messaggio: controlla che il bot possa vedere il canale, scrivere e inviare embed.',
-    GUILD_NOT_FOUND: 'Il bot non è presente nel server.'
+    GUILD_NOT_FOUND: 'Il bot non è presente nel server.',
+    PLAN_REQUIRED: 'La pubblicazione della classifica richiede il piano {plan} o superiore.'
   } as Record<string, string>,
+  planNote: 'La pubblicazione della classifica è inclusa dal piano Pro: puoi salvare le impostazioni, ma il bot pubblicherà la classifica (e “Invia ora” funzionerà) solo dopo l’upgrade.',
   minuteUnit: 'min',
   hourUnit: 'h',
   dayUnit: 'g',
@@ -127,8 +130,10 @@ const en: typeof it = {
     LEADERBOARD_CHANNEL_REQUIRED: 'Select and save a channel before sending the leaderboard.',
     LEADERBOARD_CHANNEL_INVALID: 'The channel no longer exists or is not a text or announcement channel of this server.',
     LEADERBOARD_SEND_FAILED: 'Discord rejected the message: check that the bot can view the channel, send messages and embed links.',
-    GUILD_NOT_FOUND: 'The bot is not in the server.'
+    GUILD_NOT_FOUND: 'The bot is not in the server.',
+    PLAN_REQUIRED: 'Publishing the leaderboard requires the {plan} plan or higher.'
   },
+  planNote: 'Leaderboard publishing is included from the Pro plan: you can save the settings, but the bot will post the leaderboard (and “Send now” will work) only after upgrading.',
   minuteUnit: 'min',
   hourUnit: 'h',
   dayUnit: 'd',
@@ -206,6 +211,9 @@ function settingsBody(settings: Settings): Settings {
 
 export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
   const c = useCopy(copy);
+  const { plan } = usePlan(guildId);
+  // false only once the plan is known and lacks the leaderboard.
+  const leaderboardLocked = planHas(plan, 'leaderboard') === false;
   const [kind, setKind] = useState<Kind>('week');
   const [offset, setOffset] = useState(0);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -270,7 +278,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      setError(c.errors[body.error] ?? format(c.saveFailed, { code: body.error ?? response.status }));
+      setError(apiErrorText(c.errors, body, format(c.saveFailed, { code: body.error ?? response.status })));
       return false;
     }
     applySettings(await response.json() as SettingsResponse);
@@ -305,7 +313,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        setError(c.errors[body.error] ?? format(c.sendFailed, { code: body.error ?? response.status }));
+        setError(apiErrorText(c.errors, body, format(c.sendFailed, { code: body.error ?? response.status })));
         return;
       }
       setNotice(c.sent);
@@ -407,7 +415,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
         <form className="card form" onSubmit={save}>
           <div className="row">
             <div>
-              <h2>{c.publishTitle}</h2>
+              <h2 className="plan-heading">{c.publishTitle}{leaderboardLocked && <PlanBadge required="TIER2" />}</h2>
               <p className="muted">
                 {format(c.publishIntro, { timeZone: meta?.timezone ?? 'Europe/Rome' })}
               </p>
@@ -419,6 +427,7 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
             </span>
           </div>
 
+          {leaderboardLocked && <p className="plan-hint"><span>{c.planNote}</span></p>}
           {error && <p className="error">{error}</p>}
           {notice && <p className="success">{notice}</p>}
 
@@ -489,7 +498,8 @@ export default function ModeratorLeaderboard({ guildId }: { guildId: string }) {
               {busy === 'save' ? c.saving : c.save}
             </button>
             <button
-              disabled={Boolean(busy) || !settings.leaderboardChannelId}
+              disabled={Boolean(busy) || !settings.leaderboardChannelId || leaderboardLocked}
+              title={leaderboardLocked ? c.planNote : undefined}
               type="button"
               className="secondary"
               onClick={() => void sendNow()}

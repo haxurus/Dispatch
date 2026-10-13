@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ResourcePicker, { CHANNEL_TYPES, type PickerChannel } from '../../../_components/ResourcePicker';
 import { useCopy } from '../../../_components/locale-context';
+import { PlanHint, apiErrorText, usePlan, type ApiErrorBody, type GuildPlan } from '../../../_components/plan-client';
 import { format, type Locale } from '../../../i18n';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
@@ -113,7 +114,7 @@ const it = {
     FORM_PANEL_CHANNEL_INVALID: 'Il canale del pannello non è più disponibile per il bot.',
     GUILD_NOT_FOUND: 'Il bot non è presente nel server.',
     FORBIDDEN: 'Serve il livello Admin o Owner.',
-    QUOTA_EXCEEDED: 'Limite raggiunto per questo server: elimina un elemento esistente prima di crearne uno nuovo.'
+    QUOTA_EXCEEDED: 'Limite di {limit} pannelli di questo tipo raggiunto con il tuo piano: passa a un piano superiore o elimina un pannello esistente.'
   } as Record<string, string>,
   buttonStyles: {
     PRIMARY: 'Primario (blu)',
@@ -206,6 +207,7 @@ const it = {
   imageUrl: 'URL immagine (https)',
   thumbnailUrl: 'URL miniatura (https)',
   footer: 'Footer',
+  footerPlan: 'Il footer personalizzato richiede il piano Brand: il testo viene salvato, ma nei pannelli pubblicati resta il footer predefinito “Dispatch” finché non fai l’upgrade.',
   embedTooLong: 'Titolo, descrizione e footer superano i 6000 caratteri consentiti da Discord.',
   interaction: 'Interazione',
   panelStyle: 'Stile del pannello',
@@ -263,7 +265,7 @@ const en: typeof it = {
     FORM_PANEL_CHANNEL_INVALID: 'The panel channel is no longer available to the bot.',
     GUILD_NOT_FOUND: 'The bot is not in this server.',
     FORBIDDEN: 'Admin or Owner level required.',
-    QUOTA_EXCEEDED: 'Limit reached for this server: delete an existing item before creating a new one.'
+    QUOTA_EXCEEDED: 'Limit of {limit} panels of this kind reached on your plan: upgrade or delete an existing panel.'
   } as Record<string, string>,
   buttonStyles: {
     PRIMARY: 'Primary (blue)',
@@ -355,6 +357,7 @@ const en: typeof it = {
   imageUrl: 'Image URL (https)',
   thumbnailUrl: 'Thumbnail URL (https)',
   footer: 'Footer',
+  footerPlan: 'A custom footer requires the Brand plan: the text is saved, but published panels keep the default “Dispatch” footer until you upgrade.',
   embedTooLong: 'Title, description and footer exceed the 6000 characters allowed by Discord.',
   interaction: 'Interaction',
   panelStyle: 'Panel style',
@@ -397,7 +400,9 @@ const en: typeof it = {
 
 const copy: Record<Locale, typeof it> = { it, en };
 
-const describeError = (errors: Record<string, string>, prefix: string, body: { error?: string; reason?: string; details?: { fieldErrors?: Record<string, unknown> } }, status: number) => {
+const describeError = (errors: Record<string, string>, prefix: string, body: ApiErrorBody & { reason?: string; details?: { fieldErrors?: Record<string, unknown> } }, status: number) => {
+  // Plan answers are complete sentences (with the plan limit), not codes.
+  if (body.error === 'QUOTA_EXCEEDED' || body.error === 'PLAN_REQUIRED') return apiErrorText(errors, body, `${prefix}: ${body.error}`);
   const code = body.reason ?? body.error;
   const fields = body.details?.fieldErrors ? Object.keys(body.details.fieldErrors) : [];
   const text = (code && errors[code]) ?? `${code ?? status}`;
@@ -612,6 +617,7 @@ export default function PanelsPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
   const c = useCopy(copy);
+  const { plan } = usePlan(guildId);
 
   const [access, setAccess] = useState<AccessLevel | null>(null);
   const [channels, setChannels] = useState<PickerChannel[]>([]);
@@ -964,6 +970,7 @@ export default function PanelsPage() {
           channels={channels}
           categories={categories}
           forms={forms}
+          plan={plan}
           busy={busy === 'save'}
           onSubmit={save}
           onCancel={closeEditor}
@@ -973,13 +980,14 @@ export default function PanelsPage() {
   );
 }
 
-function PanelEditor({ draft, setDraft, dropped, channels, categories, forms, busy, onSubmit, onCancel }: {
+function PanelEditor({ draft, setDraft, dropped, channels, categories, forms, plan, busy, onSubmit, onCancel }: {
   draft: Draft;
   setDraft: (draft: Draft) => void;
   dropped: number;
   channels: PickerChannel[];
   categories: Category[];
   forms: FormDef[];
+  plan: GuildPlan | null;
   busy: boolean;
   onSubmit: (event: FormEvent) => void;
   onCancel: () => void;
@@ -1128,6 +1136,7 @@ function PanelEditor({ draft, setDraft, dropped, channels, categories, forms, bu
               onChange={(event) => update({ footerText: event.target.value })}
             />
           </label>
+          <PlanHint plan={plan} feature="customBranding">{c.footerPlan}</PlanHint>
           {embedLength > LIMITS.embedTotal && (
             <p className="notice notice-error">{c.embedTooLong}</p>
           )}

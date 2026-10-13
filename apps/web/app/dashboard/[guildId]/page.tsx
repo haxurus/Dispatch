@@ -3,7 +3,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { Icon, type IconName } from '../../_components/Brand';
-import { useCopy } from '../../_components/locale-context';
+import { useCopy, useLocale } from '../../_components/locale-context';
+import {
+  PLAN_FEATURES,
+  PLAN_NAMES,
+  PLAN_QUOTAS,
+  apiErrorText,
+  contactHref,
+  pricingHref,
+  usePlan,
+  type BillingPeriod,
+  type GuildPlan,
+  type PlanFeature,
+  type PlanQuota
+} from '../../_components/plan-client';
 import { format, type Locale } from '../../i18n';
 
 type AccessLevel = 'VIEWER' | 'MODERATOR' | 'ADMIN' | 'OWNER';
@@ -37,6 +50,9 @@ const it = {
   accessPill: 'Accesso',
   loadError: 'Non hai accesso a questo server oppure Discord non è raggiungibile.',
   saveError: 'Impossibile aggiornare il permesso.',
+  errors: {
+    QUOTA_EXCEEDED: 'Limite di {limit} ruoli raggiunto con il tuo piano: passa a un piano superiore o rimuovi un permesso esistente.'
+  } as Record<string, string>,
   sections: {
     manage: ['Ticket', 'Coda dei ticket, filtri per stato, dettaglio, note e azioni dello staff.'],
     tickets: ['Configurazione ticket', 'Categorie, ruoli staff, questionari, SLA, automazioni e risposte rapide.'],
@@ -54,7 +70,48 @@ const it = {
   noAccess: 'Nessun accesso',
   saving: 'Salvataggio…',
   loadingRoles: 'Caricamento ruoli…',
-  readOnly: 'Accesso al pannello: {level}. La gestione dei permessi richiede il livello Admin o Owner.'
+  readOnly: 'Accesso al pannello: {level}. La gestione dei permessi richiede il livello Admin o Owner.',
+  plan: {
+    kicker: 'Piano',
+    title: 'Piano {plan}',
+    unavailable: 'Impossibile caricare il piano del server.',
+    billing: {
+      MONTHLY: 'Mensile',
+      YEARLY: 'Annuale',
+      GIFT: 'Omaggio'
+    } as Record<BillingPeriod, string>,
+    free: 'Piano gratuito, senza scadenza.',
+    validUntil: 'Valido fino al {date}.',
+    noExpiry: 'Nessuna scadenza.',
+    expired: 'Il piano {plan} è scaduto il {date}: valgono i limiti e le funzioni del piano Free finché non viene rinnovato. Nessun dato è stato eliminato.',
+    expiredTag: 'Scaduto',
+    usageTitle: 'Utilizzo',
+    quotas: {
+      categories: 'Categorie ticket',
+      ticketPanels: 'Pannelli ticket',
+      forms: 'Form',
+      formPanels: 'Pannelli form',
+      responseTemplates: 'Risposte rapide',
+      roleBindings: 'Ruoli con accesso alla dashboard'
+    } as Record<PlanQuota, string>,
+    retention: 'Retention massima di transcript e ticket chiusi',
+    retentionDays: '{days} giorni',
+    retentionUnlimited: 'Illimitata',
+    featuresTitle: 'Funzioni',
+    features: {
+      automations: 'SLA, escalation, preavviso e chiusura per inattività',
+      staffThreads: 'Thread privati dello staff',
+      leaderboard: 'Classifica dei moderatori',
+      closedCategory: 'Categoria Discord per i ticket chiusi',
+      customBranding: 'Nome e banner del bot, footer dei pannelli personalizzato',
+      prioritySupport: 'Supporto prioritario'
+    } as Record<PlanFeature, string>,
+    included: 'Inclusa',
+    notIncluded: 'Non inclusa',
+    seePlans: 'Vedi i piani',
+    howToUpgrade: 'Come passare a un piano superiore',
+    upgradeHelp: 'I piani vengono attivati dall’operatore di Dispatch, senza pagamenti online: contattalo per attivare o rinnovare un piano.'
+  }
 };
 
 const en: typeof it = {
@@ -64,6 +121,9 @@ const en: typeof it = {
   accessPill: 'Access',
   loadError: 'You do not have access to this server, or Discord cannot be reached.',
   saveError: 'The permission could not be updated.',
+  errors: {
+    QUOTA_EXCEEDED: 'Limit of {limit} roles reached on your plan: upgrade or remove an existing permission.'
+  } as Record<string, string>,
   sections: {
     manage: ['Tickets', 'Ticket queue, status filters, details, notes and staff actions.'],
     tickets: ['Ticket setup', 'Categories, staff roles, questionnaires, SLAs, automations and canned replies.'],
@@ -81,7 +141,48 @@ const en: typeof it = {
   noAccess: 'No access',
   saving: 'Saving…',
   loadingRoles: 'Loading roles…',
-  readOnly: 'Dashboard access: {level}. Managing permissions requires the Admin or Owner level.'
+  readOnly: 'Dashboard access: {level}. Managing permissions requires the Admin or Owner level.',
+  plan: {
+    kicker: 'Plan',
+    title: '{plan} plan',
+    unavailable: 'The server plan could not be loaded.',
+    billing: {
+      MONTHLY: 'Monthly',
+      YEARLY: 'Yearly',
+      GIFT: 'Complimentary'
+    },
+    free: 'Free plan, no expiry.',
+    validUntil: 'Valid until {date}.',
+    noExpiry: 'No expiry.',
+    expired: 'The {plan} plan expired on {date}: Free plan limits and features apply until it is renewed. No data has been deleted.',
+    expiredTag: 'Expired',
+    usageTitle: 'Usage',
+    quotas: {
+      categories: 'Ticket categories',
+      ticketPanels: 'Ticket panels',
+      forms: 'Forms',
+      formPanels: 'Form panels',
+      responseTemplates: 'Canned replies',
+      roleBindings: 'Roles with dashboard access'
+    },
+    retention: 'Longest transcript and closed-ticket retention',
+    retentionDays: '{days} days',
+    retentionUnlimited: 'Unlimited',
+    featuresTitle: 'Features',
+    features: {
+      automations: 'SLAs, escalation, inactivity warning and auto-close',
+      staffThreads: 'Private staff threads',
+      leaderboard: 'Moderator leaderboard',
+      closedCategory: 'Discord category for closed tickets',
+      customBranding: 'Bot name and banner, custom panel footer',
+      prioritySupport: 'Priority support'
+    },
+    included: 'Included',
+    notIncluded: 'Not included',
+    seePlans: 'See plans',
+    howToUpgrade: 'How to upgrade',
+    upgradeHelp: 'Plans are activated by the Dispatch operator, with no online payments: contact them to activate or renew a plan.'
+  }
 };
 
 const copy: Record<Locale, typeof it> = { it, en };
@@ -99,10 +200,88 @@ const sections = (guildId: string): Array<{ key: SectionKey; href: string; icon:
 const roleColor = (color: number | undefined) =>
   color ? `#${color.toString(16).padStart(6, '0')}` : undefined;
 
+function formatDate(value: string, locale: Locale) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(locale === 'it' ? 'it-IT' : 'en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function PlanCard({ plan, text, locale }: { plan: GuildPlan; text: typeof it.plan; locale: Locale }) {
+  const expired = plan.tier !== plan.effectiveTier;
+  const limits = plan.plan.limits;
+  const status = expired
+    ? format(text.expired, { plan: PLAN_NAMES[plan.tier], date: plan.expiresAt ? formatDate(plan.expiresAt, locale) : '—' })
+    : plan.effectiveTier === 'FREE'
+      ? text.free
+      : plan.expiresAt
+        ? format(text.validUntil, { date: formatDate(plan.expiresAt, locale) })
+        : text.noExpiry;
+
+  return (
+    <div className="panel plan-card">
+      <div className="panel-title">
+        <div>
+          <p className="eyebrow">{text.kicker}</p>
+          <h2>{format(text.title, { plan: PLAN_NAMES[plan.effectiveTier] })}</h2>
+        </div>
+        <div className="actions">
+          {expired && <span className="tag tag-danger">{text.expiredTag}</span>}
+          {!expired && plan.effectiveTier !== 'FREE' && plan.billing && <span className="tag tag-accent">{text.billing[plan.billing]}</span>}
+        </div>
+      </div>
+      {expired ? <div className="notice notice-warn plan-card-status">{status}</div> : <p>{status}</p>}
+
+      <h3 className="plan-card-subtitle">{text.usageTitle}</h3>
+      <div className="plan-meters">
+        {PLAN_QUOTAS.map((quota) => {
+          const used = plan.usage[quota] ?? 0;
+          const max = limits[quota];
+          const ratio = Math.min(1, used / Math.max(1, max));
+          return (
+            <div className={`plan-meter ${used >= max ? 'is-full' : ratio >= 0.8 ? 'is-high' : ''}`.trim()} key={quota}>
+              <div><span>{text.quotas[quota]}</span><strong className="mono">{used} / {max}</strong></div>
+              <i><b style={{ width: `${Math.max(2, ratio * 100)}%` }} /></i>
+            </div>
+          );
+        })}
+      </div>
+
+      <dl className="plan-facts">
+        <div>
+          <dt>{text.retention}</dt>
+          <dd className="mono">{limits.retentionDays === null ? text.retentionUnlimited : format(text.retentionDays, { days: limits.retentionDays })}</dd>
+        </div>
+      </dl>
+
+      <h3 className="plan-card-subtitle">{text.featuresTitle}</h3>
+      <ul className="plan-features">
+        {PLAN_FEATURES.map((feature) => {
+          const included = plan.plan.features[feature];
+          return (
+            <li key={feature} className={included ? 'is-included' : 'is-missing'}>
+              <Icon name={included ? 'check' : 'x'} size={15} />
+              <span>{text.features[feature]}</span>
+              <span className="visually-hidden">{included ? text.included : text.notIncluded}</span>
+            </li>
+          );
+        })}
+      </ul>
+
+      <p className="plan-card-help">{text.upgradeHelp}</p>
+      <div className="actions">
+        <a className="button button-sm" href={pricingHref(locale)}>{text.seePlans}</a>
+        <a className="button button-sm button-secondary" href={contactHref(locale)}>{text.howToUpgrade}</a>
+      </div>
+    </div>
+  );
+}
+
 export default function GuildDashboardPage() {
   const params = useParams<{ guildId: string }>();
   const guildId = params.guildId;
   const c = useCopy(copy);
+  const locale = useLocale();
+  const { plan, loading: planLoading, reload: reloadPlan } = usePlan(guildId);
 
   const [access, setAccess] = useState<AccessLevel | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -162,11 +341,12 @@ export default function GuildDashboardPage() {
           });
 
       if (!response.ok) {
-        setError(c.saveError);
+        const body = await response.json().catch(() => ({}));
+        setError(apiErrorText(c.errors, body, c.saveError));
         return;
       }
 
-      await reload();
+      await Promise.all([reload(), reloadPlan()]);
     } finally {
       setSaving(null);
     }
@@ -201,6 +381,10 @@ export default function GuildDashboardPage() {
             );
           })}
         </div>
+
+        {plan
+          ? <PlanCard plan={plan} text={c.plan} locale={locale} />
+          : !planLoading && access && <div className="notice">{c.plan.unavailable}</div>}
 
         {canAdmin ? (
           <div className="panel">

@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useCopy, useLocale } from '../../../../_components/locale-context';
+import { apiErrorText } from '../../../../_components/plan-client';
 import { format, type Locale } from '../../../../i18n';
 
 type BlacklistEntry = {
@@ -18,7 +19,8 @@ const it = {
   forbidden: 'La gestione blacklist richiede il livello Admin o Owner.',
   loadError: 'Impossibile caricare la blacklist.',
   errors: {
-    QUOTA_EXCEEDED: 'Limite raggiunto per questo server: elimina un elemento esistente prima di crearne uno nuovo.'
+    // Instance-wide cap, the same on every plan.
+    QUOTA_EXCEEDED: 'Limite di {limit} utenti in blacklist raggiunto: rimuovi un utente esistente prima di aggiungerne un altro.'
   } as Record<string, string>,
   saveFailed: 'Salvataggio fallito: {code}',
   removeFailed: 'Rimozione fallita: {code}',
@@ -49,7 +51,7 @@ const en: typeof it = {
   forbidden: 'Managing the blacklist requires the Admin or Owner level.',
   loadError: 'The blacklist could not be loaded.',
   errors: {
-    QUOTA_EXCEEDED: 'Limit reached for this server: delete an existing item before creating a new one.'
+    QUOTA_EXCEEDED: 'Limit of {limit} blacklisted users reached: remove an existing user before adding another one.'
   } as Record<string, string>,
   saveFailed: 'Save failed: {code}',
   removeFailed: 'Removal failed: {code}',
@@ -136,7 +138,7 @@ export default function TicketSecurityPage() {
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         const code = body.error ?? response.status;
-        setError(c.errors[String(code)] ?? format(c.saveFailed, { code }));
+        setError(apiErrorText(c.errors, body, format(c.saveFailed, { code })));
         return;
       }
 

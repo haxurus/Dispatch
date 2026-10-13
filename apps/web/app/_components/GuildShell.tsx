@@ -4,7 +4,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import { Brand, Icon, type IconName } from './Brand';
 import { LocaleToggle, useCopy, useLocale } from './locale-context';
-import type { Locale } from '../i18n';
+import { format, type Locale } from '../i18n';
+import { PLAN_NAMES, usePlan } from './plan-client';
 import {
   SNOWFLAKE,
   accessLabel,
@@ -34,7 +35,9 @@ const it = {
   allServers: 'Tutti i server',
   sections: 'Sezioni del server',
   yourAccess: 'Il tuo accesso',
-  logout: 'Esci'
+  logout: 'Esci',
+  plan: 'Piano {plan}',
+  planExpired: 'Piano {plan} scaduto: Free'
 };
 
 const en: typeof it = {
@@ -51,7 +54,9 @@ const en: typeof it = {
   allServers: 'All servers',
   sections: 'Server sections',
   yourAccess: 'Your access',
-  logout: 'Log out'
+  logout: 'Log out',
+  plan: '{plan} plan',
+  planExpired: '{plan} plan expired: Free'
 };
 
 const copy: Record<Locale, typeof it> = { it, en };
@@ -100,6 +105,8 @@ export default function GuildShell({ children }: { children: ReactNode }) {
 
   const [me, setMe] = useState<Me | null>(null);
   const [guild, setGuild] = useState<DashboardGuild | null>(null);
+  // Best effort: the sidebar simply omits the plan when it cannot be loaded.
+  const { plan } = usePlan(validGuild ? guildId : null);
 
   useEffect(() => {
     if (!validGuild) return;
@@ -140,6 +147,16 @@ export default function GuildShell({ children }: { children: ReactNode }) {
           <div>
             <strong title={name}>{name}</strong>
             <span className="mono muted">{validGuild ? guildId : ''}</span>
+            {plan && (
+              <a
+                className={`sidebar-plan ${plan.tier !== plan.effectiveTier ? 'is-expired' : ''}`.trim()}
+                href={`/dashboard/${guildId}`}
+              >
+                {plan.tier !== plan.effectiveTier
+                  ? format(c.planExpired, { plan: PLAN_NAMES[plan.tier] })
+                  : format(c.plan, { plan: PLAN_NAMES[plan.effectiveTier] })}
+              </a>
+            )}
           </div>
         </div>
 

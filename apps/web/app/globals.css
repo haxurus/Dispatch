@@ -1059,4 +1059,59 @@ input[aria-invalid="true"] { border-color: var(--danger-line-strong); }
   .coupon-form-foot .button { margin-left: 0; width: 100%; }
   .coupon-row { grid-template-columns: 1fr 1fr; }
   .coupon-row > div, .coupon-row .button { grid-column: 1 / -1; }
+/* ---------- Plans: badge, hints, overview plan card, sidebar, Brand branding ---------- */
+.inline-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.inline-link:hover { color: var(--accent-hover); }
+
+.plan-badge {
+  display: inline-flex; align-items: center; flex: 0 0 auto; width: fit-content;
+  padding: 1px 7px; border: 1px solid var(--secondary-hue); border-radius: 999px;
+  background: var(--secondary-glow); color: var(--secondary-hue);
+  font: 600 .64rem/1.5 var(--font-mono-stack); letter-spacing: .04em; text-transform: none; white-space: nowrap;
+  transition: background .15s ease;
+}
+.plan-badge:hover { background: var(--surface-3); }
+.plan-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.plan-hint {
+  display: flex; align-items: flex-start; gap: 8px; margin: 0;
+  padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--secondary-hue); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text-2); font-size: .8rem; line-height: 1.5;
+}
+.plan-hint .plan-badge { margin-top: 1px; }
+.shell .plan-hint { margin: 0; }
+
+.plan-card { margin-bottom: 16px; }
+.plan-card .panel-title .actions { justify-content: flex-end; }
+.plan-card-status { margin: 10px 0 0; }
+.plan-card-subtitle { margin: 20px 0 10px; color: var(--muted); font: 500 .7rem var(--font-mono-stack); letter-spacing: .1em; text-transform: uppercase; }
+.plan-meters { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px 18px; }
+.plan-meter > div { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 7px; color: var(--muted); font-size: .8rem; }
+.plan-meter strong { color: var(--text); font-size: .78rem; font-weight: 500; white-space: nowrap; }
+.plan-meter i { display: block; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.plan-meter b { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.plan-meter.is-high b { background: var(--warn); }
+.plan-meter.is-full b { background: var(--danger); }
+.plan-facts { display: grid; gap: 12px; margin: 18px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.plan-facts dt { color: var(--muted); font-size: .76rem; }
+.plan-facts dd { margin: 4px 0 0; color: var(--text); font-size: .88rem; }
+.plan-features { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 18px; margin: 0; padding: 0; list-style: none; }
+.plan-features li { display: flex; align-items: flex-start; gap: 8px; color: var(--text-2); font-size: .84rem; line-height: 1.45; }
+.plan-features li .icon { margin-top: 2px; }
+.plan-features li.is-included .icon { color: var(--ok); }
+.plan-features li.is-missing, .plan-features li.is-missing .icon { color: var(--faint); }
+.plan-card-help { margin: 18px 0 10px; }
+
+.sidebar-plan { width: fit-content; max-width: 100%; overflow: hidden; color: var(--secondary-hue); font: 500 .7rem var(--font-mono-stack); text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-plan:hover { color: var(--text); }
+.sidebar-plan.is-expired { color: var(--warn); }
+
+.branding-card { margin-top: 16px; }
+.branding-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.branding-grid:disabled { opacity: .6; }
+.banner-preview { display: block; width: 100%; max-width: 420px; aspect-ratio: 680 / 240; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); object-fit: cover; }
+
+@media (max-width: 760px) {
+  .branding-grid { grid-template-columns: 1fr; }
+  .plan-meters, .plan-features { grid-template-columns: 1fr; }
+  .plan-card .panel-title { flex-direction: column; align-items: flex-start; }
 }
