@@ -55,7 +55,7 @@ The member must allow DMs from server members (Server settings → Privacy). Oth
 When a ticket is closed the member can rate it 1–5 ★; the rating goes to the moderator who claimed it (or closed it). The leaderboard is part of the **Pro** plan: in **Analytics** → *Moderator leaderboard* choose a channel and a weekly and/or monthly schedule. A leaderboard is posted after its period ends; *Send now* posts one immediately.
 
 **Is Dispatch free? What do the paid plans add?**
-Free covers tickets, panels, forms, transcripts, ticket log and ratings, with limits (3 categories, 2 panels, 2 forms, 30-day retention). **Plus** adds SLAs, escalation, auto-close and staff threads; **Pro** the moderator leaderboard and the closed-ticket category; **Brand** a custom bot nickname, banner and panel footer. Limits grow with each plan: https://dispatch.haxurus.com/en/pricing — the dashboard **Overview** shows your plan and usage.
+Free covers tickets, panels, forms, transcripts, ticket log and ratings, with limits (3 categories, 2 panels, 2 forms, 5 canned replies, 15-day retention). **Plus** adds SLAs, escalation, auto-close and staff threads; **Pro** the moderator leaderboard and the closed-ticket category; **Brand** a custom bot nickname, banner and panel footer. Limits grow with each plan: https://dispatch.haxurus.com/en/pricing — the dashboard **Overview** shows your plan and usage.
 
 **How do I upgrade?**
 Contact us (details on the pricing page): plans are activated by hand for your server, monthly or yearly, with discounts for several servers. Dispatch is open source (AGPL-3.0): https://github.com/haxurus/Dispatch
@@ -65,7 +65,7 @@ Contact us (details on the pricing page): plans are activated by hand for your s
 ## ❓ Dispatch FAQ — Privacy, bugs and ideas
 
 **What data does Dispatch keep, and for how long?**
-Ticket details, transcripts, form answers and notes (encrypted), for the retention you set in **System and menu** → *Automatic retention*, up to your plan's limit (Free 30 days, Plus 90, Pro 365, Brand unlimited). When the bot is removed from a server, all its data is deleted after **30 days**. Full details: https://dispatch.haxurus.com/en/legal
+Ticket details, transcripts, form answers and notes (encrypted), for the retention you set in **System and menu** → *Automatic retention*, up to your plan's limit (Free 15 days, Plus 30, Pro 60, Brand 90). When the bot is removed from a server, all its data is deleted after **30 days**. Full details: https://dispatch.haxurus.com/en/legal
 
 **I want my data deleted.**
 Ask your server's admins, or write to haxurus@icloud.com.

@@ -60,35 +60,26 @@ export type PlanDefinition = {
   features: PlanFeatures;
 };
 
-const PRO_LIMITS: PlanLimits = {
-  categories: 50,
-  ticketPanels: 25,
-  forms: 50,
-  formPanels: 25,
-  responseTemplates: 100,
-  roleBindings: 10,
-  retentionDays: 365
-};
 
 export const PLANS: Record<PlanTier, PlanDefinition> = {
   FREE: {
     tier: 'FREE', name: 'Free', level: 0, monthlyCents: 0, yearlyCents: 0,
-    limits: { categories: 3, ticketPanels: 2, forms: 2, formPanels: 2, responseTemplates: 10, roleBindings: 1, retentionDays: 30 },
+    limits: { categories: 3, ticketPanels: 2, forms: 2, formPanels: 2, responseTemplates: 5, roleBindings: 1, retentionDays: 15 },
     features: { automations: false, staffThreads: false, leaderboard: false, closedCategory: false, customBranding: false, prioritySupport: false }
   },
   TIER1: {
     tier: 'TIER1', name: 'Plus', level: 1, monthlyCents: 199, yearlyCents: 1_999,
-    limits: { categories: 10, ticketPanels: 5, forms: 10, formPanels: 5, responseTemplates: 50, roleBindings: 3, retentionDays: 90 },
+    limits: { categories: 10, ticketPanels: 5, forms: 5, formPanels: 5, responseTemplates: 15, roleBindings: 3, retentionDays: 30 },
     features: { automations: true, staffThreads: true, leaderboard: false, closedCategory: false, customBranding: false, prioritySupport: true }
   },
   TIER2: {
     tier: 'TIER2', name: 'Pro', level: 2, monthlyCents: 499, yearlyCents: 4_999,
-    limits: PRO_LIMITS,
+    limits: { categories: 30, ticketPanels: 15, forms: 15, formPanels: 25, responseTemplates: 25, roleBindings: 10, retentionDays: 60 },
     features: { automations: true, staffThreads: true, leaderboard: true, closedCategory: true, customBranding: false, prioritySupport: true }
   },
   TIER3: {
     tier: 'TIER3', name: 'Brand', level: 3, monthlyCents: 899, yearlyCents: 8_999,
-    limits: { ...PRO_LIMITS, retentionDays: null },
+    limits: { categories: 50, ticketPanels: 25, forms: 30, formPanels: 25, responseTemplates: 50, roleBindings: 10, retentionDays: 90 },
     features: { automations: true, staffThreads: true, leaderboard: true, closedCategory: true, customBranding: true, prioritySupport: true }
   }
 };

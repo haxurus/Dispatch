@@ -1099,7 +1099,7 @@ app.put('/api/guilds/:guildId/ticket-system-settings', async (request, reply) =>
   });
   if (!previous) return reply.code(404).send({ error: 'GUILD_NOT_FOUND' });
 
-  // Retention above the plan is capped (Free: 30 days, "forever" only on Brand).
+  // Retention above the plan is capped (Free 15 days ... Brand 90, packages/shared/src/plans.ts).
   const { tier } = await guildTier(guildId);
   const retention = retentionWithinPlan(tier, parsed.data);
   const settings = await prisma.guildSettings.update({
