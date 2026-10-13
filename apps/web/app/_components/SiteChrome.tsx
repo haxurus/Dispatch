@@ -67,6 +67,7 @@ export function SiteFooter({ locale, children }: { locale: Locale; children?: Re
         <div className="site-footer-bottom">
           <span>
             Dispatch © 2026 · {c.madeBy} Haxurus · <a href={REPO_URL} target="_blank" rel="noreferrer">{c.openSource}</a>
+            {' · '}<a href={`/${locale}/pricing`}>{c.pricing}</a>
             {' · '}<a href={`/${locale}/legal#privacy`}>Privacy</a>
             {' · '}<a href={`/${locale}/legal#terms`}>{c.terms}</a>
           </span>

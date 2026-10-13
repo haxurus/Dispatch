@@ -16,6 +16,9 @@ export const REPO_URL = 'https://github.com/haxurus/Dispatch';
 /** Operator contact for privacy and legal requests. Self-hosted instances must use their own. */
 export const CONTACT_EMAIL = 'haxurus@icloud.com';
 
+/** Public Discord support server of the hosted instance. */
+export const SUPPORT_SERVER_URL = 'https://discord.gg/P7ycBcBqtn';
+
 /** Locale request header set by middleware.ts, read by the root layout for <html lang>. */
 export const LOCALE_HEADER = 'x-dispatch-locale';
 
