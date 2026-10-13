@@ -51,7 +51,8 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
           ] },
           { title: 'How long we keep it', body: [
             [
-              'Tickets, transcripts, notes and form answers: for the retention periods chosen by the server’s administrators in the dashboard, up to the maximum of the server’s plan; without a retention period they are kept for that maximum, or while the bot is in the server on plans without one.',
+              'Tickets, transcripts and staff notes: for the retention periods chosen by the server’s administrators in the dashboard, up to the maximum of the server’s plan; without a retention period they are kept for that maximum, or while the bot is in the server on plans without one.',
+              'Form answers: until the server’s administrators delete them from the dashboard, or while the bot is in the server.',
               'When the bot is removed from a server, all of that server’s data is deleted 30 days later, unless the bot is added again in the meantime.',
               'Dashboard sessions: 8 hours.',
               'Database backups: up to 14 days.'
@@ -159,7 +160,8 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
           ] },
           { title: 'Per quanto tempo li conserviamo', body: [
             [
-              'Ticket, transcript, note e risposte ai form: per i periodi di conservazione scelti dagli amministratori nella dashboard, entro il massimo previsto dal piano del server; senza un periodo impostato restano per quel massimo, o finché il bot è nel server con i piani che non ne hanno uno.',
+              'Ticket, transcript e note dello staff: per i periodi di conservazione scelti dagli amministratori nella dashboard, entro il massimo previsto dal piano del server; senza un periodo impostato restano per quel massimo, o finché il bot è nel server con i piani che non ne hanno uno.',
+              'Risposte ai form: finché gli amministratori del server non le eliminano dalla dashboard, o finché il bot è nel server.',
               'Quando il bot viene rimosso da un server, tutti i dati di quel server vengono cancellati dopo 30 giorni, a meno che il bot non venga aggiunto di nuovo nel frattempo.',
               'Sessioni della dashboard: 8 ore.',
               'Backup del database: fino a 14 giorni.'
