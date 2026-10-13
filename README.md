@@ -166,7 +166,7 @@ Gateway intents requested by the bot: **Guilds**, **Guild Messages** and the two
 
 The Presence Intent is not used.
 
-Bot permissions (no `Administrator`), as requested by the install link (`apps/api/src/super.ts`, bitfield `361045814288`): View Channels, Manage Channels, Manage Roles, Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History, Manage Threads, Create Private Threads, Send Messages in Threads. Manage Roles is needed to set permission overwrites on ticket channels; the thread permissions are needed for private staff threads, because the bot can only grant in channel overwrites what it has itself.
+Bot permissions (no `Administrator`), as requested by the install link (`apps/api/src/super.ts`, bitfield `361112923152`): View Channels, Manage Channels, Manage Roles, Change Nickname, Send Messages, Manage Messages, Embed Links, Attach Files, Read Message History, Manage Threads, Create Private Threads, Send Messages in Threads. Manage Roles is needed to set permission overwrites on ticket channels; the thread permissions are needed for private staff threads, because the bot can only grant in channel overwrites what it has itself.
 
 OAuth2 redirect URL (dashboard sign-in, scopes `identify` and `guilds`):
 

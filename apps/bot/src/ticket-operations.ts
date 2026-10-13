@@ -21,6 +21,7 @@ import { reserveTicketOpen, consumeTicketOpenReservation, commitTicketOpen,
   releaseTicketOpenReservation, formVersion } from './open-guard.js';
 import { logTicketEvent, userMention } from './ticket-log.js';
 import { guildMessages, type BotMessages } from './i18n.js';
+import { guildAllows } from './plan.js';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 
@@ -217,6 +218,8 @@ async function resolveClosedParent(ticket: {
 // Best effort: a Discord failure (category full, missing permission, unknown
 // category) leaves the channel where it is and never blocks the close.
 async function moveToClosedCategory(ticket: TicketWithRelations, channel: TextChannel, actorId: string) {
+  // Pro plan and above; the setting stays for an upgrade.
+  if (!(await guildAllows(ticket.guildId, 'closedCategory'))) return null;
   const target = await resolveClosedParent(ticket);
   if (!target || channel.parentId === target) return null;
   try {
@@ -1405,6 +1408,7 @@ export async function openStaffThread(
   if (ticket.channelDeletedAt) throw new Error('TICKET_CHANNEL_DELETED');
   assertTicketActive(ticket.status);
   if (!SNOWFLAKE.test(userId) || userId === ticket.openerId) throw new Error('STAFF_THREAD_FORBIDDEN');
+  if (!(await guildAllows(guildId, 'staffThreads'))) throw new Error('PLAN_REQUIRED');
   const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const member = await fetchMember(guild, userId);
   if (!member || !hasStaffAccess(member, ticket.category.staffRoleIds)) throw new Error('STAFF_THREAD_FORBIDDEN');
@@ -1676,6 +1680,8 @@ export async function runTicketAutomations(client: Client) {
 type AutomationTicket = Prisma.TicketGetPayload<{ include: { category: true } }>;
 
 async function automateTicket(client: Client, ticket: AutomationTicket, now: number) {
+  // SLAs, escalation and inactivity handling: Plus plan and above.
+  if (!(await guildAllows(ticket.guildId, 'automations'))) return;
   const category = ticket.category;
   const m = await guildMessages(ticket.guildId);
 

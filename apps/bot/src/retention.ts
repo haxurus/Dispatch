@@ -1,5 +1,6 @@
 import { ChannelType, type Client } from 'discord.js';
 import { prisma, type Prisma } from '@dispatch/db';
+import { effectiveRetentionDays, effectiveTier } from '@dispatch/shared';
 import { logTicketEvent } from './ticket-log.js';
 import { guildMessages } from './i18n.js';
 
@@ -7,6 +8,22 @@ const DAY = 86_400_000;
 export function retentionDue(closedAt: Date | null, days: number | null, reopenHours: number | null, now = Date.now()) {
   return closedAt !== null && days !== null && days >= 1 &&
     now >= closedAt.getTime() + Math.max(days * DAY, (reopenHours ?? 0) * 3_600_000);
+}
+
+type RetentionGuild = {
+  transcriptRetentionDays: number | null;
+  closedTicketRetentionDays: number | null;
+  planTier: string;
+  planExpiresAt: Date | null;
+};
+
+/** Retention actually applied: the server's setting capped by its plan. */
+export function guildRetention(guild: RetentionGuild) {
+  const tier = effectiveTier(guild);
+  return {
+    transcripts: effectiveRetentionDays(guild.transcriptRetentionDays, tier),
+    closedTickets: effectiveRetentionDays(guild.closedTicketRetentionDays, tier)
+  };
 }
 
 export async function lockTicket(tx: Prisma.TransactionClient, id: string) {
@@ -19,7 +36,7 @@ export async function assertTranscriptRetention(ticket: {
 }) {
   if (ticket.status !== 'CLOSED') return;
   const settings = await prisma.guildSettings.findUniqueOrThrow({ where: { guildId: ticket.guildId } });
-  if (retentionDue(ticket.closedAt, settings.transcriptRetentionDays, ticket.category.reopenWindowHours)) {
+  if (retentionDue(ticket.closedAt, guildRetention(settings).transcripts, ticket.category.reopenWindowHours)) {
     throw new Error('TRANSCRIPT_RETENTION_EXPIRED');
   }
 }
@@ -29,7 +46,7 @@ async function expireTranscript(id: string) {
     await lockTicket(tx, id);
     const ticket = await tx.ticket.findUnique({ where: { id }, include: { category: true, guild: true } });
     if (!ticket || ticket.status !== 'CLOSED' ||
-        !retentionDue(ticket.closedAt, ticket.guild.transcriptRetentionDays, ticket.category.reopenWindowHours)) return 0;
+        !retentionDue(ticket.closedAt, guildRetention(ticket.guild).transcripts, ticket.category.reopenWindowHours)) return 0;
     const result = await tx.transcript.deleteMany({ where: { ticketId: id } });
     return result.count;
   });
@@ -41,7 +58,7 @@ async function claimDeletion(id: string) {
     const ticket = await tx.ticket.findUnique({ where: { id }, include: { category: true, guild: true } });
     if (!ticket || ticket.status !== 'CLOSED') return null;
     if (!ticket.retentionPendingAt &&
-        !retentionDue(ticket.closedAt, ticket.guild.closedTicketRetentionDays, ticket.category.reopenWindowHours)) return null;
+        !retentionDue(ticket.closedAt, guildRetention(ticket.guild).closedTickets, ticket.category.reopenWindowHours)) return null;
     if (!ticket.retentionPendingAt) {
       return tx.ticket.update({ where: { id }, data: {
         retentionPendingAt: new Date(), retentionDeleteChannel: ticket.guild.retentionDeleteDiscordChannel
@@ -102,7 +119,9 @@ export async function runTicketRetention(client: Client) {
     const settingsRows = await prisma.guildSettings.findMany({
       where: { ...(guildCursor ? { guildId: { gt: guildCursor } } : {}), OR: [
         { transcriptRetentionDays: { not: null } }, { closedTicketRetentionDays: { not: null } },
-        { tickets: { some: { retentionPendingAt: { not: null } } } }
+        { tickets: { some: { retentionPendingAt: { not: null } } } },
+        // Capped plans (and expiring ones) always have a retention.
+        { planTier: { not: 'TIER3' } }, { planExpiresAt: { not: null } }
       ] }, orderBy: { guildId: 'asc' }, take: 100
     });
     if (!settingsRows.length) break;

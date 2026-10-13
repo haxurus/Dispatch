@@ -14,6 +14,12 @@ import {
   closeTicket, deleteTicketChannel, recordTicketMessage, reopenTicket, staffThreadTranscriptDestination, ticketChannelOverwrites
 } from '../apps/bot/src/ticket-operations.js';
 import { purgeDepartedGuild, purgeDepartedGuilds } from '../apps/api/src/guild-purge.js';
+import { guildRetention } from '../apps/bot/src/retention.js';
+import { invalidateGuildPlan, guildPlanTier } from '../apps/bot/src/plan.js';
+import { openStaffThread } from '../apps/bot/src/ticket-operations.js';
+import {
+  PLANS, PLAN_TIERS, couponProblem, effectiveRetentionDays, effectiveTier, requiredTierFor, tierAllows
+} from '@dispatch/shared';
 import { claimLeaderboardPeriod, releaseLeaderboardPeriod, runLeaderboardCycle } from '../apps/bot/src/leaderboard.js';
 import { handleTicketInteraction, publishMainMenu } from '../apps/bot/src/tickets.js';
 import { panelComponents } from '../apps/bot/src/panels.js';
@@ -36,10 +42,13 @@ const DAY = 86400000;
 let number = 0;
 
 beforeEach(async () => {
+  invalidateGuildPlan();
   await prisma.guildSettings.deleteMany({ where: { guildId: G } });
   // Italian: the assertions below check the Italian texts (new servers default to English).
   await prisma.guildSettings.create({ data: {
     guildId: G, guildName: 'Disposable integration test', locale: 'it',
+    // Every feature: the plan gates have their own tests below.
+    planTier: 'TIER3',
     antiSpamGlobalCooldownSeconds: 0, antiSpamMaxAttempts: 100,
     transcriptRetentionDays: null, closedTicketRetentionDays: null,
     retentionDeleteDiscordChannel: false
@@ -1445,4 +1454,70 @@ test('status notices never carry tokens or connection strings', async () => {
   assert.ok(!text.includes('secret@postgres'));
   assert.ok(!text.includes('abcdefghijklmnopqrstu'));
   assert.ok(text.includes('[token]') && text.includes('postgresql://[redacted]') && text.includes('Bearer [redacted]'));
+});
+
+// Plans (packages/shared/src/plans.ts, migration 20261015100000_plans).
+test('plan catalogue: tiers grow monotonically and features have a minimum tier', () => {
+  for (let index = 1; index < PLAN_TIERS.length; index++) {
+    const lower = PLANS[PLAN_TIERS[index - 1]!].limits;
+    const upper = PLANS[PLAN_TIERS[index]!].limits;
+    for (const key of ['categories', 'ticketPanels', 'forms', 'formPanels', 'responseTemplates', 'roleBindings'] as const) {
+      assert.ok(upper[key] >= lower[key], key);
+    }
+  }
+  assert.equal(requiredTierFor('automations'), 'TIER1');
+  assert.equal(requiredTierFor('staffThreads'), 'TIER1');
+  assert.equal(requiredTierFor('leaderboard'), 'TIER2');
+  assert.equal(requiredTierFor('closedCategory'), 'TIER2');
+  assert.equal(requiredTierFor('customBranding'), 'TIER3');
+  assert.ok(tierAllows('TIER2', 'TIER1') && !tierAllows('FREE', 'TIER1'));
+});
+
+test('an expired plan behaves as Free and retention is capped by the plan', () => {
+  const now = new Date('2026-10-13T12:00:00Z');
+  assert.equal(effectiveTier({ planTier: 'TIER2', planExpiresAt: new Date('2026-10-14T00:00:00Z') }, now), 'TIER2');
+  assert.equal(effectiveTier({ planTier: 'TIER2', planExpiresAt: new Date('2026-10-12T00:00:00Z') }, now), 'FREE');
+  assert.equal(effectiveTier({ planTier: 'NOPE' }, now), 'FREE');
+  assert.equal(effectiveRetentionDays(null, 'FREE'), 30);
+  assert.equal(effectiveRetentionDays(400, 'TIER2'), 365);
+  assert.equal(effectiveRetentionDays(7, 'TIER1'), 7);
+  assert.equal(effectiveRetentionDays(null, 'TIER3'), null);
+  assert.deepEqual(
+    guildRetention({ transcriptRetentionDays: null, closedTicketRetentionDays: 90, planTier: 'FREE', planExpiresAt: null }),
+    { transcripts: 30, closedTickets: 30 }
+  );
+});
+
+test('coupons are checked against tier, billing, validity and redemptions', () => {
+  const base = {
+    code: 'LAUNCH', percentOff: 20, amountOffCents: null, tiers: ['TIER2'], billing: 'YEARLY',
+    maxRedemptions: 2, redemptions: 1, validFrom: null, validUntil: null, active: true
+  };
+  assert.equal(couponProblem(base, 'TIER2', 'YEARLY'), null);
+  assert.equal(couponProblem(base, 'TIER1', 'YEARLY'), 'COUPON_WRONG_TIER');
+  assert.equal(couponProblem(base, 'TIER2', 'MONTHLY'), 'COUPON_WRONG_BILLING');
+  assert.equal(couponProblem({ ...base, redemptions: 2 }, 'TIER2', 'YEARLY'), 'COUPON_EXHAUSTED');
+  assert.equal(couponProblem(base, 'FREE', null), 'COUPON_FREE_PLAN');
+});
+
+test('Free servers: closed tickets expire after 30 days even without a retention setting', async () => {
+  await prisma.guildSettings.update({ where: { guildId: G }, data: { planTier: 'FREE' } });
+  invalidateGuildPlan(G);
+  assert.equal(await guildPlanTier(G), 'FREE');
+  const cat = await category();
+  const old = await ticket(cat, { closedAt: new Date(Date.now() - 31 * DAY) });
+  const recent = await ticket(cat, { closedAt: new Date(Date.now() - 5 * DAY) });
+  await runTicketRetention(client());
+  assert.equal(await prisma.ticket.findUnique({ where: { id: old.id } }), null);
+  assert.ok(await prisma.ticket.findUnique({ where: { id: recent.id } }));
+  invalidateGuildPlan(G);
+});
+
+test('Free servers cannot open a private staff thread', async () => {
+  await prisma.guildSettings.update({ where: { guildId: G }, data: { planTier: 'FREE' } });
+  invalidateGuildPlan(G);
+  const cat = await category({ staffRoleIds: [OTHER] });
+  const open = await ticket(cat, { status: 'OPEN', closedAt: null });
+  await assert.rejects(openStaffThread(client(), G, open.id, '990000000000000077'), /PLAN_REQUIRED/);
+  invalidateGuildPlan(G);
 });

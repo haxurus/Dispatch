@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
-import type { Client } from 'discord.js';
+import { Routes, type Client } from 'discord.js';
 import { publishMainMenu, publishTicketPanel } from './tickets.js';
 import { publishFormPanel } from './forms.js';
 import { LEADERBOARD_LIMITS, parseBlacklistLogPayload } from '@dispatch/shared';
@@ -23,6 +23,7 @@ import {
 } from './ticket-operations.js';
 
 const SNOWFLAKE = /^\d{17,20}$/;
+const BANNER_URI = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
 const CUID = /^[a-z0-9]{20,32}$/i;
 
 async function readJson(req: http.IncomingMessage) {
@@ -127,7 +128,32 @@ export function startInternalApi(client: Client, secret: string, port = 3002, st
         return;
       }
 
-      let match = url.pathname.match(/^\/guilds\/(\d{17,20})\/leave$/);
+      let match = url.pathname.match(/^\/guilds\/(\d{17,20})\/branding$/);
+      // Brand plan (checked by the API): the bot's own nickname and banner on one server.
+      if (req.method === 'POST' && match) {
+        const guildId = match[1]!;
+        if (!client.guilds.cache.has(guildId)) throw new Error('GUILD_NOT_FOUND');
+        const body = await readJson(req);
+        const profile: { nick?: string | null; banner?: string | null } = {};
+        if ('nick' in body) {
+          if (body.nick !== null && (typeof body.nick !== 'string' || !body.nick.trim() || body.nick.length > 32)) throw new Error('INVALID_NICKNAME');
+          profile.nick = body.nick === null ? null : (body.nick as string).trim();
+        }
+        if ('banner' in body) {
+          if (body.banner !== null && (typeof body.banner !== 'string' || !BANNER_URI.test(body.banner))) throw new Error('INVALID_BANNER');
+          profile.banner = body.banner as string | null;
+        }
+        try {
+          await client.rest.patch(Routes.guildMember(guildId, '@me'), { body: profile });
+        } catch (error) {
+          const code = Number((error as { code?: unknown }).code);
+          throw new Error(code === 50013 || code === 50001 ? 'BRANDING_MISSING_PERMISSION' : 'BRANDING_FAILED');
+        }
+        res.end(JSON.stringify({ ok: true, guildId }));
+        return;
+      }
+
+      match = url.pathname.match(/^\/guilds\/(\d{17,20})\/leave$/);
       if (req.method === 'POST' && match) {
         const guildId = match[1]!;
         if (!SNOWFLAKE.test(guildId)) throw new Error('INVALID_ID');
