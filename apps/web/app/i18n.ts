@@ -26,6 +26,7 @@ const chromeIt = {
   footerTag: 'discord ticketing',
   openSource: 'Open source (AGPL-3.0)',
   terms: 'Termini',
+  pricing: 'Prezzi',
   dashboard: 'Dashboard',
   superConsole: 'Super console',
   signIn: 'Accedi',
@@ -45,6 +46,7 @@ const chromeEn: ChromeCopy = {
   footerTag: 'discord ticketing',
   openSource: 'Open source (AGPL-3.0)',
   terms: 'Terms',
+  pricing: 'Pricing',
   dashboard: 'Dashboard',
   superConsole: 'Super console',
   signIn: 'Sign in',
@@ -124,7 +126,7 @@ const homeIt: HomeCopy = {
       { icon: 'ticket', kicker: 'Apertura', title: 'Pannelli e menu ticket', text: 'Pannelli con pulsanti e un menu principale per scegliere la categoria. Ogni categoria ha il suo canale, i suoi ruoli staff e i suoi limiti.' },
       { icon: 'clipboard', kicker: 'Form', title: 'Form e questionari', text: 'Candidature e questionari con domande validate, invio in DM o effimero, pianificazione e permessi per ruolo. Le risposte possono aprire un ticket.' },
       { icon: 'userCheck', kicker: 'Staff', title: 'Claim, assegnazioni, priorità', text: 'Lo staff prende in carico, assegna, trasferisce di categoria e imposta stato e priorità, da Discord o dalla dashboard.' },
-      { icon: 'clock', kicker: 'SLA', title: 'SLA ed escalation', text: 'Tempi di prima risposta e risoluzione per categoria, avvisi di inattività, chiusura automatica ed escalation ai ruoli di riferimento.' },
+      { icon: 'clock', kicker: 'SLA', title: 'SLA ed escalation', text: 'Tempi di prima risposta e risoluzione per categoria, avvisi di inattività, chiusura automatica ed escalation ai ruoli di riferimento, dal piano Plus.' },
       { icon: 'file', kicker: 'Archivio', title: 'Transcript', text: 'Transcript HTML generati a chiusura, inviati al canale archivio o all’utente, cifrati a riposo e con retention configurabile.' },
       { icon: 'chart', kicker: 'Analytics', title: 'Analytics e feedback', text: 'Volumi giornalieri, tempi medi, violazioni SLA, valutazioni degli utenti e attività dello staff in un’unica vista.' },
       { icon: 'ban', kicker: 'Protezione', title: 'Anti-spam e blacklist', text: 'Cooldown, limiti di ticket aperti e finestre di tentativi bloccano gli abusi; la blacklist esclude gli utenti problematici.' },
@@ -172,7 +174,8 @@ const homeIt: HomeCopy = {
       ['Dispatch richiede il permesso Administrator?', 'No. Il bot chiede solo i permessi necessari a creare e gestire i canali, i thread e i messaggi dei ticket.'],
       ['Posso creare form e candidature per lo staff?', 'Sì. I form raccolgono risposte validate, possono essere inviati in DM o in modo effimero, limitati per ruolo e, se vuoi, aprire automaticamente un ticket.'],
       ['I transcript dei ticket vengono salvati?', 'Sì. Alla chiusura Dispatch genera un transcript HTML, lo invia al canale archivio (e all’utente se lo abiliti) e lo conserva cifrato con una retention configurabile.'],
-      ['Lo staff può valutare e premiare i moderatori?', 'Gli utenti valutano il ticket con le stelle, il voto va al moderatore che lo ha preso in carico e Dispatch può pubblicare una classifica settimanale o mensile.']
+      ['Lo staff può valutare e premiare i moderatori?', 'Gli utenti valutano il ticket con le stelle, il voto va al moderatore che lo ha preso in carico e con i piani Pro e Brand Dispatch può pubblicare una classifica settimanale o mensile dei moderatori.'],
+      ['Dispatch è gratuito?', 'Sì: il piano Free include ticket, pannelli, form, transcript, log dei ticket e valutazioni, per ogni server e senza scadenza. I piani a pagamento Plus, Pro e Brand alzano i limiti e la conservazione e aggiungono automazioni SLA, thread staff, classifica moderatori e personalizzazione del bot; si attivano contattando il gestore, come spiegato nella pagina dei prezzi.']
     ]
   },
   cta: { title: 'Porta ordine nel supporto del tuo server.', text: 'Aggiungi il bot, accedi con Discord e pubblica il primo pannello in pochi minuti.' },
@@ -216,7 +219,7 @@ const homeEn: HomeCopy = {
       { icon: 'ticket', kicker: 'Intake', title: 'Ticket panels and menu', text: 'Button panels and a main menu to pick a category. Each category has its own channel, staff roles and limits.' },
       { icon: 'clipboard', kicker: 'Forms', title: 'Forms and questionnaires', text: 'Applications and questionnaires with validated questions, DM or ephemeral delivery, scheduling and per-role permissions. Answers can open a ticket.' },
       { icon: 'userCheck', kicker: 'Staff', title: 'Claims, assignment, priorities', text: 'Staff claim, assign, move tickets between categories and set status and priority, from Discord or the dashboard.' },
-      { icon: 'clock', kicker: 'SLA', title: 'SLAs and escalation', text: 'First-response and resolution targets per category, inactivity warnings, auto-close and escalation to the roles in charge.' },
+      { icon: 'clock', kicker: 'SLA', title: 'SLAs and escalation', text: 'First-response and resolution targets per category, inactivity warnings, auto-close and escalation to the roles in charge, from the Plus plan.' },
       { icon: 'file', kicker: 'Archive', title: 'Transcripts', text: 'HTML transcripts generated on close, sent to an archive channel or the user, encrypted at rest with configurable retention.' },
       { icon: 'chart', kicker: 'Analytics', title: 'Analytics and feedback', text: 'Daily volumes, average times, SLA breaches, user ratings and staff activity in a single view.' },
       { icon: 'ban', kicker: 'Protection', title: 'Anti-spam and blacklist', text: 'Cooldowns, open-ticket limits and attempt windows stop abuse; the blacklist keeps problem users out.' },
@@ -264,7 +267,8 @@ const homeEn: HomeCopy = {
       ['Does Dispatch need Administrator permission?', 'No. The bot only asks for the permissions needed to create and manage ticket channels, threads and messages.'],
       ['Can I build forms and staff applications?', 'Yes. Forms collect validated answers, can be sent by DM or as ephemeral messages, restricted by role and, if you want, open a ticket automatically.'],
       ['Are ticket transcripts saved?', 'Yes. On close Dispatch generates an HTML transcript, sends it to your archive channel (and to the user if enabled) and keeps it encrypted with configurable retention.'],
-      ['Can members rate the staff?', 'Members rate each ticket with stars, the rating goes to the moderator who claimed it, and Dispatch can post a weekly or monthly moderator leaderboard.']
+      ['Can members rate the staff?', 'Members rate each ticket with stars, the rating goes to the moderator who claimed it, and on the Pro and Brand plans Dispatch can post a weekly or monthly moderator leaderboard.'],
+      ['Is Dispatch free?', 'Yes: the Free plan includes tickets, panels, forms, transcripts, the ticket log and ratings, for every server and with no time limit. The paid Plus, Pro and Brand plans raise the limits and retention and add SLA automations, staff threads, the moderator leaderboard and bot branding; they are activated by contacting the operator, as explained on the pricing page.']
     ]
   },
   cta: { title: 'Bring order to your server support.', text: 'Add the bot, sign in with Discord and publish your first panel in minutes.' },
