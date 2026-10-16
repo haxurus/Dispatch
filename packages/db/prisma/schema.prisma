@@ -56,14 +56,21 @@ model GuildSettings {
   // retention (see apps/api/src/guild-purge.ts).
   leftAt        DateTime?
 
-  // Plan (packages/shared/src/plans.ts), set from the super console.
-  // planNote and planCouponCode are visible to the instance owner only.
+  // Plan (packages/shared/src/plans.ts). planTier/planExpiresAt: a plan given
+  // from the super console (planNote is visible to the instance owner only).
   planTier       String    @default("FREE")
-  planBilling    String?
   planExpiresAt  DateTime?
-  planCouponCode String?
   planNote       String?
   planUpdatedAt  DateTime?
+  // Discord guild subscription mirrored by the bot (apps/bot/src/subscriptions.ts);
+  // subscriptionEndsAt is set once it is cancelled, refunded or gone.
+  subscriptionTier          String?
+  subscriptionEndsAt        DateTime?
+  subscriptionEntitlementId String?
+  subscriptionSyncedAt      DateTime?
+  // Plan whose limits were last applied: the API sweep brings the server within
+  // a lower plan when the one in force drops below it.
+  planLimitsTier String    @default("FREE")
   // Brand plan: bot nickname and banner set on this server.
   brandNickname  String?
   brandBannerSet Boolean   @default(false)
@@ -581,6 +588,8 @@ model StatusChannel {
   updatedAt       DateTime @updatedAt
 }
 
+// No longer used (plans are sold only through Discord). Kept until every
+// installed harden-users.sh has stopped granting on it, then dropped.
 model Coupon {
   id              String    @id @default(cuid())
   code            String    @unique

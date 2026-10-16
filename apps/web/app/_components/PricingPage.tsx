@@ -1,7 +1,7 @@
 import PricingView from './PricingView';
 import type { Locale } from '../i18n';
 import { SITE_URL } from '../site';
-import { FALLBACK_DISCOUNTS, FALLBACK_PLANS, TIER_ORDER, type Plan, type PublicInfo } from './plans';
+import { FALLBACK_PLANS, TIER_ORDER, type Plan, type PublicInfo } from './plans';
 
 const apiOrigin = process.env.INTERNAL_API_URL || 'http://api:3001';
 
@@ -9,11 +9,11 @@ const isPlan = (value: unknown): value is Plan => {
   const plan = value as Partial<Plan> | null;
   return Boolean(plan && typeof plan === 'object' &&
     typeof plan.tier === 'string' && (TIER_ORDER as string[]).includes(plan.tier) &&
-    typeof plan.name === 'string' && typeof plan.monthlyCents === 'number' && typeof plan.yearlyCents === 'number' &&
+    typeof plan.name === 'string' && typeof plan.monthlyCents === 'number' &&
     plan.limits && typeof plan.limits === 'object' && plan.features && typeof plan.features === 'object');
 };
 
-/** Live catalogue, contacts and promotions; null when the API cannot be reached. */
+/** Live catalogue and contacts; null when the API cannot be reached. */
 async function loadInfo(): Promise<PublicInfo | null> {
   try {
     const response = await fetch(`${apiOrigin}/api/public/info`, { cache: 'no-store', signal: AbortSignal.timeout(4_000) });
@@ -29,23 +29,19 @@ async function loadInfo(): Promise<PublicInfo | null> {
         discord: body.contacts?.discord ?? null,
         url: body.contacts?.url ?? null
       },
-      plans,
-      multiSubscriptionDiscounts: Array.isArray(body.multiSubscriptionDiscounts) ? body.multiSubscriptionDiscounts : FALLBACK_DISCOUNTS,
-      promotions: Array.isArray(body.promotions) ? body.promotions : []
+      plans
     };
   } catch {
     return null;
   }
 }
 
-/** Server component: plans and promotions come from the API at request time. */
+/** Server component: plans and contacts come from the API at request time. */
 export default async function PricingPage({ locale }: { locale: Locale }) {
   const info = await loadInfo();
   const fallback: PublicInfo = {
     contacts: { email: null, discord: null, url: null },
-    plans: FALLBACK_PLANS,
-    multiSubscriptionDiscounts: FALLBACK_DISCOUNTS,
-    promotions: []
+    plans: FALLBACK_PLANS
   };
   return <PricingView locale={locale} info={info ?? fallback} live={info !== null} siteUrl={SITE_URL} />;
 }

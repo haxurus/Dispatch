@@ -28,6 +28,7 @@ import { reserveTicketOpen, getTicketOpenReservation, consumeTicketOpenReservati
 import { panelComponents, panelEmbed, panelStyle } from './panels.js';
 import { guildLocale, guildMessages, localizedMenuDefault, messages, type BotLocale, type BotMessages } from './i18n.js';
 import { guildAllows } from './plan.js';
+import { DISCORD_PLAN_SKUS, requiredTierFor, type PlanTier } from '@dispatch/shared';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 const PANEL_SELECT_PREFIX = 'dispatch:open:';
@@ -1206,6 +1207,13 @@ const staffThreadErrors = (m: BotMessages): Record<string, string> => ({
   TICKET_CHANNEL_DELETED: m.staffThread.inactive
 });
 
+// Discord's own "subscribe" button for a plan, once its SKU exists.
+function premiumComponents(tier: PlanTier) {
+  const sku = tier === 'FREE' ? null : DISCORD_PLAN_SKUS[tier];
+  if (!sku) return [];
+  return [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Premium).setSKUId(sku))];
+}
+
 // Staff only (category staff roles, Manage Server/Channels), never the opener,
 // active tickets only. Joins the live staff thread or creates it.
 async function staffThreadInteraction(interaction: ButtonInteraction) {
@@ -1243,6 +1251,7 @@ async function staffThreadInteraction(interaction: ButtonInteraction) {
     const code = error instanceof Error ? error.message : '';
     await interaction.editReply({
       content: staffThreadErrors(m)[code] ?? m.staffThread.failed,
+      components: code === 'PLAN_REQUIRED' ? premiumComponents(requiredTierFor('staffThreads')) : [],
       allowedMentions: { parse: [] }
     }).catch(() => null);
   }

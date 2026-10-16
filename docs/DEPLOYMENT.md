@@ -339,8 +339,10 @@ sudo rm -f /srv/docker/dispatch/secrets/redis_password
 
 ## Plans
 
-- Plans are set per server in **Super console → server list → Edit plan** (tier, billing period, expiry, coupon, note). Coupons and the contacts shown on the pricing page are managed in the super console too.
-- The plans migration adds the `Coupon` and `InstanceConfig` tables: re-run the installer (new grants in `harden-users.sh`) **before** deploying it. Until then the super console shows the plans section as unavailable.
+- Paid plans are sold only through Discord. In the Developer Portal → **Monetization**: complete the team and payout setup, then create three **Guild Subscription** SKUs (Plus $1.99, Pro $4.99, Brand $8.99 a month, matching `monthlyCents` in `packages/shared/src/plans.ts`) and publish them. Put their IDs in `DISCORD_PLAN_SKUS` in the same file and deploy: until then purchases are not recognised and the super console shows a warning.
+- Test a SKU with a test entitlement (Developer Portal or `POST /applications/{id}/entitlements` with `owner_type` 1 and the server ID): the server's dashboard shows the plan within moments, and the status channel reports it.
+- Gifts (trials, partners, early adopters) are set per server in **Super console → server list → Edit gift** (plan, expiry, note); the higher of gift and subscription applies. The contacts shown on the pricing page are managed in the super console too.
+- The plans migrations need the `InstanceConfig` grants in `harden-users.sh`: re-run the installer after pulling. Until then the super console shows the plans section as unavailable.
 - The Brand plan sets the bot's nickname on a server, which needs **Change Nickname**: the install link (and the Developer Portal guild install permissions) is now `361112923152`. Servers that added the bot earlier must re-authorise it from `/backend/bot/invite` to use a custom nickname.
 
 ## 9. Rollback

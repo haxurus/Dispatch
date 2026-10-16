@@ -185,7 +185,7 @@ The hosted instance has a Free plan and three paid plans, defined once in [`pack
 
 | | Free | Plus | Pro | Brand |
 |---|---|---|---|---|
-| Price | free | €1.99/month · €19.99/year | €4.99/month · €49.99/year | €8.99/month · €89.99/year |
+| Price (Discord, monthly) | free | $1.99 | $4.99 | $8.99 |
 | Ticket categories | 3 | 10 | 30 | 50 |
 | Ticket panels | 2 | 5 | 15 | 25 |
 | Forms / form panels | 2 / 2 | 5 / 5 | 15 / 25 | 30 / 25 |
@@ -200,7 +200,7 @@ The hosted instance has a Free plan and three paid plans, defined once in [`pack
 | Bot nickname and banner per server, custom panel footer | | | | ✓ |
 | Priority support | | ✓ | ✓ | ✓ |
 
-Paying for several servers at once: 15% off from 2, 20% from 3, 25% from 5. Plans are activated by the operator from the super console (no online payments): the server owner gets in touch, pays as agreed and the plan is set with its billing period and expiry. When a plan expires or is lowered, the server returns to the lower plan: features above it stop working in the bot (their settings are kept), retention is capped, extra dashboard role bindings are removed and the bot branding is reset. Servers that used Dispatch before plans existed received Brand as a gift.
+Paid plans are sold **only through Discord**, as monthly guild subscriptions ([Premium Apps](https://docs.discord.com/developers/monetization/overview)): the pricing page, the dashboard and the bot's *Subscribe* buttons open the Dispatch store on Discord. Discord sets the price in US dollars and localises it at checkout; the bot mirrors each server's subscription (`apps/bot/src/subscriptions.ts`). The operator can also give a plan from the super console (a gift, optionally with an expiry); the higher of the two applies. When a plan ends or is lowered, the server returns to the lower plan: features above it stop working in the bot (their settings are kept), retention is capped, extra dashboard role bindings are removed and the bot branding is reset. Servers that used Dispatch before plans existed received Brand as a gift.
 
 ## Super console
 
@@ -209,7 +209,7 @@ The super console (`/super`, API `/api/super/*`) is available only to the Discor
 - metrics and the list of connected servers, live from the bot, with their ticket counts; leave a server, or block it and leave;
 - the **installation blacklist**: servers and Discord users with an optional reason. Blocked servers are left even if the bot is added again. A blocked user is recognised only where the bot can read the server's audit log, which the default invite does not grant;
 - the **status channel**: one server and channel that receives bot startup, servers added or removed and rejected installations, with a test message. These notices never contain ticket content;
-- **plans**: plan, billing period, expiry, coupon and internal note per server, coupons (percentage or fixed amount, tiers, billing, validity, redemptions, public promotions) and the contacts shown on the pricing page;
+- **plans**: the Discord subscription of each server (read-only), a gift plan with expiry and internal note per server, a warning for Discord SKUs not configured yet, and the contacts shown on the pricing page;
 - an audit log of every super console action (details encrypted, IP addresses stored as keyed hashes). Changes are limited to 30 per minute per session.
 
 When the bot is removed from a server, the API deletes all of that server's data 30 days later, unless the bot is added again in the meantime.

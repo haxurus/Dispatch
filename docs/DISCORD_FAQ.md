@@ -58,7 +58,7 @@ When a ticket is closed the member can rate it 1–5 ★; the rating goes to the
 Free covers tickets, panels, forms, transcripts, ticket log and ratings, with limits (3 categories, 2 panels, 2 forms, 5 canned replies, 15-day retention). **Plus** adds SLAs, escalation, auto-close and staff threads; **Pro** the moderator leaderboard and the closed-ticket category; **Brand** a custom bot nickname, banner and panel footer. Limits grow with each plan: https://dispatch.haxurus.com/en/pricing — the dashboard **Overview** shows your plan and usage.
 
 **How do I upgrade?**
-Contact us (details on the pricing page): plans are activated by hand for your server, monthly or yearly, with discounts for several servers. Dispatch is open source (AGPL-3.0): https://github.com/haxurus/Dispatch
+Plans are monthly subscriptions on Discord: open the Dispatch store (the *Subscribe on Discord* buttons on the pricing page or in the dashboard, or the bot's profile), pick the plan and your server. It turns on within moments; cancel any time from Discord settings → Subscriptions. Dispatch is open source (AGPL-3.0): https://github.com/haxurus/Dispatch
 
 ---
 
