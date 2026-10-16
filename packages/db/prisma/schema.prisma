@@ -588,6 +588,27 @@ model StatusChannel {
   updatedAt       DateTime @updatedAt
 }
 
+// No longer used (plans are sold only through Discord). Kept until every
+// installed harden-users.sh has stopped granting on it, then dropped.
+model Coupon {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  description     String?
+  percentOff      Int?
+  amountOffCents  Int?
+  tiers           String[]  @default([])
+  billing         String    @default("ANY")
+  maxRedemptions  Int?
+  redemptions     Int       @default(0)
+  validFrom       DateTime?
+  validUntil      DateTime?
+  active          Boolean   @default(true)
+  public          Boolean   @default(false)
+  createdByUserId String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
 // Single row (id = 1): contacts shown on the pricing page.
 model InstanceConfig {
   id             Int      @id @default(1)

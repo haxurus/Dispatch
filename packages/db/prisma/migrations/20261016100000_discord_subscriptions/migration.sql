@@ -2,7 +2,8 @@
 -- the bot mirrors each server's running entitlement here. Plans given from the
 -- super console are gifts, so billing periods and coupons go away.
 
-DROP TABLE "Coupon";
+-- "Coupon" is no longer used but stays until every installed harden-users.sh
+-- has stopped granting on it (a GRANT on a missing table fails the deploy).
 
 ALTER TABLE "GuildSettings"
 DROP COLUMN "planBilling",
