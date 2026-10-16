@@ -5,7 +5,7 @@ import { CONTACT_EMAIL, REPO_URL } from '../site';
 type Section = { title: string; body: Array<string | string[]> };
 type Doc = { id: string; kicker: string; title: string; intro: string; sections: Section[] };
 
-const UPDATED = { it: '13 ottobre 2026', en: '13 October 2026' };
+const UPDATED = { it: '17 ottobre 2026', en: '17 October 2026' };
 
 const copy: Record<Locale, { kicker: string; title: string; intro: string; updated: string; toc: string; home: string; pricing: string; docs: Doc[] }> = {
   en: {
@@ -34,7 +34,8 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
               'for every ticket: the user who opened it, the staff members who claimed, handled or closed it, its category, status, priority, timestamps and the answers to the category’s questions;',
               'the messages of a ticket channel and of its private staff thread, only when a transcript is generated (at close or on request), so that the conversation can be archived;',
               'form answers, staff notes, close reasons, ratings and their optional comments, and blacklist reasons;',
-              'technical records needed for anti-spam: ticket-opening attempts and their timestamps.'
+              'technical records needed for anti-spam: ticket-opening attempts and their timestamps;',
+              'for servers with a paid plan: the plan, the identifier of the Discord subscription and when it ends, as provided by Discord. Payments are handled entirely by Discord: we never receive card or payment details.'
             ],
             'Dispatch does not read messages outside ticket channels and staff threads, and only notes the time of the last activity while a ticket is open.',
             'When you sign in to the dashboard with Discord: your Discord user ID, username, avatar and the list of servers you belong to (scopes identify and guilds), plus a log of the changes you make in the panel with a one-way hash of your IP address.',
@@ -62,7 +63,7 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
             'Transcripts, form answers, staff notes, close reasons, rating comments, blacklist reasons and session data are encrypted at rest with AES-256-GCM. The bot asks for no Administrator permission, and the bot, the API and the website each have their own database permissions. The code is open source, so these measures can be verified on GitHub.'
           ] },
           { title: 'Sharing', body: [
-            'We do not sell data and we do not use it for advertising or profiling. Data is shared only with the providers needed to run the service: Discord (the platform the bot works on), Cloudflare (network delivery and protection) and our hosting provider. Transcripts and logs are posted only in the channels configured by each server’s administrators, and to the ticket’s author when the server enables it.'
+            'We do not sell data and we do not use it for advertising or profiling. Data is shared only with the providers needed to run the service: Discord (the platform the bot works on, which also sells and bills the paid plans), Cloudflare (network delivery and protection) and our hosting provider. Transcripts and logs are posted only in the channels configured by each server’s administrators, and to the ticket’s author when the server enables it.'
           ] },
           { title: 'Cookies', body: [
             'We use only strictly necessary cookies: a session cookie when you sign in, a short-lived cookie that protects the Discord sign-in, and a cookie that remembers your language for one year. There are no analytics or advertising cookies.'
@@ -97,8 +98,10 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
             'To keep the shared service fair, each server has limits on categories, panels, forms, response templates, dashboard roles, blacklist entries and on how long closed tickets and transcripts can be kept. Most limits depend on the server’s plan and are listed on the pricing page; they are shown in the dashboard when reached.'
           ] },
           { title: 'Plans and payments', body: [
-            'The Free plan is available to everyone. Paid plans (Plus, Pro, Brand) are activated by the operator after the server owner requests them. Online payments are not available yet: the price and the payment are agreed directly with you before activation, and any refund is agreed case by case, without prejudice to your statutory rights.',
-            'A paid plan applies to one server for the agreed period. When it expires, the server returns to the Free plan: features outside it stop working and its limits apply again, including the maximum retention, so older closed tickets and transcripts are deleted by the regular retention. Your configuration is not deleted, except dashboard roles above the Free limit and the custom bot nickname and banner, which are reset.'
+            'The Free plan is available to everyone. Paid plans (Plus, Pro, Brand) are monthly subscriptions sold only through Discord, from the Dispatch store, and are subject to Discord’s terms for paid services and its refund policy. Discord shows the final price in your currency, with any taxes, before you buy; the prices on our pricing page are list prices in US dollars.',
+            'A subscription applies to one server and renews every month until cancelled from your Discord settings; after cancelling, the plan stays active until the end of the period already paid. The operator may also grant a plan for free (for example a trial), with or without an end date.',
+            'When a subscription or a granted plan ends, the server returns to the Free plan: features outside it stop working and its limits apply again, including the maximum retention, so older closed tickets and transcripts are deleted by the regular retention. Your configuration is not deleted, except dashboard roles above the Free limit and the custom bot nickname and banner, which are reset.',
+            'If we change what a paid plan includes in a way that reduces it, we will announce it on our Discord server and on this page before it takes effect, so that you can cancel before then. Questions about a subscription: write to us; payment and refund requests are handled by Discord support.'
           ] },
           { title: 'Availability', body: [
             'We work to keep Dispatch available and reliable, but the service is provided “as is” and “as available”, without guaranteed uptime. Discord outages, missing bot permissions or maintenance can delay or prevent tickets, transcripts and logs.'
@@ -143,7 +146,8 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
               'per ogni ticket: chi l’ha aperto, i membri dello staff che l’hanno preso in carico, gestito o chiuso, categoria, stato, priorità, orari e le risposte alle domande della categoria;',
               'i messaggi del canale del ticket e del suo thread staff privato, solo quando viene generato un transcript (alla chiusura o su richiesta), per archiviare la conversazione;',
               'risposte ai form, note dello staff, motivi di chiusura, valutazioni con l’eventuale commento e motivi della blacklist;',
-              'registrazioni tecniche necessarie all’anti-spam: tentativi di apertura dei ticket e relativi orari.'
+              'registrazioni tecniche necessarie all’anti-spam: tentativi di apertura dei ticket e relativi orari.',
+              'per i server con un piano a pagamento: il piano, l’identificativo dell’abbonamento Discord e la sua data di fine, forniti da Discord. I pagamenti sono gestiti interamente da Discord: non riceviamo mai dati di carte o di pagamento.'
             ],
             'Dispatch non legge i messaggi al di fuori dei canali dei ticket e dei thread staff, e mentre un ticket è aperto registra solo l’orario dell’ultima attività.',
             'Quando accedi alla dashboard con Discord: il tuo ID utente, username, avatar e l’elenco dei server di cui fai parte (scope identify e guilds), più un registro delle modifiche che fai nel pannello con un hash non reversibile del tuo indirizzo IP.',
@@ -171,7 +175,7 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
             'Transcript, risposte ai form, note dello staff, motivi di chiusura, commenti alle valutazioni, motivi della blacklist e dati di sessione sono cifrati con AES-256-GCM. Il bot non chiede il permesso Administrator, e bot, API e sito hanno permessi separati sul database. Il codice è open source, quindi queste misure sono verificabili su GitHub.'
           ] },
           { title: 'Condivisione', body: [
-            'Non vendiamo i dati e non li usiamo per pubblicità o profilazione. Li condividiamo solo con i fornitori necessari al servizio: Discord (la piattaforma su cui opera il bot), Cloudflare (distribuzione e protezione di rete) e il nostro fornitore di hosting. Transcript e log vengono pubblicati solo nei canali configurati dagli amministratori di ciascun server, e all’autore del ticket se il server lo abilita.'
+            'Non vendiamo i dati e non li usiamo per pubblicità o profilazione. Li condividiamo solo con i fornitori necessari al servizio: Discord (la piattaforma su cui opera il bot, che vende e incassa anche i piani a pagamento), Cloudflare (distribuzione e protezione di rete) e il nostro fornitore di hosting. Transcript e log vengono pubblicati solo nei canali configurati dagli amministratori di ciascun server, e all’autore del ticket se il server lo abilita.'
           ] },
           { title: 'Cookie', body: [
             'Usiamo solo cookie tecnici necessari: un cookie di sessione quando accedi, un cookie di breve durata che protegge l’accesso con Discord e un cookie che ricorda la lingua per un anno. Non ci sono cookie di statistica o pubblicità.'
@@ -206,8 +210,10 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
             'Per mantenere equo il servizio condiviso, ogni server ha dei limiti su categorie, pannelli, form, risposte rapide, ruoli della dashboard, voci della blacklist e sulla durata di conservazione di ticket chiusi e transcript. La maggior parte dei limiti dipende dal piano del server ed è indicata nella pagina dei prezzi; quando vengono raggiunti la dashboard lo segnala.'
           ] },
           { title: 'Piani e pagamenti', body: [
-            'Il piano Free è disponibile per tutti. I piani a pagamento (Plus, Pro, Brand) vengono attivati dal gestore su richiesta del proprietario del server. I pagamenti online non sono ancora disponibili: prezzo e pagamento vengono concordati direttamente con te prima dell’attivazione, e gli eventuali rimborsi caso per caso, fatti salvi i diritti previsti dalla legge.',
-            'Un piano a pagamento vale per un server per il periodo concordato. Alla scadenza il server torna al piano Free: le funzioni non incluse smettono di funzionare e si applicano di nuovo i suoi limiti, compresa la conservazione massima, quindi ticket chiusi e transcript più vecchi vengono cancellati dalla normale pulizia. La configurazione non viene cancellata, tranne i ruoli della dashboard oltre il limite del Free e il nickname e il banner personalizzati del bot, che vengono reimpostati.'
+            'Il piano Free è disponibile per tutti. I piani a pagamento (Plus, Pro, Brand) sono abbonamenti mensili venduti solo tramite Discord, dallo store di Dispatch, e sono soggetti ai termini di Discord per i servizi a pagamento e alla sua politica di rimborso. Discord mostra il prezzo finale nella tua valuta, con le eventuali imposte, prima dell’acquisto; i prezzi della nostra pagina dei prezzi sono di listino, in dollari USA.',
+            'Un abbonamento vale per un server e si rinnova ogni mese finché non lo disdici dalle impostazioni di Discord; dopo la disdetta il piano resta attivo fino alla fine del periodo già pagato. Il gestore può anche concedere un piano gratuitamente (per esempio una prova), con o senza data di fine.',
+            'Quando un abbonamento o un piano concesso finisce, il server torna al piano Free: le funzioni non incluse smettono di funzionare e si applicano di nuovo i suoi limiti, compresa la conservazione massima, quindi ticket chiusi e transcript più vecchi vengono cancellati dalla normale pulizia. La configurazione non viene cancellata, tranne i ruoli della dashboard oltre il limite del Free e il nickname e il banner personalizzati del bot, che vengono reimpostati.',
+            'Se cambiamo il contenuto di un piano a pagamento riducendolo, lo annunceremo sul nostro server Discord e su questa pagina prima che abbia effetto, così da permetterti di disdire prima. Per domande su un abbonamento scrivici; le richieste di pagamento e di rimborso sono gestite dal supporto di Discord.'
           ] },
           { title: 'Disponibilità', body: [
             'Lavoriamo per mantenere Dispatch disponibile e affidabile, ma il servizio è fornito “così com’è” e “come disponibile”, senza garanzie di continuità. Disservizi di Discord, permessi mancanti del bot o manutenzioni possono ritardare o impedire ticket, transcript e log.'

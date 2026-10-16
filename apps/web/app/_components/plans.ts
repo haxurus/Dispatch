@@ -34,30 +34,21 @@ export type Plan = {
   tier: PlanTier;
   name: string;
   level: number;
+  /** Monthly price in US cents (the Discord SKU price, localised by Discord at checkout). */
   monthlyCents: number;
-  yearlyCents: number;
   limits: PlanLimits;
   features: PlanFeatures;
 };
 
 export type Contacts = { email: string | null; discord: string | null; url: string | null };
-export type MultiSubscriptionDiscount = { minSubscriptions: number; percentOff: number };
-export type Promotion = {
-  code: string;
-  description: string | null;
-  percentOff: number | null;
-  amountOffCents: number | null;
-  tiers: string[];
-  billing: string;
-  validUntil: string | null;
-};
 
 export type PublicInfo = {
   contacts: Contacts;
   plans: Plan[];
-  multiSubscriptionDiscounts: MultiSubscriptionDiscount[];
-  promotions: Promotion[];
 };
+
+/** Plans are bought only on Discord: the API redirects to the app's store (the plan's SKU). */
+export const storeHref = (tier?: PaidTier) => `/backend/bot/store${tier ? `?plan=${tier}` : ''}`;
 
 export const TIER_ORDER: PlanTier[] = ['FREE', 'TIER1', 'TIER2', 'TIER3'];
 
@@ -65,31 +56,25 @@ export const TIER_ORDER: PlanTier[] = ['FREE', 'TIER1', 'TIER2', 'TIER3'];
 /** Copy of the shared catalogue, used only when the API cannot be reached. */
 export const FALLBACK_PLANS: Plan[] = [
   {
-    tier: 'FREE', name: 'Free', level: 0, monthlyCents: 0, yearlyCents: 0,
+    tier: 'FREE', name: 'Free', level: 0, monthlyCents: 0,
     limits: { categories: 3, ticketPanels: 2, forms: 2, formPanels: 2, responseTemplates: 5, roleBindings: 1, retentionDays: 15 },
     features: { automations: false, staffThreads: false, leaderboard: false, closedCategory: false, customBranding: false, prioritySupport: false }
   },
   {
-    tier: 'TIER1', name: 'Plus', level: 1, monthlyCents: 199, yearlyCents: 1_999,
+    tier: 'TIER1', name: 'Plus', level: 1, monthlyCents: 199,
     limits: { categories: 10, ticketPanels: 5, forms: 5, formPanels: 5, responseTemplates: 15, roleBindings: 3, retentionDays: 30 },
     features: { automations: true, staffThreads: true, leaderboard: false, closedCategory: false, customBranding: false, prioritySupport: true }
   },
   {
-    tier: 'TIER2', name: 'Pro', level: 2, monthlyCents: 499, yearlyCents: 4_999,
+    tier: 'TIER2', name: 'Pro', level: 2, monthlyCents: 499,
     limits: { categories: 30, ticketPanels: 15, forms: 15, formPanels: 25, responseTemplates: 25, roleBindings: 10, retentionDays: 60 },
     features: { automations: true, staffThreads: true, leaderboard: true, closedCategory: true, customBranding: false, prioritySupport: true }
   },
   {
-    tier: 'TIER3', name: 'Brand', level: 3, monthlyCents: 899, yearlyCents: 8_999,
+    tier: 'TIER3', name: 'Brand', level: 3, monthlyCents: 899,
     limits: { categories: 50, ticketPanels: 25, forms: 30, formPanels: 25, responseTemplates: 50, roleBindings: 10, retentionDays: 90 },
     features: { automations: true, staffThreads: true, leaderboard: true, closedCategory: true, customBranding: true, prioritySupport: true }
   }
-];
-
-export const FALLBACK_DISCOUNTS: MultiSubscriptionDiscount[] = [
-  { minSubscriptions: 5, percentOff: 25 },
-  { minSubscriptions: 3, percentOff: 20 },
-  { minSubscriptions: 2, percentOff: 15 }
 ];
 
 /** Used when the operator has not set any contact in the super console. */
@@ -99,9 +84,10 @@ export const hasContacts = (contacts: Contacts | null | undefined): contacts is 
   Boolean(contacts && (contacts.email || contacts.discord || contacts.url));
 
 export function formatPrice(cents: number, locale: Locale) {
-  return new Intl.NumberFormat(locale === 'it' ? 'it-IT' : 'en-IE', {
+  return new Intl.NumberFormat(locale === 'it' ? 'it-IT' : 'en-US', {
     style: 'currency',
-    currency: 'EUR',
+    currency: 'USD',
+    currencyDisplay: 'narrowSymbol',
     minimumFractionDigits: cents % 100 ? 2 : 0,
     maximumFractionDigits: 2
   }).format(cents / 100);

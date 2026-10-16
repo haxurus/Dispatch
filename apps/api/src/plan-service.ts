@@ -2,11 +2,10 @@ import type { FastifyBaseLogger } from 'fastify';
 import { prisma } from '@dispatch/db';
 import {
   PLANS,
-  couponProblem,
   effectiveTier,
-  normalizeCouponCode,
+  isPlanTier,
   planLimits,
-  type BillingPeriod,
+  tierLevel,
   type PlanFeature,
   type PlanTier
 } from '@dispatch/shared';
@@ -21,8 +20,13 @@ export class PlanError extends Error {
   }
 }
 
+/** Columns effectiveTier() needs. */
+export const planStateSelect = {
+  planTier: true, planExpiresAt: true, subscriptionTier: true, subscriptionEndsAt: true
+} as const;
+
 export async function guildTier(guildId: string) {
-  const row = await prisma.guildSettings.findUnique({ where: { guildId }, select: { planTier: true, planExpiresAt: true } });
+  const row = await prisma.guildSettings.findUnique({ where: { guildId }, select: planStateSelect });
   const tier: PlanTier = row ? effectiveTier(row) : 'FREE';
   return { tier, limits: planLimits(tier), plan: PLANS[tier] };
 }
@@ -85,51 +89,32 @@ export async function applyPlanLimits(guildId: string, tier: PlanTier, log: Logg
   return { retentionChanged, bindingsRemoved: extraBindings.length, brandingReset };
 }
 
+/** A plan given from the super console (the Discord subscription is untouched). */
 export type PlanChange = {
   tier: PlanTier;
-  billing: BillingPeriod | null;
   expiresAt: Date | null;
-  couponCode: string | null;
   note: string | null;
 };
 
 export async function changeGuildPlan(guildId: string, change: PlanChange, log: Logger) {
-  const current = await prisma.guildSettings.findUnique({
-    where: { guildId },
-    select: { planTier: true, planCouponCode: true }
-  });
+  const current = await prisma.guildSettings.findUnique({ where: { guildId }, select: planStateSelect });
   if (!current) throw new PlanError('GUILD_NOT_FOUND', 404);
 
   const free = change.tier === 'FREE';
-  const couponCode = free || !change.couponCode ? null : normalizeCouponCode(change.couponCode);
-  // A coupon counts as redeemed once per server: re-saving the same plan
-  // with the same code does not consume it again.
-  const newCoupon = couponCode !== null && couponCode !== current.planCouponCode;
-  if (newCoupon) {
-    const coupon = await prisma.coupon.findUnique({ where: { code: couponCode! } });
-    if (!coupon) throw new PlanError('COUPON_NOT_FOUND', 404);
-    const problem = couponProblem(coupon, change.tier, change.billing);
-    if (problem) throw new PlanError(problem);
-  }
-
-  await prisma.$transaction([
-    prisma.guildSettings.update({
-      where: { guildId },
-      data: {
-        planTier: change.tier,
-        planBilling: free ? null : change.billing,
-        planExpiresAt: free ? null : change.expiresAt,
-        planCouponCode: couponCode,
-        planNote: change.note,
-        planUpdatedAt: new Date()
-      }
-    }),
-    ...(newCoupon ? [prisma.coupon.update({ where: { code: couponCode! }, data: { redemptions: { increment: 1 } } })] : [])
-  ]);
-
-  const tier = effectiveTier({ planTier: change.tier, planExpiresAt: free ? null : change.expiresAt });
+  const next = { ...current, planTier: change.tier, planExpiresAt: free ? null : change.expiresAt };
+  const tier = effectiveTier(next);
+  await prisma.guildSettings.update({
+    where: { guildId },
+    data: {
+      planTier: change.tier,
+      planExpiresAt: next.planExpiresAt,
+      planNote: change.note,
+      planUpdatedAt: new Date(),
+      planLimitsTier: tier
+    }
+  });
   const applied = await applyPlanLimits(guildId, tier, log);
-  return { previousTier: current.planTier, tier: change.tier, effectiveTier: tier, applied, couponRedeemed: newCoupon };
+  return { previousTier: current.planTier, tier: change.tier, effectiveTier: tier, applied };
 }
 
 export async function systemAudit(action: string, subjectType: string | null, subjectId: string | null, details: Record<string, unknown> = {}) {
@@ -145,25 +130,51 @@ export async function systemAudit(action: string, subjectType: string | null, su
   });
 }
 
-/** Expired plans fall back to Free and their configuration is brought within it. */
-export async function sweepExpiredPlans(log: Logger) {
-  const expired = await prisma.guildSettings.findMany({
-    where: { planTier: { not: 'FREE' }, planExpiresAt: { lte: new Date() } },
-    select: { guildId: true, planTier: true, planExpiresAt: true }
+/**
+ * Ended gifts and subscriptions are cleared, and a server whose plan in force
+ * dropped below the one whose limits were last applied (an expiry, a
+ * cancelled or refunded Discord subscription, a downgrade between Discord
+ * SKUs) is brought within the lower plan.
+ */
+export async function sweepPlans(log: Logger) {
+  const now = new Date();
+  const rows = await prisma.guildSettings.findMany({
+    where: {
+      OR: [
+        { planTier: { not: 'FREE' }, planExpiresAt: { lte: now } },
+        // Every subscription, so that planLimitsTier follows upgrades too.
+        { subscriptionTier: { not: null } },
+        { planLimitsTier: { not: 'FREE' } }
+      ]
+    },
+    select: { guildId: true, ...planStateSelect, planLimitsTier: true }
   });
-  for (const row of expired) {
+  let downgraded = 0;
+  for (const row of rows) {
     try {
+      const tier = effectiveTier(row, now);
+      const giftEnded = row.planTier !== 'FREE' && row.planExpiresAt !== null && row.planExpiresAt <= now;
+      const subscriptionEnded = row.subscriptionTier !== null && row.subscriptionEndsAt !== null && row.subscriptionEndsAt <= now;
+      const limitsTier: PlanTier = isPlanTier(row.planLimitsTier) ? row.planLimitsTier : 'FREE';
+      if (!giftEnded && !subscriptionEnded && limitsTier === tier) continue;
       await prisma.guildSettings.update({
         where: { guildId: row.guildId },
-        data: { planTier: 'FREE', planBilling: null, planCouponCode: null, planUpdatedAt: new Date() }
+        data: {
+          ...(giftEnded ? { planTier: 'FREE', planExpiresAt: null, planUpdatedAt: now } : {}),
+          ...(subscriptionEnded ? { subscriptionTier: null, subscriptionEndsAt: null, subscriptionEntitlementId: null } : {}),
+          planLimitsTier: tier
+        }
       });
-      const applied = await applyPlanLimits(row.guildId, 'FREE', log);
-      await systemAudit('plan.expired', 'GUILD', row.guildId, { previousTier: row.planTier, expiredAt: row.planExpiresAt, applied });
+      if (tierLevel(tier) < tierLevel(limitsTier)) {
+        const applied = await applyPlanLimits(row.guildId, tier, log);
+        await systemAudit('plan.downgraded', 'GUILD', row.guildId, { from: limitsTier, to: tier, giftEnded, subscriptionEnded, applied });
+        downgraded++;
+      }
     } catch (error) {
-      log.error({ err: error, guildId: row.guildId }, 'Unable to expire plan');
+      log.error({ err: error, guildId: row.guildId }, 'Unable to sweep plan');
     }
   }
-  return expired.length;
+  return downgraded;
 }
 
 export function startPlanSweep(log: Logger) {
@@ -172,8 +183,8 @@ export function startPlanSweep(log: Logger) {
     if (running) return;
     running = true;
     try {
-      const expired = await sweepExpiredPlans(log);
-      if (expired) log.info({ expired }, 'Expired plans moved to Free');
+      const downgraded = await sweepPlans(log);
+      if (downgraded) log.info({ downgraded }, 'Servers brought within a lower plan');
     } catch (error) {
       log.error({ err: error }, 'Plan expiry sweep failed');
     } finally {
@@ -188,7 +199,7 @@ export function startPlanSweep(log: Logger) {
 export async function guildPlanUsage(guildId: string) {
   const settings = await prisma.guildSettings.findUnique({
     where: { guildId },
-    select: { planTier: true, planExpiresAt: true, planBilling: true, brandNickname: true, brandBannerSet: true }
+    select: { ...planStateSelect, brandNickname: true, brandBannerSet: true }
   });
   if (!settings) return null;
   const tier = effectiveTier(settings);
@@ -200,11 +211,13 @@ export async function guildPlanUsage(guildId: string) {
     prisma.responseTemplate.count({ where: { guildId } }),
     prisma.panelRoleBinding.count({ where: { guildId } })
   ]);
+  const subscriptionRunning = effectiveTier({ subscriptionTier: settings.subscriptionTier, subscriptionEndsAt: settings.subscriptionEndsAt }) === tier && tier !== 'FREE';
   return {
-    tier: settings.planTier,
     effectiveTier: tier,
-    expiresAt: settings.planExpiresAt,
-    billing: settings.planBilling,
+    /** Where the plan in force comes from: a Discord subscription or a gift. */
+    source: tier === 'FREE' ? null : subscriptionRunning ? 'DISCORD' : 'GIFT',
+    /** When the plan in force ends (null: renews or no expiry). */
+    endsAt: tier === 'FREE' ? null : subscriptionRunning ? settings.subscriptionEndsAt : settings.planExpiresAt,
     plan: PLANS[tier],
     usage: { categories, ticketPanels, forms, formPanels, responseTemplates, roleBindings },
     branding: { nickname: settings.brandNickname, bannerSet: settings.brandBannerSet }

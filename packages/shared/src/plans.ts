@@ -3,16 +3,16 @@
  * bot (feature gates, retention), the API (quotas, validation, downgrades)
  * and, through the public API, the pricing page and the dashboard.
  *
- * Plans are activated by the operator from the super console (no online
- * payments). An expired plan behaves as Free; nothing is deleted on a
- * downgrade, features above the plan simply stop working.
+ * Paid plans are sold only through Discord (Premium Apps guild subscriptions,
+ * monthly): the bot mirrors each server's active entitlement into
+ * GuildSettings.subscription*. The operator can also give a plan from the
+ * super console (a gift, optionally with an expiry). The higher of the two is
+ * in force; an ended plan behaves as Free and nothing is deleted on a
+ * downgrade except what applyPlanLimits() resets.
  */
 
 export const PLAN_TIERS = ['FREE', 'TIER1', 'TIER2', 'TIER3'] as const;
 export type PlanTier = (typeof PLAN_TIERS)[number];
-
-export const BILLING_PERIODS = ['MONTHLY', 'YEARLY', 'GIFT'] as const;
-export type BillingPeriod = (typeof BILLING_PERIODS)[number];
 
 export type PlanLimits = {
   /** Ticket categories. */
@@ -54,8 +54,8 @@ export type PlanDefinition = {
   tier: PlanTier;
   name: string;
   level: number;
+  /** Monthly price in US cents, as set on the Discord SKU (Discord localises it). */
   monthlyCents: number;
-  yearlyCents: number;
   limits: PlanLimits;
   features: PlanFeatures;
 };
@@ -63,22 +63,22 @@ export type PlanDefinition = {
 
 export const PLANS: Record<PlanTier, PlanDefinition> = {
   FREE: {
-    tier: 'FREE', name: 'Free', level: 0, monthlyCents: 0, yearlyCents: 0,
+    tier: 'FREE', name: 'Free', level: 0, monthlyCents: 0,
     limits: { categories: 3, ticketPanels: 2, forms: 2, formPanels: 2, responseTemplates: 5, roleBindings: 1, retentionDays: 15 },
     features: { automations: false, staffThreads: false, leaderboard: false, closedCategory: false, customBranding: false, prioritySupport: false }
   },
   TIER1: {
-    tier: 'TIER1', name: 'Plus', level: 1, monthlyCents: 199, yearlyCents: 1_999,
+    tier: 'TIER1', name: 'Plus', level: 1, monthlyCents: 199,
     limits: { categories: 10, ticketPanels: 5, forms: 5, formPanels: 5, responseTemplates: 15, roleBindings: 3, retentionDays: 30 },
     features: { automations: true, staffThreads: true, leaderboard: false, closedCategory: false, customBranding: false, prioritySupport: true }
   },
   TIER2: {
-    tier: 'TIER2', name: 'Pro', level: 2, monthlyCents: 499, yearlyCents: 4_999,
+    tier: 'TIER2', name: 'Pro', level: 2, monthlyCents: 499,
     limits: { categories: 30, ticketPanels: 15, forms: 15, formPanels: 25, responseTemplates: 25, roleBindings: 10, retentionDays: 60 },
     features: { automations: true, staffThreads: true, leaderboard: true, closedCategory: true, customBranding: false, prioritySupport: true }
   },
   TIER3: {
-    tier: 'TIER3', name: 'Brand', level: 3, monthlyCents: 899, yearlyCents: 8_999,
+    tier: 'TIER3', name: 'Brand', level: 3, monthlyCents: 899,
     limits: { categories: 50, ticketPanels: 25, forms: 30, formPanels: 25, responseTemplates: 50, roleBindings: 10, retentionDays: 90 },
     features: { automations: true, staffThreads: true, leaderboard: true, closedCategory: true, customBranding: true, prioritySupport: true }
   }
@@ -90,18 +90,29 @@ export const FIXED_LIMITS = {
   formRoleBindings: 50
 } as const;
 
-/**
- * Discount for a customer who pays for several servers at once, by number of
- * paid subscriptions (highest threshold first).
- */
-export const MULTI_SUBSCRIPTION_DISCOUNTS = [
-  { minSubscriptions: 5, percentOff: 25 },
-  { minSubscriptions: 3, percentOff: 20 },
-  { minSubscriptions: 2, percentOff: 15 }
-] as const;
+/** Currency of monthlyCents: Discord SKU prices are set in US dollars. */
+export const PLAN_CURRENCY = 'USD';
 
-export const multiSubscriptionPercent = (subscriptions: number) =>
-  MULTI_SUBSCRIPTION_DISCOUNTS.find((discount) => subscriptions >= discount.minSubscriptions)?.percentOff ?? 0;
+/**
+ * Discord guild subscription SKU of each paid plan (Developer Portal →
+ * Monetization → SKUs). null until the SKU exists: the store link then opens
+ * the app's store page and no entitlement maps to that plan.
+ */
+export const DISCORD_PLAN_SKUS: Record<Exclude<PlanTier, 'FREE'>, string | null> = {
+  TIER1: null,
+  TIER2: null,
+  TIER3: null
+};
+
+export function tierForSku(skuId: string): PlanTier | null {
+  const entry = Object.entries(DISCORD_PLAN_SKUS).find(([, sku]) => sku === skuId);
+  return entry ? (entry[0] as PlanTier) : null;
+}
+
+export const discordStoreUrl = (applicationId: string, tier?: PlanTier | null) => {
+  const sku = tier && tier !== 'FREE' ? DISCORD_PLAN_SKUS[tier] : null;
+  return `https://discord.com/application-directory/${applicationId}/store${sku ? `/${sku}` : ''}`;
+};
 
 export const isPlanTier = (value: unknown): value is PlanTier =>
   typeof value === 'string' && (PLAN_TIERS as readonly string[]).includes(value);
@@ -119,15 +130,63 @@ export const planAllows = (tier: PlanTier, feature: PlanFeature) => PLANS[tier].
 
 export const planLimits = (tier: PlanTier) => PLANS[tier].limits;
 
-/** The plan in force: an expired plan behaves as Free until it is renewed. */
-export function effectiveTier(
-  plan: { planTier?: string | null; planExpiresAt?: Date | string | null },
-  now: Date = new Date()
-): PlanTier {
-  const tier = isPlanTier(plan.planTier) ? plan.planTier : 'FREE';
-  if (tier === 'FREE' || !plan.planExpiresAt) return tier;
-  const expires = new Date(plan.planExpiresAt);
-  return Number.isNaN(expires.getTime()) || expires.getTime() > now.getTime() ? tier : 'FREE';
+const activeTier = (tier: string | null | undefined, endsAt: Date | string | null | undefined, now: Date): PlanTier => {
+  if (!isPlanTier(tier) || tier === 'FREE') return 'FREE';
+  if (!endsAt) return tier;
+  const end = new Date(endsAt);
+  return Number.isNaN(end.getTime()) || end.getTime() > now.getTime() ? tier : 'FREE';
+};
+
+export type PlanState = {
+  /** Plan given from the super console and its optional expiry. */
+  planTier?: string | null;
+  planExpiresAt?: Date | string | null;
+  /** Discord subscription mirrored by the bot; endsAt is set once it is cancelled. */
+  subscriptionTier?: string | null;
+  subscriptionEndsAt?: Date | string | null;
+};
+
+/** The plan in force: the higher of the gift and the Discord subscription still running. */
+export function effectiveTier(plan: PlanState, now: Date = new Date()): PlanTier {
+  const gift = activeTier(plan.planTier, plan.planExpiresAt, now);
+  const subscription = activeTier(plan.subscriptionTier, plan.subscriptionEndsAt, now);
+  return tierLevel(subscription) > tierLevel(gift) ? subscription : gift;
+}
+
+/** Fields of a Discord entitlement used to find a server's subscription. */
+export type EntitlementLike = {
+  id: string;
+  skuId: string;
+  guildId: string | null;
+  deleted?: boolean;
+  startsAt?: Date | string | null;
+  endsAt?: Date | string | null;
+};
+
+/**
+ * The best running subscription among a server's entitlements: the highest
+ * plan, then the one that does not end (or ends last). Test entitlements have
+ * no dates and count as running.
+ */
+export function bestEntitlement<T extends EntitlementLike>(
+  entitlements: T[],
+  now: Date = new Date(),
+  tierOf: (skuId: string) => PlanTier | null = tierForSku
+) {
+  let best: { entitlement: T; tier: PlanTier } | null = null;
+  const endOf = (value: EntitlementLike) => (value.endsAt ? new Date(value.endsAt).getTime() : Infinity);
+  for (const entitlement of entitlements) {
+    if (entitlement.deleted) continue;
+    const tier = tierOf(entitlement.skuId);
+    if (!tier) continue;
+    if (entitlement.startsAt && new Date(entitlement.startsAt).getTime() > now.getTime()) continue;
+    if (endOf(entitlement) <= now.getTime()) continue;
+    if (!best || tierLevel(tier) > tierLevel(best.tier) ||
+      (tier === best.tier && endOf(entitlement) > endOf(best.entitlement))) {
+      best = { entitlement, tier };
+    }
+  }
+  return best;
 }
 
 /**
@@ -138,48 +197,6 @@ export function effectiveRetentionDays(setting: number | null | undefined, tier:
   const cap = PLANS[tier].limits.retentionDays;
   if (cap === null) return setting ?? null;
   return setting == null ? cap : Math.min(setting, cap);
-}
-
-export type CouponLike = {
-  code: string;
-  percentOff: number | null;
-  amountOffCents: number | null;
-  tiers: string[];
-  billing: string;
-  maxRedemptions: number | null;
-  redemptions: number;
-  validFrom: Date | string | null;
-  validUntil: Date | string | null;
-  active: boolean;
-};
-
-export const normalizeCouponCode = (value: string) => value.trim().toUpperCase();
-
-/** Why a coupon cannot be applied to a plan, or null when it can. */
-export function couponProblem(coupon: CouponLike, tier: PlanTier, billing: BillingPeriod | null, now: Date = new Date()) {
-  if (!coupon.active) return 'COUPON_INACTIVE';
-  if (coupon.validFrom && new Date(coupon.validFrom).getTime() > now.getTime()) return 'COUPON_NOT_STARTED';
-  if (coupon.validUntil && new Date(coupon.validUntil).getTime() < now.getTime()) return 'COUPON_EXPIRED';
-  if (coupon.maxRedemptions !== null && coupon.redemptions >= coupon.maxRedemptions) return 'COUPON_EXHAUSTED';
-  if (tier === 'FREE') return 'COUPON_FREE_PLAN';
-  if (coupon.tiers.length && !coupon.tiers.includes(tier)) return 'COUPON_WRONG_TIER';
-  if (coupon.billing !== 'ANY' && coupon.billing !== billing) return 'COUPON_WRONG_BILLING';
-  return null;
-}
-
-export function basePriceCents(tier: PlanTier, billing: BillingPeriod | null) {
-  if (billing === 'YEARLY') return PLANS[tier].yearlyCents;
-  if (billing === 'MONTHLY') return PLANS[tier].monthlyCents;
-  return 0;
-}
-
-/** Price after a coupon, never below zero. */
-export function discountedPriceCents(priceCents: number, coupon: Pick<CouponLike, 'percentOff' | 'amountOffCents'> | null) {
-  if (!coupon) return priceCents;
-  let price = priceCents;
-  if (coupon.percentOff) price = Math.round(price * (100 - coupon.percentOff) / 100);
-  if (coupon.amountOffCents) price -= coupon.amountOffCents;
-  return Math.max(0, price);
 }
 
 /** Days a server's data is kept after the bot is removed from it. */

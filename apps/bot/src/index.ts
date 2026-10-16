@@ -14,6 +14,8 @@ import { runLeaderboardCycle } from './leaderboard.js';
 import { checkInstall, isGuildInstallBlocked } from './install-guard.js';
 import { createStatusNotifier, guildFields } from './status.js';
 import { guildMessages } from './i18n.js';
+import { syncAllSubscriptions, syncGuildSubscription } from './subscriptions.js';
+import { PLANS, tierForSku } from '@dispatch/shared';
 
 const log = pino({ level: config.logLevel });
 
@@ -109,7 +111,55 @@ client.once(Events.ClientReady, async (ready) => {
   });
   void runRetentionCycle();
   void runLeaderboards();
+  void runSubscriptionSync();
 });
+
+// Discord subscriptions (paid plans): a full sync at startup and every 10
+// minutes catches missed events and refunds; events update one server.
+let subscriptionSyncRunning = false;
+async function runSubscriptionSync() {
+  if (subscriptionSyncRunning || !client.isReady()) return;
+  subscriptionSyncRunning = true;
+  try {
+    const result = await syncAllSubscriptions(client);
+    if (result.changed) log.info(result, 'Discord subscriptions synced');
+  } catch (error) {
+    log.error({ err: error }, 'Discord subscription sync failed');
+  } finally {
+    subscriptionSyncRunning = false;
+  }
+}
+
+setInterval(() => {
+  void runSubscriptionSync();
+}, 10 * 60 * 1000).unref();
+
+function onEntitlement(kind: 'create' | 'update' | 'delete') {
+  return async (entitlement: { guildId: string | null; skuId: string }) => {
+    if (!entitlement.guildId || !client.isReady()) return;
+    const guildId = entitlement.guildId;
+    try {
+      await syncGuildSubscription(client, guildId);
+    } catch (error) {
+      log.error({ err: error, guildId }, 'Discord subscription update failed');
+      return;
+    }
+    const tier = tierForSku(entitlement.skuId);
+    const guild = client.guilds.cache.get(guildId);
+    status.notify({
+      level: kind === 'create' ? 'ok' : 'warn',
+      title: kind === 'create' ? 'Nuovo abbonamento' : kind === 'update' ? 'Abbonamento disdetto o scaduto' : 'Abbonamento rimosso o rimborsato',
+      fields: [
+        { name: 'Piano', value: tier ? PLANS[tier].name : entitlement.skuId },
+        ...guildFields(guild ?? { id: guildId })
+      ]
+    });
+  };
+}
+
+client.on(Events.EntitlementCreate, onEntitlement('create'));
+client.on(Events.EntitlementUpdate, (_old, entitlement) => onEntitlement('update')(entitlement));
+client.on(Events.EntitlementDelete, onEntitlement('delete'));
 
 client.on(Events.GuildCreate, async (guild) => {
   // Installation blacklist (super console): leave before creating any state.

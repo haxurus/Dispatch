@@ -30,7 +30,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript",
   "PanelSession", "PanelRoleBinding", "PanelAudit", "TicketNote", "ResponseTemplate", "TicketFeedback", "GuildBlacklist",
   "FormDefinition", "FormPanel", "FormSubmission", "FormSession", "FormPermissionBinding",
-  "InstallBlock", "SuperAdminAudit", "StatusChannel", "Coupon", "InstanceConfig"
+  "InstallBlock", "SuperAdminAudit", "StatusChannel", "InstanceConfig"
 TO dispatch_api;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   "GuildSettings", "TicketCategory", "TicketPanel", "Ticket", "TicketMember", "TicketAudit", "Transcript", "TicketFeedback", "TicketOpenAttempt", "TicketUserGuard"

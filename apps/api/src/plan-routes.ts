@@ -2,22 +2,25 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@dispatch/db';
 import {
-  BILLING_PERIODS,
-  MULTI_SUBSCRIPTION_DISCOUNTS,
+  DISCORD_PLAN_SKUS,
   PLANS,
+  PLAN_CURRENCY,
   PLAN_TIERS,
-  normalizeCouponCode
+  discordStoreUrl,
+  isPlanTier
 } from '@dispatch/shared';
 import { requireGuild } from './auth.js';
+import { config } from './config.js';
 import { panelAudit } from './audit.js';
 import { setBotBranding } from './discord.js';
-import { PlanError, changeGuildPlan, guildPlanUsage, guildTier } from './plan-service.js';
+import { PlanError, changeGuildPlan, guildPlanUsage, guildTier, planStateSelect } from './plan-service.js';
 import { requireSuperMutation } from './super.js';
 import { superAdminAudit } from './super-audit.js';
 
 /*
- * Plans: public catalogue for the pricing page, the super console (contacts,
- * coupons, per-server plans) and the per-server plan and Brand customisation.
+ * Plans: public catalogue for the pricing page, the link to the Discord store
+ * (the only way to buy a plan), the super console (contacts, gifts) and the
+ * per-server plan and Brand customisation.
  */
 
 const nullableText = (max: number) => z.string().trim().max(max).nullable().optional()
@@ -28,15 +31,6 @@ export async function instanceConfig() {
 }
 
 const publicPlans = () => PLAN_TIERS.map((tier) => PLANS[tier]);
-
-const couponIsLive = (
-  coupon: { active: boolean; validFrom: Date | null; validUntil: Date | null; maxRedemptions: number | null; redemptions: number },
-  now = new Date()
-) =>
-  coupon.active &&
-  (!coupon.validFrom || coupon.validFrom <= now) &&
-  (!coupon.validUntil || coupon.validUntil >= now) &&
-  (coupon.maxRedemptions === null || coupon.redemptions < coupon.maxRedemptions);
 
 const sendPlanError = (reply: FastifyReply, error: unknown) => {
   if (error instanceof PlanError) return reply.code(error.status).send({ error: error.code });
@@ -52,23 +46,11 @@ export function registerPlanRoutes(app: FastifyInstance) {
   // it is cached briefly instead of being rate limited per client.
   let publicInfoCache: { value: unknown; expires: number } | null = null;
   const loadPublicInfo = async () => {
-    const [config, coupons] = await Promise.all([
-      instanceConfig(),
-      prisma.coupon.findMany({ where: { public: true, active: true }, orderBy: { createdAt: 'desc' }, take: 10 })
-    ]);
+    const instance = await instanceConfig();
     return {
-      contacts: { email: config.contactEmail, discord: config.contactDiscord, url: config.contactUrl },
+      contacts: { email: instance.contactEmail, discord: instance.contactDiscord, url: instance.contactUrl },
       plans: publicPlans(),
-      multiSubscriptionDiscounts: MULTI_SUBSCRIPTION_DISCOUNTS,
-      promotions: coupons.filter((coupon) => couponIsLive(coupon)).map((coupon) => ({
-        code: coupon.code,
-        description: coupon.description,
-        percentOff: coupon.percentOff,
-        amountOffCents: coupon.amountOffCents,
-        tiers: coupon.tiers,
-        billing: coupon.billing,
-        validUntil: coupon.validUntil
-      }))
+      currency: PLAN_CURRENCY
     };
   };
   app.get('/api/public/info', { config: { rateLimit: false } }, async () => {
@@ -76,6 +58,13 @@ export function registerPlanRoutes(app: FastifyInstance) {
     const value = await loadPublicInfo();
     publicInfoCache = { value, expires: Date.now() + 30_000 };
     return value;
+  });
+
+  // Plans are bought only on Discord: the website's buttons land here and go
+  // to the app's store (the plan's SKU once it exists).
+  app.get('/bot/store', async (request, reply) => {
+    const plan = (request.query as { plan?: unknown }).plan;
+    return reply.redirect(discordStoreUrl(config.clientId, isPlanTier(plan) ? plan : null));
   });
 
   // ------------------------------------------------------ super: contacts
@@ -94,67 +83,10 @@ export function registerPlanRoutes(app: FastifyInstance) {
       contactDiscord: text(parsed.data.contactDiscord),
       contactUrl: text(parsed.data.contactUrl)
     };
-    const config = await prisma.instanceConfig.upsert({ where: { id: 1 }, update: data, create: { id: 1, ...data } });
+    const saved = await prisma.instanceConfig.upsert({ where: { id: 1 }, update: data, create: { id: 1, ...data } });
     publicInfoCache = null;
     await superAdminAudit(request, session, 'instance.config', null, null, data);
-    return config;
-  });
-
-  // ------------------------------------------------------- super: coupons
-  const couponBody = z.object({
-    description: nullableText(200),
-    percentOff: z.number().int().min(1).max(100).nullable().optional(),
-    amountOffCents: z.number().int().min(1).max(100_000).nullable().optional(),
-    tiers: z.array(z.enum(['TIER1', 'TIER2', 'TIER3'])).max(3).optional(),
-    billing: z.enum(['ANY', 'MONTHLY', 'YEARLY']).optional(),
-    maxRedemptions: z.number().int().min(1).max(100_000).nullable().optional(),
-    validFrom: z.coerce.date().nullable().optional(),
-    validUntil: z.coerce.date().nullable().optional(),
-    active: z.boolean().optional(),
-    public: z.boolean().optional()
-  });
-  const discountValid = (value: { percentOff?: number | null; amountOffCents?: number | null }) =>
-    Boolean(value.percentOff) !== Boolean(value.amountOffCents);
-
-  app.post('/api/super/coupons', async (request, reply) => {
-    const session = await requireSuperMutation(request, reply);
-    if (!session) return;
-    const parsed = couponBody.extend({ code: z.string().trim().regex(/^[A-Za-z0-9_-]{3,32}$/) }).safeParse(request.body);
-    if (!parsed.success || !discountValid(parsed.data)) return reply.code(400).send({ error: 'INVALID_COUPON' });
-    const code = normalizeCouponCode(parsed.data.code);
-    if (await prisma.coupon.findUnique({ where: { code }, select: { id: true } })) return reply.code(409).send({ error: 'COUPON_EXISTS' });
-    const coupon = await prisma.coupon.create({ data: { ...parsed.data, code, createdByUserId: session.userId } });
-    publicInfoCache = null;
-    await superAdminAudit(request, session, 'coupon.create', null, null, { code, percentOff: coupon.percentOff, amountOffCents: coupon.amountOffCents });
-    return coupon;
-  });
-
-  app.put('/api/super/coupons/:id', async (request, reply) => {
-    const session = await requireSuperMutation(request, reply);
-    if (!session) return;
-    const { id } = request.params as { id: string };
-    const parsed = couponBody.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'INVALID_COUPON' });
-    const current = await prisma.coupon.findUnique({ where: { id } });
-    if (!current) return reply.code(404).send({ error: 'NOT_FOUND' });
-    const next = { percentOff: current.percentOff, amountOffCents: current.amountOffCents, ...parsed.data };
-    if (!discountValid(next)) return reply.code(400).send({ error: 'INVALID_COUPON' });
-    const coupon = await prisma.coupon.update({ where: { id }, data: parsed.data });
-    publicInfoCache = null;
-    await superAdminAudit(request, session, 'coupon.update', null, null, { code: coupon.code, ...parsed.data });
-    return coupon;
-  });
-
-  app.delete('/api/super/coupons/:id', async (request, reply) => {
-    const session = await requireSuperMutation(request, reply);
-    if (!session) return;
-    const { id } = request.params as { id: string };
-    const coupon = await prisma.coupon.findUnique({ where: { id } });
-    if (!coupon) return reply.code(404).send({ error: 'NOT_FOUND' });
-    await prisma.coupon.delete({ where: { id } });
-    publicInfoCache = null;
-    await superAdminAudit(request, session, 'coupon.delete', null, null, { code: coupon.code });
-    return { ok: true };
+    return saved;
   });
 
   // --------------------------------------------------------- super: plans
@@ -162,19 +94,16 @@ export function registerPlanRoutes(app: FastifyInstance) {
     const session = await requireSuperMutation(request, reply);
     if (!session) return;
     const { guildId } = request.params as { guildId: string };
+    // A gift: paid plans come only from Discord subscriptions.
     const parsed = z.object({
       tier: z.enum(PLAN_TIERS),
-      billing: z.enum(BILLING_PERIODS).nullable().optional(),
       expiresAt: z.coerce.date().nullable().optional(),
-      couponCode: z.string().trim().max(32).nullable().optional(),
       note: nullableText(500)
     }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
     const change = {
       tier: parsed.data.tier,
-      billing: parsed.data.billing ?? null,
       expiresAt: parsed.data.expiresAt ?? null,
-      couponCode: parsed.data.couponCode || null,
       note: parsed.data.note
     };
     if (change.tier !== 'FREE' && change.expiresAt && change.expiresAt.getTime() <= Date.now()) {
@@ -236,15 +165,21 @@ export function registerPlanRoutes(app: FastifyInstance) {
   });
 }
 
-/** Super console additions: contacts, coupons, plan of each connected server. */
+/** Super console additions: contacts, the gift and subscription of each connected server. */
 export async function planOverview(guildIds: string[]) {
-  const [config, coupons, plans] = await Promise.all([
+  const [instance, plans] = await Promise.all([
     instanceConfig(),
-    prisma.coupon.findMany({ orderBy: { createdAt: 'desc' } }),
     prisma.guildSettings.findMany({
       where: { guildId: { in: guildIds } },
-      select: { guildId: true, planTier: true, planBilling: true, planExpiresAt: true, planCouponCode: true, planNote: true, planUpdatedAt: true }
+      select: { guildId: true, ...planStateSelect, planNote: true, planUpdatedAt: true, subscriptionSyncedAt: true }
     })
   ]);
-  return { config, coupons, plans, planCatalog: publicPlans(), multiSubscriptionDiscounts: MULTI_SUBSCRIPTION_DISCOUNTS };
+  return {
+    config: instance,
+    plans,
+    planCatalog: publicPlans(),
+    currency: PLAN_CURRENCY,
+    // SKUs not created yet in the Developer Portal (purchases cannot map to them).
+    missingSkus: PLAN_TIERS.filter((tier) => tier !== 'FREE' && !DISCORD_PLAN_SKUS[tier])
+  };
 }

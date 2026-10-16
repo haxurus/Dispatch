@@ -9,11 +9,12 @@ import {
   PLAN_NAMES,
   PLAN_QUOTAS,
   apiErrorText,
-  contactHref,
   pricingHref,
+  storeHref,
   usePlan,
-  type BillingPeriod,
   type GuildPlan,
+  type PaidTier,
+  type PlanSource,
   type PlanFeature,
   type PlanQuota
 } from '../../_components/plan-client';
@@ -75,16 +76,15 @@ const it = {
     kicker: 'Piano',
     title: 'Piano {plan}',
     unavailable: 'Impossibile caricare il piano del server.',
-    billing: {
-      MONTHLY: 'Mensile',
-      YEARLY: 'Annuale',
+    source: {
+      DISCORD: 'Abbonamento Discord',
       GIFT: 'Omaggio'
-    } as Record<BillingPeriod, string>,
+    } as Record<PlanSource, string>,
     free: 'Piano gratuito, senza scadenza.',
+    renews: 'Si rinnova ogni mese su Discord.',
+    cancelled: 'Abbonamento disdetto: resta attivo fino al {date}, poi il server torna al piano Free.',
     validUntil: 'Valido fino al {date}.',
     noExpiry: 'Nessuna scadenza.',
-    expired: 'Il piano {plan} è scaduto il {date}: valgono i limiti e le funzioni del piano Free finché non viene rinnovato. Nessun dato è stato eliminato.',
-    expiredTag: 'Scaduto',
     usageTitle: 'Utilizzo',
     quotas: {
       categories: 'Categorie ticket',
@@ -109,8 +109,8 @@ const it = {
     included: 'Inclusa',
     notIncluded: 'Non inclusa',
     seePlans: 'Vedi i piani',
-    howToUpgrade: 'Come passare a un piano superiore',
-    upgradeHelp: 'I piani vengono attivati dall’operatore di Dispatch, senza pagamenti online: contattalo per attivare o rinnovare un piano.'
+    upgrade: 'Abbonati su Discord',
+    upgradeHelp: 'I piani a pagamento sono abbonamenti mensili su Discord: si acquistano dallo store di Dispatch e si disdicono dalle impostazioni di Discord (Abbonamenti).'
   }
 };
 
@@ -146,16 +146,15 @@ const en: typeof it = {
     kicker: 'Plan',
     title: '{plan} plan',
     unavailable: 'The server plan could not be loaded.',
-    billing: {
-      MONTHLY: 'Monthly',
-      YEARLY: 'Yearly',
+    source: {
+      DISCORD: 'Discord subscription',
       GIFT: 'Complimentary'
     },
     free: 'Free plan, no expiry.',
+    renews: 'Renews every month on Discord.',
+    cancelled: 'Subscription cancelled: it stays active until {date}, then the server goes back to Free.',
     validUntil: 'Valid until {date}.',
     noExpiry: 'No expiry.',
-    expired: 'The {plan} plan expired on {date}: Free plan limits and features apply until it is renewed. No data has been deleted.',
-    expiredTag: 'Expired',
     usageTitle: 'Usage',
     quotas: {
       categories: 'Ticket categories',
@@ -180,8 +179,8 @@ const en: typeof it = {
     included: 'Included',
     notIncluded: 'Not included',
     seePlans: 'See plans',
-    howToUpgrade: 'How to upgrade',
-    upgradeHelp: 'Plans are activated by the Dispatch operator, with no online payments: contact them to activate or renew a plan.'
+    upgrade: 'Subscribe on Discord',
+    upgradeHelp: 'Paid plans are monthly subscriptions on Discord: buy one from the Dispatch store and cancel it from your Discord settings (Subscriptions).'
   }
 };
 
@@ -206,16 +205,17 @@ function formatDate(value: string, locale: Locale) {
   return date.toLocaleDateString(locale === 'it' ? 'it-IT' : 'en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+const NEXT_TIER: Record<GuildPlan['effectiveTier'], PaidTier | null> = { FREE: 'TIER1', TIER1: 'TIER2', TIER2: 'TIER3', TIER3: null };
+
 function PlanCard({ plan, text, locale }: { plan: GuildPlan; text: typeof it.plan; locale: Locale }) {
-  const expired = plan.tier !== plan.effectiveTier;
   const limits = plan.plan.limits;
-  const status = expired
-    ? format(text.expired, { plan: PLAN_NAMES[plan.tier], date: plan.expiresAt ? formatDate(plan.expiresAt, locale) : '—' })
-    : plan.effectiveTier === 'FREE'
-      ? text.free
-      : plan.expiresAt
-        ? format(text.validUntil, { date: formatDate(plan.expiresAt, locale) })
-        : text.noExpiry;
+  const endsAt = plan.endsAt ? formatDate(plan.endsAt, locale) : null;
+  const status = plan.effectiveTier === 'FREE'
+    ? text.free
+    : plan.source === 'DISCORD'
+      ? (endsAt ? format(text.cancelled, { date: endsAt }) : text.renews)
+      : (endsAt ? format(text.validUntil, { date: endsAt }) : text.noExpiry);
+  const next = NEXT_TIER[plan.effectiveTier];
 
   return (
     <div className="panel plan-card">
@@ -225,11 +225,10 @@ function PlanCard({ plan, text, locale }: { plan: GuildPlan; text: typeof it.pla
           <h2>{format(text.title, { plan: PLAN_NAMES[plan.effectiveTier] })}</h2>
         </div>
         <div className="actions">
-          {expired && <span className="tag tag-danger">{text.expiredTag}</span>}
-          {!expired && plan.effectiveTier !== 'FREE' && plan.billing && <span className="tag tag-accent">{text.billing[plan.billing]}</span>}
+          {plan.source && <span className="tag tag-accent">{text.source[plan.source]}</span>}
         </div>
       </div>
-      {expired ? <div className="notice notice-warn plan-card-status">{status}</div> : <p>{status}</p>}
+      <p>{status}</p>
 
       <h3 className="plan-card-subtitle">{text.usageTitle}</h3>
       <div className="plan-meters">
@@ -269,8 +268,8 @@ function PlanCard({ plan, text, locale }: { plan: GuildPlan; text: typeof it.pla
 
       <p className="plan-card-help">{text.upgradeHelp}</p>
       <div className="actions">
-        <a className="button button-sm" href={pricingHref(locale)}>{text.seePlans}</a>
-        <a className="button button-sm button-secondary" href={contactHref(locale)}>{text.howToUpgrade}</a>
+        {next && <a className="button button-sm" href={storeHref(next)}>{text.upgrade}</a>}
+        <a className="button button-sm button-secondary" href={pricingHref(locale)}>{text.seePlans}</a>
       </div>
     </div>
   );

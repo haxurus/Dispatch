@@ -18,7 +18,7 @@ import { guildRetention } from '../apps/bot/src/retention.js';
 import { invalidateGuildPlan, guildPlanTier } from '../apps/bot/src/plan.js';
 import { openStaffThread } from '../apps/bot/src/ticket-operations.js';
 import {
-  PLANS, PLAN_TIERS, couponProblem, effectiveRetentionDays, effectiveTier, requiredTierFor, tierAllows
+  PLANS, PLAN_TIERS, bestEntitlement, effectiveRetentionDays, effectiveTier, requiredTierFor, tierAllows
 } from '@dispatch/shared';
 import { claimLeaderboardPeriod, releaseLeaderboardPeriod, runLeaderboardCycle } from '../apps/bot/src/leaderboard.js';
 import { handleTicketInteraction, publishMainMenu } from '../apps/bot/src/tickets.js';
@@ -1483,21 +1483,49 @@ test('an expired plan behaves as Free and retention is capped by the plan', () =
   assert.equal(effectiveRetentionDays(7, 'TIER1'), 7);
   assert.equal(effectiveRetentionDays(null, 'TIER3'), 90);
   assert.deepEqual(
-    guildRetention({ transcriptRetentionDays: null, closedTicketRetentionDays: 90, planTier: 'FREE', planExpiresAt: null }),
+    guildRetention({
+      transcriptRetentionDays: null, closedTicketRetentionDays: 90, planTier: 'FREE', planExpiresAt: null,
+      subscriptionTier: null, subscriptionEndsAt: null
+    }),
     { transcripts: 15, closedTickets: 15 }
   );
 });
 
-test('coupons are checked against tier, billing, validity and redemptions', () => {
-  const base = {
-    code: 'LAUNCH', percentOff: 20, amountOffCents: null, tiers: ['TIER2'], billing: 'YEARLY',
-    maxRedemptions: 2, redemptions: 1, validFrom: null, validUntil: null, active: true
-  };
-  assert.equal(couponProblem(base, 'TIER2', 'YEARLY'), null);
-  assert.equal(couponProblem(base, 'TIER1', 'YEARLY'), 'COUPON_WRONG_TIER');
-  assert.equal(couponProblem(base, 'TIER2', 'MONTHLY'), 'COUPON_WRONG_BILLING');
-  assert.equal(couponProblem({ ...base, redemptions: 2 }, 'TIER2', 'YEARLY'), 'COUPON_EXHAUSTED');
-  assert.equal(couponProblem(base, 'FREE', null), 'COUPON_FREE_PLAN');
+test('the higher of the gift and the Discord subscription is in force', () => {
+  const now = new Date('2026-10-16T12:00:00Z');
+  const later = new Date('2026-11-01T00:00:00Z');
+  const earlier = new Date('2026-10-01T00:00:00Z');
+  assert.equal(effectiveTier({ planTier: 'TIER1', subscriptionTier: 'TIER2' }, now), 'TIER2');
+  assert.equal(effectiveTier({ planTier: 'TIER3', subscriptionTier: 'TIER1' }, now), 'TIER3');
+  // A cancelled subscription runs until the end of the paid period.
+  assert.equal(effectiveTier({ subscriptionTier: 'TIER2', subscriptionEndsAt: later }, now), 'TIER2');
+  assert.equal(effectiveTier({ planTier: 'TIER1', subscriptionTier: 'TIER2', subscriptionEndsAt: earlier }, now), 'TIER1');
+  assert.equal(effectiveTier({ subscriptionTier: 'BOGUS' }, now), 'FREE');
+});
+
+test('the best running entitlement of a server wins', () => {
+  const now = new Date('2026-10-16T12:00:00Z');
+  const skus: Record<string, 'TIER1' | 'TIER2' | 'TIER3'> = { s1: 'TIER1', s2: 'TIER2', s3: 'TIER3' };
+  const tierOf = (sku: string) => skus[sku] ?? null;
+  const base = { guildId: G, startsAt: null, endsAt: null };
+  assert.equal(bestEntitlement([], now, tierOf), null);
+  assert.equal(bestEntitlement([{ ...base, id: '1', skuId: 'unknown' }], now, tierOf), null);
+  assert.equal(bestEntitlement([
+    { ...base, id: '1', skuId: 's1' },
+    { ...base, id: '2', skuId: 's2' }
+  ], now, tierOf)?.entitlement.id, '2');
+  // Ended, deleted and not yet started entitlements do not count.
+  assert.equal(bestEntitlement([
+    { ...base, id: '1', skuId: 's1' },
+    { ...base, id: '2', skuId: 's3', endsAt: '2026-10-15T00:00:00Z' },
+    { ...base, id: '3', skuId: 's3', deleted: true },
+    { ...base, id: '4', skuId: 's3', startsAt: '2026-10-20T00:00:00Z' }
+  ], now, tierOf)?.tier, 'TIER1');
+  // Same plan: the one that runs longer.
+  assert.equal(bestEntitlement([
+    { ...base, id: '1', skuId: 's2', endsAt: '2026-10-20T00:00:00Z' },
+    { ...base, id: '2', skuId: 's2' }
+  ], now, tierOf)?.entitlement.id, '2');
 });
 
 test('Free servers: closed tickets expire after 15 days even without a retention setting', async () => {

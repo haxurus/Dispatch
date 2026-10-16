@@ -15,6 +15,8 @@ type RetentionGuild = {
   closedTicketRetentionDays: number | null;
   planTier: string;
   planExpiresAt: Date | null;
+  subscriptionTier: string | null;
+  subscriptionEndsAt: Date | null;
 };
 
 /** Retention actually applied: the server's setting capped by its plan. */
@@ -117,12 +119,9 @@ export async function runTicketRetention(client: Client) {
   let guildCursor: string | undefined;
   for (;;) {
     const settingsRows = await prisma.guildSettings.findMany({
-      where: { ...(guildCursor ? { guildId: { gt: guildCursor } } : {}), OR: [
-        { transcriptRetentionDays: { not: null } }, { closedTicketRetentionDays: { not: null } },
-        { tickets: { some: { retentionPendingAt: { not: null } } } },
-        // Capped plans (and expiring ones) always have a retention.
-        { planTier: { not: 'TIER3' } }, { planExpiresAt: { not: null } }
-      ] }, orderBy: { guildId: 'asc' }, take: 100
+      // Every plan caps retention, so every server has one.
+      where: guildCursor ? { guildId: { gt: guildCursor } } : {},
+      orderBy: { guildId: 'asc' }, take: 100
     });
     if (!settingsRows.length) break;
     for (const settings of settingsRows) {

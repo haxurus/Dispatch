@@ -180,7 +180,7 @@ export function registerSuperRoutes(app: FastifyInstance) {
       prisma.statusChannel.findUnique({ where: { id: 1 }, select: { guildId: true, channelId: true, updatedAt: true } })
         .catch(() => null)
     ]);
-    // Plans, coupons and contacts (tables added with the plans migration).
+    // Plans and contacts (InstanceConfig needs the grants of the plans migration).
     const plans = await planOverview(guildIds).catch((error: unknown) => {
       request.log.warn({ err: error }, 'Plan overview unavailable');
       return null;

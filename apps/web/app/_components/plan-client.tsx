@@ -15,7 +15,8 @@ import { format, type Locale } from '../i18n';
 
 export type PlanTier = 'FREE' | 'TIER1' | 'TIER2' | 'TIER3';
 export type PaidTier = Exclude<PlanTier, 'FREE'>;
-export type BillingPeriod = 'MONTHLY' | 'YEARLY' | 'GIFT';
+/** Where the plan in force comes from: a Discord subscription or a gift from the operator. */
+export type PlanSource = 'DISCORD' | 'GIFT';
 
 export type PlanLimits = {
   categories: number;
@@ -45,7 +46,6 @@ export type PlanDefinition = {
   name: string;
   level: number;
   monthlyCents: number;
-  yearlyCents: number;
   limits: PlanLimits;
   features: PlanFeatures;
 };
@@ -53,12 +53,11 @@ export type PlanDefinition = {
 export type PlanBranding = { nickname: string | null; bannerSet: boolean };
 
 export type GuildPlan = {
-  /** Plan stored for the server (may be expired). */
-  tier: PlanTier;
-  /** Plan in force: an expired plan behaves as Free. */
+  /** Plan in force: the higher of the Discord subscription and the gift. */
   effectiveTier: PlanTier;
-  expiresAt: string | null;
-  billing: BillingPeriod | null;
+  source: PlanSource | null;
+  /** When the plan in force ends: a cancelled subscription or a gift with an expiry (null: renews or no expiry). */
+  endsAt: string | null;
   plan: PlanDefinition;
   usage: Record<PlanQuota, number>;
   branding: PlanBranding;
@@ -94,7 +93,8 @@ export function planHas(plan: GuildPlan | null, feature: PlanFeature): boolean |
 }
 
 export const pricingHref = (locale: Locale) => `/${locale}/pricing`;
-export const contactHref = (locale: Locale) => `/${locale}/pricing#contact`;
+/** Plans are bought only on Discord: the API redirects to the app's store (the plan's SKU). */
+export const storeHref = (tier?: PaidTier | null) => `/backend/bot/store${tier ? `?plan=${tier}` : ''}`;
 
 /*
  * One request per page load: the sidebar and the page share the in-flight

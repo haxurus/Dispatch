@@ -36,8 +36,7 @@ const it = {
   sections: 'Sezioni del server',
   yourAccess: 'Il tuo accesso',
   logout: 'Esci',
-  plan: 'Piano {plan}',
-  planExpired: 'Piano {plan} scaduto: Free'
+  plan: 'Piano {plan}'
 };
 
 const en: typeof it = {
@@ -55,8 +54,7 @@ const en: typeof it = {
   sections: 'Server sections',
   yourAccess: 'Your access',
   logout: 'Log out',
-  plan: '{plan} plan',
-  planExpired: '{plan} plan expired: Free'
+  plan: '{plan} plan'
 };
 
 const copy: Record<Locale, typeof it> = { it, en };
@@ -148,13 +146,8 @@ export default function GuildShell({ children }: { children: ReactNode }) {
             <strong title={name}>{name}</strong>
             <span className="mono muted">{validGuild ? guildId : ''}</span>
             {plan && (
-              <a
-                className={`sidebar-plan ${plan.tier !== plan.effectiveTier ? 'is-expired' : ''}`.trim()}
-                href={`/dashboard/${guildId}`}
-              >
-                {plan.tier !== plan.effectiveTier
-                  ? format(c.planExpired, { plan: PLAN_NAMES[plan.tier] })
-                  : format(c.plan, { plan: PLAN_NAMES[plan.effectiveTier] })}
+              <a className="sidebar-plan" href={`/dashboard/${guildId}`}>
+                {format(c.plan, { plan: PLAN_NAMES[plan.effectiveTier] })}
               </a>
             )}
           </div>
