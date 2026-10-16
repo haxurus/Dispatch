@@ -266,7 +266,7 @@ On the VPS, `dispatch-deploy deploy`:
 
 1. takes a lock (`/run/dispatch-deploy.lock`): a manual run cannot overlap with a GitHub deployment;
 2. validates the two references (`ghcr.io/haxurus/dispatch@sha256:<64 hex>`) and checks the free space on `/var/lib/docker`: below 5 GiB it removes Dispatch images that are no longer needed, below 3 GiB it stops (a full disk already stopped PostgreSQL on VPS01);
-3. if a current release exists, writes the backup `pg_dump -Fc` to `backups/predeploy-<UTC>.dump` (`600`). If the backup fails, the deployment stops. Dumps older than 14 days are removed only after a successful backup;
+3. if a current release exists, writes the backup `pg_dump -Fc`, encrypted with age, to `backups/predeploy-<UTC>.dump.age` (`600`). Without age or a public key in `backup-recipients.txt`, or if the backup fails, the deployment stops. Backups older than 14 days are removed only after a successful backup;
 4. pulls the images by digest;
 5. runs `docker compose up`. The order is postgres → `migrate` (`prisma migrate deploy` as owner) → `secure-db` (`dispatch_api`/`dispatch_bot` users and grants) → api and bot → web → edge;
 6. waits up to 150 s for api, bot, web and edge to be healthy;
@@ -384,10 +384,28 @@ sudo sh -c 'cd /srv/docker/dispatch && . ./.release && DISPATCH_APP_IMAGE=$APP_I
 Before every deployment after the first one, a PostgreSQL dump is stored in:
 
 ```text
-/srv/docker/dispatch/backups/predeploy-<UTC>.dump
+/srv/docker/dispatch/backups/predeploy-<UTC>.dump.age
 ```
 
-with root-only permissions and a local retention of 14 days.
+with root-only permissions and a local retention of 14 days. The dump is **encrypted with [age](https://age-encryption.org)** while it is written, so it never touches the disk in clear; the private key stays off the VPS. Without a valid key, `dispatch-deploy` refuses to deploy and `install-vps.sh` refuses to install.
+
+One-time setup:
+
+1. On your computer, create the key pair and keep the file somewhere safe (password manager or encrypted storage), separate from `data_encryption_key`; without it the backups cannot be restored:
+
+   ```bash
+   age-keygen -o dispatch-backup.key
+   ```
+
+   The command prints the public key, `age1…`.
+2. On the VPS, install age and store the public key:
+
+   ```bash
+   sudo apt install age
+   echo 'age1…' | sudo tee /srv/docker/dispatch/backup-recipients.txt
+   sudo chmod 600 /srv/docker/dispatch/backup-recipients.txt
+   ```
+3. Only then re-run the installer, which installs the updated `dispatch-deploy`. At the first encrypted backup, the older unencrypted `predeploy-*.dump` files are deleted.
 
 For an on-demand backup (before a manual intervention, or to copy off the host), run [`scripts/backup.sh`](../scripts/backup.sh) as root from a checkout of the repository:
 
@@ -395,9 +413,9 @@ For an on-demand backup (before a manual intervention, or to copy off the host),
 cd /tmp/Dispatch && sudo sh scripts/backup.sh
 ```
 
-It reads the running release from `.release`, runs `pg_dump -Fc` inside the `postgres` container of the Compose project `dispatch` and writes `/srv/docker/dispatch/backups/dispatch-<UTC>.dump` with `umask 077` and mode `600`. These dumps are not pruned automatically.
+It reads the running release from `.release`, runs `pg_dump -Fc` inside the `postgres` container of the Compose project `dispatch` and writes `/srv/docker/dispatch/backups/dispatch-<UTC>.dump.age`, encrypted the same way, with `umask 077` and mode `600`. These backups are not pruned automatically. Remove any older unencrypted `dispatch-*.dump` by hand.
 
-Backups stay on the same VPS. Copy them off the host periodically, encrypted and separate from `data_encryption_key`.
+Backups stay on the same VPS. Copy them off the host periodically; they are already encrypted, and the age key must stay separate from them and from `data_encryption_key`.
 
 ### Restoring a backup
 
@@ -407,13 +425,15 @@ Backups stay on the same VPS. Copy them off the host periodically, encrypted and
 sudo ls -l /srv/docker/dispatch/backups/
 # 1. stop the application services (postgres keeps running)
 sudo sh -c 'cd /srv/docker/dispatch && . ./.release && DISPATCH_APP_IMAGE=$APP_IMAGE DISPATCH_MIGRATE_IMAGE=$MIGRATE_IMAGE docker compose -p dispatch --env-file .env -f docker-compose.yml stop edge web api bot'
-# 2. restore
-sudo sh -c 'cd /srv/docker/dispatch && . ./.release && DISPATCH_APP_IMAGE=$APP_IMAGE DISPATCH_MIGRATE_IMAGE=$MIGRATE_IMAGE docker compose -p dispatch --env-file .env -f docker-compose.yml exec -T postgres sh -c '"'"'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; pg_restore --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB"'"'"' < backups/predeploy-<STAMP>.dump'
+# 2. restore: paste the content of dispatch-backup.key, then press Ctrl+D. The key
+#    is read from standard input and the dump is decrypted straight into
+#    pg_restore: neither touches the disk of the VPS.
+sudo sh -c 'cd /srv/docker/dispatch && . ./.release && age -d -i - backups/predeploy-<STAMP>.dump.age | DISPATCH_APP_IMAGE=$APP_IMAGE DISPATCH_MIGRATE_IMAGE=$MIGRATE_IMAGE docker compose -p dispatch --env-file .env -f docker-compose.yml exec -T postgres sh -c '"'"'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; pg_restore --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB"'"'"''
 # 3. restart the desired release
 sudo /usr/local/sbin/dispatch-deploy rollback   # or a new deployment
 ```
 
-The same procedure restores an on-demand dump: use `backups/dispatch-<STAMP>.dump`.
+The same procedure restores an on-demand backup: use `backups/dispatch-<STAMP>.dump.age`. To inspect a backup elsewhere, copy it to a trusted machine with the key and run `age -d -i dispatch-backup.key <file>.dump.age > restore.dump`, then `shred -u restore.dump` when done. Reading the key from standard input (`-i -`) needs age 1.1 or later; with an older version, decrypt on a trusted machine.
 
 ## 10. Repository protection
 
