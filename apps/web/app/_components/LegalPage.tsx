@@ -55,7 +55,7 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
               'Form answers: until the server’s administrators delete them from the dashboard, or while the bot is in the server.',
               'When the bot is removed from a server, all of that server’s data is deleted 30 days later, unless the bot is added again in the meantime.',
               'Dashboard sessions: 8 hours.',
-              'Database backups: up to 14 days.'
+              'Database backups: up to 14 days, encrypted.'
             ]
           ] },
           { title: 'How we protect it', body: [
@@ -164,7 +164,7 @@ const copy: Record<Locale, { kicker: string; title: string; intro: string; updat
               'Risposte ai form: finché gli amministratori del server non le eliminano dalla dashboard, o finché il bot è nel server.',
               'Quando il bot viene rimosso da un server, tutti i dati di quel server vengono cancellati dopo 30 giorni, a meno che il bot non venga aggiunto di nuovo nel frattempo.',
               'Sessioni della dashboard: 8 ore.',
-              'Backup del database: fino a 14 giorni.'
+              'Backup del database: fino a 14 giorni, cifrati.'
             ]
           ] },
           { title: 'Come li proteggiamo', body: [

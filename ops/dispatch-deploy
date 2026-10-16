@@ -8,6 +8,9 @@ ENV_FILE="$STATE_DIR/.env"
 CURRENT_FILE="$STATE_DIR/.release"
 PREVIOUS_FILE="$STATE_DIR/.previous-release"
 BACKUP_DIR="$STATE_DIR/backups"
+# age public key(s) the pre-deploy backups are encrypted to. The matching
+# private key stays off the VPS (docs/DEPLOYMENT.md, Backups).
+BACKUP_RECIPIENTS="$STATE_DIR/backup-recipients.txt"
 LOG_DIR="$STATE_DIR/logs"
 PROJECT=dispatch
 LOCK_FILE=/run/dispatch-deploy.lock
@@ -64,15 +67,33 @@ backup_database() {
   chmod 700 "$BACKUP_DIR"
   cid="$(compose "$app" "$migrate" ps -q postgres 2>/dev/null || true)"
   [ -n "$cid" ] || return 0
+  command -v age >/dev/null 2>&1 || die 'age is not installed (apt install age); deployment aborted'
+  grep -Eq '^age1[0-9a-z]{58}$' "$BACKUP_RECIPIENTS" 2>/dev/null ||
+    die "no age public key in $BACKUP_RECIPIENTS; deployment aborted (see DEPLOYMENT.md, Backups)"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  out="$BACKUP_DIR/predeploy-$stamp.dump"
-  log "creating pre-deploy database backup"
-  if compose "$app" "$migrate" exec -T postgres sh -c     'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; exec pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > "$out"; then
+  out="$BACKUP_DIR/predeploy-$stamp.dump.age"
+  status_file="$(mktemp)"
+  log "creating encrypted pre-deploy database backup"
+  # The dump is streamed straight into age: it never touches the disk in
+  # clear. A POSIX pipeline only reports age's exit code, so pg_dump's is
+  # written to a file.
+  old_umask="$(umask)"
+  umask 077
+  if {
+    compose "$app" "$migrate" exec -T postgres sh -c \
+      'export PGPASSWORD="$(cat /run/secrets/postgres_admin_password)"; exec pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"'
+    echo "$?" > "$status_file"
+  } | age -R "$BACKUP_RECIPIENTS" -o "$out" && [ "$(cat "$status_file")" = 0 ] && [ -s "$out" ]; then
+    umask "$old_umask"
+    rm -f "$status_file"
     chmod 600 "$out"
     # Prune only after a good dump: a failing backup never leaves zero copies.
-    find "$BACKUP_DIR" -type f -name 'predeploy-*.dump' -mtime +14 -delete 2>/dev/null || true
+    find "$BACKUP_DIR" -type f -name 'predeploy-*.dump.age' -mtime +14 -delete 2>/dev/null || true
+    # Backups taken before encryption was introduced.
+    find "$BACKUP_DIR" -type f -name 'predeploy-*.dump' -delete 2>/dev/null || true
   else
-    rm -f "$out"
+    umask "$old_umask"
+    rm -f "$out" "$status_file"
     die 'database backup failed; deployment aborted'
   fi
 }

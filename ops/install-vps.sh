@@ -17,6 +17,10 @@ command -v openssl >/dev/null 2>&1 || die 'OpenSSL is required'
 command -v visudo >/dev/null 2>&1 || die 'sudo/visudo is required'
 command -v flock >/dev/null 2>&1 || die 'flock (util-linux) is required'
 docker compose version >/dev/null 2>&1 || die 'Docker Compose plugin is required'
+# dispatch-deploy refuses to deploy without them: check before installing it.
+command -v age >/dev/null 2>&1 || die 'age is required for encrypted backups (apt install age)'
+grep -Eq '^age1[0-9a-z]{58}$' "$STATE_DIR/backup-recipients.txt" 2>/dev/null ||
+  die "no age public key in $STATE_DIR/backup-recipients.txt (see docs/DEPLOYMENT.md, Backups)"
 
 if command -v sshd >/dev/null 2>&1; then
   allow_users=$(sshd -T 2>/dev/null | awk '$1 == "allowusers" { for (i=2; i<=NF; i++) print $i }' || true)

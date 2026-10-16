@@ -33,7 +33,7 @@ Secrets are files under `/srv/docker/dispatch/secrets/` (directory `700 root:roo
 
 The installer generates `session_secret`, `bot_internal_api_key`, `data_encryption_key` and the database passwords; the Discord token and the OAuth client secret are entered by hand on the VPS. GitHub Actions never receives any of them.
 
-Never store `secrets/` in the same backup as the database. Keep `data_encryption_key` separate from PostgreSQL dumps.
+Never store `secrets/` in the same backup as the database. Keep `data_encryption_key` separate from PostgreSQL dumps. Database backups are encrypted with age (docs/DEPLOYMENT.md, Backups); the age private key stays off the VPS, separate from both.
 
 A full host compromise or root/Docker daemon access can still read mounted secrets. Never mount `/var/run/docker.sock` into project containers.
 
