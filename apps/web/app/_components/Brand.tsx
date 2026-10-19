@@ -1,20 +1,9 @@
 import type { ReactNode } from 'react';
+import mark from './dispatch-mark.png';
 
-/** Dispatch mark: a ticket stub with an outgoing arrow and an accent dot. */
+/** Dispatch mark (the bot's avatar): a form, a ticket and a paper plane. */
 export function BrandMark({ size = 28 }: { size?: number }) {
-  return (
-    <svg className="brand-mark" width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <path
-        d="M6 7.5A2.5 2.5 0 0 1 8.5 5h15A2.5 2.5 0 0 1 26 7.5v4a3 3 0 0 0 0 6v4a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 6 21.5v-4a3 3 0 0 0 0-6v-4Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinejoin="round"
-      />
-      <path d="M10.5 14.5h6.6M14.3 11.6l2.9 2.9-2.9 2.9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="21.4" cy="14.5" r="2" fill="var(--accent)" />
-    </svg>
-  );
+  return <img className="brand-mark" src={mark.src} width={size} height={size} alt="" aria-hidden="true" />;
 }
 
 export function Brand({ href, label = 'Dispatch - Home', className = '' }: { href: string; label?: string; className?: string }) {

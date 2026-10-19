@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ImageResponse } from 'next/og';
 import type { Locale } from '../i18n';
 
@@ -28,6 +30,9 @@ const copy: Record<Locale, { kicker: string; title: string; tags: string[] }> = 
 
 const colors = { bg: '#07111c', line: '#1e3550', text: '#eaf4fb', muted: '#8fa9c0', accent: '#38bdf8' };
 
+// The bot's avatar, embedded as a data URI (Satori fetches nothing). Next runs from apps/web.
+const markUri = `data:image/png;base64,${readFileSync(join(process.cwd(), 'app', '_components', 'dispatch-mark-og.png')).toString('base64')}`;
+
 export function renderOgImage(locale: Locale) {
   const c = copy[locale];
   return new ImageResponse(
@@ -47,17 +52,7 @@ export function renderOgImage(locale: Locale) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-          <svg width="72" height="72" viewBox="0 0 32 32">
-            <path
-              d="M6 7.5A2.5 2.5 0 0 1 8.5 5h15A2.5 2.5 0 0 1 26 7.5v4a3 3 0 0 0 0 6v4a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 6 21.5v-4a3 3 0 0 0 0-6v-4Z"
-              fill="none"
-              stroke={colors.text}
-              strokeWidth="1.8"
-              strokeLinejoin="round"
-            />
-            <path d="M10.5 14.5h6.6M14.3 11.6l2.9 2.9-2.9 2.9" fill="none" stroke={colors.text} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-            <circle cx="21.4" cy="14.5" r="2" fill={colors.accent} />
-          </svg>
+          <img src={markUri} width={88} height={88} style={{ borderRadius: 20 }} alt="" />
           <span style={{ fontSize: 44, fontWeight: 700, letterSpacing: -1 }}>Dispatch</span>
         </div>
 

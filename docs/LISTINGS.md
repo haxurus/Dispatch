@@ -145,7 +145,7 @@ The public website targets an international audience: English is the default lan
 | Structured data | `PublicHome.tsx` | JSON-LD `WebApplication` + `FAQPage`. |
 | Visible FAQ | `PublicHome.tsx`, `i18n.ts` | Answers typical searches ("how do I add a ticket system to my Discord server"). |
 | `robots.txt`, `sitemap.xml` | `apps/web/app/robots.ts`, `sitemap.ts` | Dashboard, super console and `/backend/` excluded. |
-| Favicon, apple icon, manifest | `apps/web/app/icon.svg`, `apple-icon.tsx`, `manifest.ts` | |
+| Favicon, apple icon, manifest | `apps/web/app/icon.png`, `apple-icon.png`, `manifest.ts` | |
 | Bot custom status | `apps/bot/src/config.ts` | `BOT_STATUS_TEXT` (default `Discord tickets · dispatch.haxurus.com`, empty = disabled). |
 
 For a different domain set `SITE_URL` (also at build time, because the sitemap and the images are generated statically).
