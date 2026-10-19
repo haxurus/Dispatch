@@ -321,6 +321,11 @@ model ResponseTemplate {
   guildId          String
   name             String
   contentEncrypted String
+  // Where the canned reply is offered: every ticket, or only tickets of these
+  // categories or opened by these forms (empty lists = nowhere).
+  allTickets       Boolean  @default(true)
+  categoryIds      String[] @default([])
+  formIds          String[] @default([])
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 

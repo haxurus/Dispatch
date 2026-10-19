@@ -1311,6 +1311,7 @@ app.delete('/api/guilds/:guildId/categories/:categoryId', async (request, reply)
     ] : []),
     prisma.ticketCategory.delete({ where: { id: categoryId } })
   ]);
+  await dropFromTemplateScopes(prisma, guildId, 'categoryIds', categoryId);
 
   await panelAudit(request, session, guildId, 'ticket_category.delete', {
     categoryId,
@@ -1543,6 +1544,7 @@ app.delete('/api/guilds/:guildId/forms/:formId', async (request, reply) => {
         });
       }
       await tx.formDefinition.delete({ where: { id: formId } });
+      await dropFromTemplateScopes(tx, guildId, 'formIds', formId);
     });
   } catch (error) {
     // A submission landed between the count and the delete (FK Restrict).
@@ -2212,6 +2214,53 @@ app.post('/api/guilds/:guildId/leaderboard/send', async (request, reply) => {
   }
 });
 
+// Scope of a canned reply: every ticket, or only some categories and forms.
+const templateScope = z.object({
+  allTickets: z.boolean().default(true),
+  categoryIds: z.array(internalId).max(50).default([]),
+  formIds: z.array(internalId).max(50).default([])
+});
+
+type TemplateScope = z.infer<typeof templateScope>;
+
+/** Normalised scope, or an error code when it names categories or forms of another server. */
+async function checkTemplateScope(guildId: string, scope: TemplateScope) {
+  if (scope.allTickets) return { scope: { allTickets: true, categoryIds: [] as string[], formIds: [] as string[] } };
+  const categoryIds = [...new Set(scope.categoryIds)];
+  const formIds = [...new Set(scope.formIds)];
+  if (!categoryIds.length && !formIds.length) return { error: 'TEMPLATE_SCOPE_EMPTY' as const };
+  const [categories, forms] = await Promise.all([
+    prisma.ticketCategory.count({ where: { guildId, id: { in: categoryIds } } }),
+    prisma.formDefinition.count({ where: { guildId, id: { in: formIds } } })
+  ]);
+  if (categories !== categoryIds.length || forms !== formIds.length) return { error: 'TEMPLATE_SCOPE_INVALID' as const };
+  return { scope: { allTickets: false, categoryIds, formIds } };
+}
+
+/** Whether a canned reply is offered in a ticket. */
+const templateAppliesTo = (
+  template: { allTickets: boolean; categoryIds: string[]; formIds: string[] },
+  ticket: { categoryId: string; sourceFormId: string | null }
+) => template.allTickets || template.categoryIds.includes(ticket.categoryId) ||
+  (ticket.sourceFormId !== null && template.formIds.includes(ticket.sourceFormId));
+
+/** Removes a deleted category or form from the canned replies limited to it. */
+async function dropFromTemplateScopes(db: Prisma.TransactionClient, guildId: string, field: 'categoryIds' | 'formIds', id: string) {
+  const byCategory = field === 'categoryIds';
+  const rows = await db.responseTemplate.findMany({
+    where: byCategory ? { guildId, categoryIds: { has: id } } : { guildId, formIds: { has: id } },
+    select: { id: true, categoryIds: true, formIds: true }
+  });
+  for (const row of rows) {
+    await db.responseTemplate.update({
+      where: { id: row.id },
+      data: byCategory
+        ? { categoryIds: row.categoryIds.filter((value) => value !== id) }
+        : { formIds: row.formIds.filter((value) => value !== id) }
+    });
+  }
+}
+
 app.get('/api/guilds/:guildId/response-templates', async (request, reply) => {
   const { guildId } = request.params as { guildId: string };
   const session = await requireGuild(request, reply, guildId, 'MODERATOR');
@@ -2226,6 +2275,9 @@ app.get('/api/guilds/:guildId/response-templates', async (request, reply) => {
     id: template.id,
     name: template.name,
     content: decryptText(template.contentEncrypted),
+    allTickets: template.allTickets,
+    categoryIds: template.categoryIds,
+    formIds: template.formIds,
     createdAt: template.createdAt,
     updatedAt: template.updatedAt
   }));
@@ -2239,8 +2291,10 @@ app.post('/api/guilds/:guildId/response-templates', async (request, reply) => {
   const parsed = z.object({
     name: z.string().trim().min(1).max(80),
     content: z.string().trim().min(1).max(2000)
-  }).safeParse(request.body);
+  }).extend(templateScope.shape).safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+  const checked = await checkTemplateScope(guildId, parsed.data);
+  if ('error' in checked) return reply.code(400).send({ error: checked.error });
 
   if (await rejectOverQuota(reply, guildId, 'responseTemplates')) return;
 
@@ -2249,7 +2303,8 @@ app.post('/api/guilds/:guildId/response-templates', async (request, reply) => {
       data: {
         guildId,
         name: parsed.data.name,
-        contentEncrypted: encryptText(parsed.data.content)!
+        contentEncrypted: encryptText(parsed.data.content)!,
+        ...checked.scope
       }
     });
 
@@ -2261,7 +2316,8 @@ app.post('/api/guilds/:guildId/response-templates', async (request, reply) => {
     return reply.code(201).send({
       id: template.id,
       name: template.name,
-      content: parsed.data.content
+      content: parsed.data.content,
+      ...checked.scope
     });
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
@@ -2279,8 +2335,10 @@ app.put('/api/guilds/:guildId/response-templates/:templateId', async (request, r
   const parsed = z.object({
     name: z.string().trim().min(1).max(80),
     content: z.string().trim().min(1).max(2000)
-  }).safeParse(request.body);
+  }).extend(templateScope.shape).safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: 'INVALID_BODY' });
+  const checked = await checkTemplateScope(guildId, parsed.data);
+  if ('error' in checked) return reply.code(400).send({ error: checked.error });
 
   const existing = await prisma.responseTemplate.findFirst({ where: { id: templateId, guildId } });
   if (!existing) return reply.code(404).send({ error: 'TEMPLATE_NOT_FOUND' });
@@ -2290,7 +2348,8 @@ app.put('/api/guilds/:guildId/response-templates/:templateId', async (request, r
       where: { id: templateId },
       data: {
         name: parsed.data.name,
-        contentEncrypted: encryptText(parsed.data.content)!
+        contentEncrypted: encryptText(parsed.data.content)!,
+        ...checked.scope
       }
     });
 
@@ -2299,7 +2358,7 @@ app.put('/api/guilds/:guildId/response-templates/:templateId', async (request, r
       name: template.name
     });
 
-    return { id: template.id, name: template.name, content: parsed.data.content };
+    return { id: template.id, name: template.name, content: parsed.data.content, ...checked.scope };
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
     return reply.code(409).send({ error: 'TEMPLATE_NAME_CONFLICT' });
@@ -2562,10 +2621,13 @@ app.post('/api/guilds/:guildId/tickets/:ticketId/reply', async (request, reply) 
   let templateId: string | null = null;
 
   if (parsed.data.templateId) {
-    const template = await prisma.responseTemplate.findFirst({
-      where: { id: parsed.data.templateId, guildId }
-    });
+    const [template, ticket] = await Promise.all([
+      prisma.responseTemplate.findFirst({ where: { id: parsed.data.templateId, guildId } }),
+      prisma.ticket.findFirst({ where: { id: ticketId, guildId }, select: { categoryId: true, sourceFormId: true } })
+    ]);
     if (!template) return reply.code(404).send({ error: 'TEMPLATE_NOT_FOUND' });
+    if (!ticket) return reply.code(404).send({ error: 'TICKET_NOT_FOUND' });
+    if (!templateAppliesTo(template, ticket)) return reply.code(400).send({ error: 'TEMPLATE_NOT_FOR_TICKET' });
     content = decryptText(template.contentEncrypted) ?? '';
     templateId = template.id;
   }

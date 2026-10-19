@@ -37,7 +37,7 @@ Dispatch opens private ticket channels from menus, panels and forms, lets staff 
 | Opening tickets | Main menu (one *Open a ticket* button and a private selector of up to 25 request types), ticket panels with a select menu or buttons, forms that open a ticket on submit |
 | Ticket categories | Discord category for open and closed tickets, staff roles, up to 5 opening questions, per-user open limit, cooldowns, transcript and feedback options |
 | Handling | Claim, unclaim, assign, status, priority, transfer between categories, add or remove members, close with a reason, reopen, delete the channel with confirmation |
-| Staff tools | Private staff threads per ticket, staff notes and canned replies (their own dashboard page, sent from the ticket page) |
+| Staff tools | Private staff threads per ticket, staff notes and canned replies (their own dashboard page, for every ticket or only some categories and forms, sent from the ticket page) |
 | Automation | First-response and resolution SLAs, optional escalation to roles, inactivity warning and auto-close |
 | Transcripts | HTML transcript on close, sent by DM to the opener, to an archive channel and/or kept as an encrypted copy; manual generation from the dashboard |
 | Forms | Up to 25 validated questions (text, number, email, URL, date, yes/no, single and multiple choice, Discord ID), in-chat or DM, schedule, limits and per-role permissions |
