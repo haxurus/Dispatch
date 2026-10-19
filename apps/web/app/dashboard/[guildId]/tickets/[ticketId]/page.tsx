@@ -124,8 +124,9 @@ const it = {
   downloadHtml: 'Scarica HTML',
   singleUseCopy: 'Questa copia è monouso: al primo download viene rimossa dal database. In ogni caso viene eliminata insieme al ticket.',
   staffReplyTitle: 'Risposta staff',
-  templateLabel: 'Template',
+  templateLabel: 'Risposta rapida',
   customMessage: 'Messaggio personalizzato',
+  manageReplies: 'Gestisci le risposte rapide',
   messageLabel: 'Messaggio',
   sendToTicket: 'Invia nel ticket',
   internalNoteTitle: 'Nota interna',
@@ -228,8 +229,9 @@ const en: typeof it = {
   downloadHtml: 'Download HTML',
   singleUseCopy: 'This copy is single-use: it is removed from the database on the first download. In any case it is deleted together with the ticket.',
   staffReplyTitle: 'Staff reply',
-  templateLabel: 'Template',
+  templateLabel: 'Canned reply',
   customMessage: 'Custom message',
+  manageReplies: 'Manage canned replies',
   messageLabel: 'Message',
   sendToTicket: 'Send to ticket',
   internalNoteTitle: 'Internal note',
@@ -806,6 +808,7 @@ export default function TicketDetailPage() {
                 <option value={template.id} key={template.id}>{template.name}</option>
               ))}
             </select>
+            <a className="muted" href={`/dashboard/${guildId}/replies`}>{c.manageReplies}</a>
           </label>
 
           {!templateId && (
