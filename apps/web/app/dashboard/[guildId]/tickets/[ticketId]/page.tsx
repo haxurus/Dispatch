@@ -285,6 +285,7 @@ function formatAnswer(
 }
 
 type TicketDetail = {
+  sourceFormId: string | null;
   id: string;
   ticketNumber: number;
   openerId: string;
@@ -322,7 +323,15 @@ type ResponseTemplate = {
   id: string;
   name: string;
   content: string;
+  allTickets: boolean;
+  categoryIds: string[];
+  formIds: string[];
 };
+
+/** Canned replies offered in a ticket: generic ones and those of its category or form. */
+const repliesFor = (templates: ResponseTemplate[], ticket: Pick<TicketDetail, 'categoryId' | 'sourceFormId'>) =>
+  templates.filter((template) => template.allTickets || template.categoryIds.includes(ticket.categoryId) ||
+    (ticket.sourceFormId !== null && template.formIds.includes(ticket.sourceFormId)));
 
 type TicketFeedback = {
   id: string;
@@ -804,7 +813,7 @@ export default function TicketDetailPage() {
               }}
             >
               <option value="">{c.customMessage}</option>
-              {templates.map((template) => (
+              {repliesFor(templates, ticket).map((template) => (
                 <option value={template.id} key={template.id}>{template.name}</option>
               ))}
             </select>
