@@ -16,7 +16,7 @@ import {
   type Me
 } from './session';
 
-type NavKey = 'overview' | 'manage' | 'tickets' | 'system' | 'panels' | 'forms' | 'analytics' | 'security';
+type NavKey = 'overview' | 'manage' | 'tickets' | 'replies' | 'system' | 'panels' | 'forms' | 'analytics' | 'security';
 type NavItem = { key: NavKey; href: string; icon: IconName };
 
 const TICKET_SUBPAGES = new Set(['manage', 'analytics', 'security', 'system']);
@@ -26,6 +26,7 @@ const it = {
     overview: 'Panoramica',
     manage: 'Ticket',
     tickets: 'Configurazione ticket',
+    replies: 'Risposte rapide',
     system: 'Sistema e menu',
     panels: 'Pannelli',
     forms: 'Form',
@@ -44,6 +45,7 @@ const en: typeof it = {
     overview: 'Overview',
     manage: 'Tickets',
     tickets: 'Ticket setup',
+    replies: 'Canned replies',
     system: 'System and menu',
     panels: 'Panels',
     forms: 'Forms',
@@ -65,6 +67,7 @@ function navItems(guildId: string): NavItem[] {
     { key: 'overview', href: base, icon: 'grid' },
     { key: 'manage', href: `${base}/tickets/manage`, icon: 'inbox' },
     { key: 'tickets', href: `${base}/tickets`, icon: 'ticket' },
+    { key: 'replies', href: `${base}/replies`, icon: 'message' },
     { key: 'system', href: `${base}/tickets/system`, icon: 'sliders' },
     { key: 'panels', href: `${base}/panels`, icon: 'panel' },
     { key: 'forms', href: `${base}/forms`, icon: 'clipboard' },
@@ -79,6 +82,7 @@ function activeKey(pathname: string, guildId: string) {
   if (rest.length === 0) return 'overview';
   if (rest[0] === 'forms') return 'forms';
   if (rest[0] === 'panels') return 'panels';
+  if (rest[0] === 'replies') return 'replies';
   if (rest[0] === 'tickets') {
     if (rest.length === 1) return 'tickets';
     const sub = rest[1]!;

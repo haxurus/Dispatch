@@ -37,7 +37,7 @@ Dispatch opens private ticket channels from menus, panels and forms, lets staff 
 | Opening tickets | Main menu (one *Open a ticket* button and a private selector of up to 25 request types), ticket panels with a select menu or buttons, forms that open a ticket on submit |
 | Ticket categories | Discord category for open and closed tickets, staff roles, up to 5 opening questions, per-user open limit, cooldowns, transcript and feedback options |
 | Handling | Claim, unclaim, assign, status, priority, transfer between categories, add or remove members, close with a reason, reopen, delete the channel with confirmation |
-| Staff tools | Private staff threads per ticket, staff notes and response templates in the dashboard |
+| Staff tools | Private staff threads per ticket, staff notes and canned replies (their own dashboard page, sent from the ticket page) |
 | Automation | First-response and resolution SLAs, optional escalation to roles, inactivity warning and auto-close |
 | Transcripts | HTML transcript on close, sent by DM to the opener, to an archive channel and/or kept as an encrypted copy; manual generation from the dashboard |
 | Forms | Up to 25 validated questions (text, number, email, URL, date, yes/no, single and multiple choice, Discord ID), in-chat or DM, schedule, limits and per-role permissions |
@@ -53,7 +53,7 @@ Dispatch opens private ticket channels from menus, panels and forms, lets staff 
 - Panel editor with a live Discord-style preview, form builder and blacklist; every configuration change is recorded in an encrypted dashboard audit log.
 - The website, the dashboard and the super console are in English and Italian (the dashboard follows the language chosen on the site or with its IT/EN toggle, stored in the `dispatch_locale` cookie). The bot speaks English or Italian, chosen per server.
 
-Per-server limits on the hosted instance: 50 categories, 25 ticket panels, 50 forms, 25 form panels, 100 response templates, 2,000 blacklist entries and 50 dashboard role bindings ([`packages/shared/src/quotas.ts`](packages/shared/src/quotas.ts)).
+Per-server limits on the hosted instance depend on the server's plan (categories, panels, forms, canned replies, dashboard roles, retention: see [Plans](#plans)); 2,000 blacklist entries and 50 form role bindings apply to every plan ([`packages/shared/src/plans.ts`](packages/shared/src/plans.ts)).
 
 Functional details: [ticket protections, logs, ratings and retention](docs/TICKET_PROTECTIONS.md), [forms](docs/FORMS.md), [panels](docs/PANELS.md).
 

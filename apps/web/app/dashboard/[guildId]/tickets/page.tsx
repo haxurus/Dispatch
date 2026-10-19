@@ -63,12 +63,6 @@ type Category = {
   enabled: boolean;
 };
 
-type ResponseTemplate = {
-  id: string;
-  name: string;
-  content: string;
-};
-
 const it = {
   loadError: 'Impossibile caricare la configurazione ticket.',
   escalationMissing: 'Indica dopo quanti minuti attivare l’escalation automatica, oppure disattivala.',
@@ -82,13 +76,6 @@ const it = {
   categoryInUseByForm: 'La categoria è usata da uno o più form per il ticket automatico: aggiorna i form prima di eliminarla, oppure disabilitala.',
   categoryDeleteFailed: 'Eliminazione categoria fallita: {code}',
   categoryDeleted: 'Categoria eliminata.',
-  templateErrors: {
-    QUOTA_EXCEEDED: 'Limite di {limit} risposte rapide raggiunto con il tuo piano: passa a un piano superiore o elimina un template esistente.'
-  } as Record<string, string>,
-  templateCreateFailed: 'Creazione template fallita: {code}',
-  templateCreated: 'Template creato.',
-  templateDeleteFailed: 'Eliminazione template fallita: {code}',
-  templateDeleted: 'Template eliminato.',
   title: 'Configurazione ticket',
   adminRequired: 'Serve il livello Admin o Owner.',
   back: 'Torna indietro',
@@ -176,11 +163,6 @@ const it = {
   stayInCategory: 'restano nella categoria',
   edit: 'Modifica',
   delete: 'Elimina',
-  newTemplate: 'Nuovo template risposta',
-  message: 'Messaggio',
-  createTemplate: 'Crea template',
-  templatesTitle: 'Template disponibili',
-  noTemplates: 'Nessun template configurato.'
 };
 
 const en: typeof it = {
@@ -196,13 +178,6 @@ const en: typeof it = {
   categoryInUseByForm: 'The category is used by one or more forms for automatic tickets: update those forms before deleting it, or disable it.',
   categoryDeleteFailed: 'Deleting the category failed: {code}',
   categoryDeleted: 'Category deleted.',
-  templateErrors: {
-    QUOTA_EXCEEDED: 'Limit of {limit} canned replies reached on your plan: upgrade or delete an existing canned reply.'
-  } as Record<string, string>,
-  templateCreateFailed: 'Creating the canned reply failed: {code}',
-  templateCreated: 'Canned reply created.',
-  templateDeleteFailed: 'Deleting the canned reply failed: {code}',
-  templateDeleted: 'Canned reply deleted.',
   title: 'Ticket setup',
   adminRequired: 'The Admin or Owner level is required.',
   back: 'Go back',
@@ -290,11 +265,6 @@ const en: typeof it = {
   stayInCategory: 'stay in the category',
   edit: 'Edit',
   delete: 'Delete',
-  newTemplate: 'New canned reply',
-  message: 'Message',
-  createTemplate: 'Create canned reply',
-  templatesTitle: 'Available canned replies',
-  noTemplates: 'No canned replies configured.'
 };
 
 const copy: Record<Locale, typeof it> = { it, en };
@@ -354,14 +324,11 @@ export default function TicketConfigurationPage() {
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
   const [roles, setRoles] = useState<DiscordRole[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [templates, setTemplates] = useState<ResponseTemplate[]>([]);
   const [categoryForm, setCategoryForm] = useState(newCategory);
   // Raw option editor text per field ID: parsed on blur and before save, so
   // typing "Etichetta|" is not normalised away mid-keystroke.
   const [optionDrafts, setOptionDrafts] = useState<Record<string, string>>({});
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
-  const [templateName, setTemplateName] = useState('');
-  const [templateContent, setTemplateContent] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -369,11 +336,10 @@ export default function TicketConfigurationPage() {
   const load = async () => {
     setError('');
 
-    const [accessResponse, resourcesResponse, categoriesResponse, templatesResponse] = await Promise.all([
+    const [accessResponse, resourcesResponse, categoriesResponse] = await Promise.all([
       fetch(`/backend/api/guilds/${guildId}/access`),
       fetch(`/backend/api/guilds/${guildId}/resources`),
-      fetch(`/backend/api/guilds/${guildId}/categories`),
-      fetch(`/backend/api/guilds/${guildId}/response-templates`)
+      fetch(`/backend/api/guilds/${guildId}/categories`)
     ]);
 
     if (accessResponse.status === 401) {
@@ -381,7 +347,7 @@ export default function TicketConfigurationPage() {
       return;
     }
 
-    if (![accessResponse, resourcesResponse, categoriesResponse, templatesResponse].every((response) => response.ok)) {
+    if (![accessResponse, resourcesResponse, categoriesResponse].every((response) => response.ok)) {
       setError(c.loadError);
       return;
     }
@@ -393,7 +359,6 @@ export default function TicketConfigurationPage() {
     setChannels(resources.channels);
     setRoles(resources.roles);
     setCategories(await categoriesResponse.json());
-    setTemplates(await templatesResponse.json());
   };
 
   useEffect(() => {
@@ -575,58 +540,6 @@ export default function TicketConfigurationPage() {
       }
 
       setNotice(c.categoryDeleted);
-      await load();
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const createTemplate = async (event: FormEvent) => {
-    event.preventDefault();
-    setBusy('template');
-    setError('');
-    setNotice('');
-
-    try {
-      const response = await fetch(`/backend/api/guilds/${guildId}/response-templates`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: templateName, content: templateContent })
-      });
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        const code = body.error ?? response.status;
-        setError(apiErrorText(c.templateErrors, body, format(c.templateCreateFailed, { code })));
-        return;
-      }
-
-      setTemplateName('');
-      setTemplateContent('');
-      setNotice(c.templateCreated);
-      await load();
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const deleteTemplate = async (templateId: string) => {
-    setBusy(`template:${templateId}`);
-    setError('');
-    setNotice('');
-
-    try {
-      const response = await fetch(`/backend/api/guilds/${guildId}/response-templates/${templateId}`, {
-        method: 'DELETE'
-      });
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        setError(format(c.templateDeleteFailed, { code: body.error ?? response.status }));
-        return;
-      }
-
-      setNotice(c.templateDeleted);
       await load();
     } finally {
       setBusy('');
@@ -1149,53 +1062,6 @@ export default function TicketConfigurationPage() {
               </div>
             </article>
           ))}
-        </div>
-      </section>
-
-      <section className="grid settings-grid">
-        <form className="card form" onSubmit={createTemplate}>
-          <h2>{c.newTemplate}</h2>
-          <label>
-            {c.name}
-            <input
-              required
-              maxLength={80}
-              value={templateName}
-              onChange={(event) => setTemplateName(event.target.value)}
-            />
-          </label>
-          <label>
-            {c.message}
-            <textarea
-              required
-              maxLength={2000}
-              value={templateContent}
-              onChange={(event) => setTemplateContent(event.target.value)}
-            />
-          </label>
-          <button disabled={busy === 'template'} type="submit">{c.createTemplate}</button>
-        </form>
-
-        <div className="card">
-          <h2>{c.templatesTitle}</h2>
-          <div className="member-list">
-            {templates.map((template) => (
-              <div className="list-item" key={template.id}>
-                <div className="row">
-                  <strong>{template.name}</strong>
-                  <button
-                    className="danger"
-                    disabled={busy === `template:${template.id}`}
-                    onClick={() => void deleteTemplate(template.id)}
-                  >
-                    {c.delete}
-                  </button>
-                </div>
-                <p className="muted preserve">{template.content}</p>
-              </div>
-            ))}
-            {templates.length === 0 && <p className="muted">{c.noTemplates}</p>}
-          </div>
         </div>
       </section>
     </main>
