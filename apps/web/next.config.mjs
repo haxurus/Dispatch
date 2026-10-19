@@ -20,7 +20,7 @@ const nextConfig = {
     ] },
     // Link previews and favicons are fetched by other sites (Discord, X, search engines).
     { source: '/:locale(en|it)/opengraph-image', headers: [{ key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' }] },
-    { source: '/:file(icon.svg|apple-icon|manifest.webmanifest)', headers: [{ key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' }] },
+    { source: '/:file(icon.png|apple-icon.png|manifest.webmanifest)', headers: [{ key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' }] },
     { source: '/super', headers: noindex },
     { source: '/dashboard', headers: noindex },
     { source: '/dashboard/:path*', headers: noindex }
