@@ -62,8 +62,8 @@ model GuildSettings {
   planExpiresAt  DateTime?
   planNote       String?
   planUpdatedAt  DateTime?
-  // Discord guild subscription mirrored by the bot (apps/bot/src/subscriptions.ts);
-  // subscriptionEndsAt is set once it is cancelled, refunded or gone.
+  // Discord guild subscription mirrored by the API (apps/api/src/discord-billing.ts);
+  // subscriptionEndsAt is set once it is cancelled.
   subscriptionTier          String?
   subscriptionEndsAt        DateTime?
   subscriptionEntitlementId String?
@@ -593,11 +593,66 @@ model StatusChannel {
   updatedAt       DateTime @updatedAt
 }
 
-// Single row (id = 1): contacts shown on the pricing page.
+// Single row (id = 1): instance settings from the super console.
 model InstanceConfig {
   id             Int      @id @default(1)
+  // Contacts shown on the pricing page.
   contactEmail   String?
   contactDiscord String?
   contactUrl     String?
+  // Discord Premium Apps guild subscription SKU of each paid plan:
+  // { "TIER1": "<sku id>", "TIER2": "<sku id>", "TIER3": "<sku id>" }
+  discordSkus    Json      @default("{}")
+  // Discord webhook for alarms that must work when the bot is down (encrypted).
+  alertWebhookUrl String?
+  // Alert routing, quiet hours and daily digest (see apps/api/src/alert-rules.ts).
+  alertSettings  Json      @default("{}")
+  lastDigestAt   DateTime?
   updatedAt      DateTime @updatedAt
+}
+
+// Instance notices (bot startup and errors, servers added or removed,
+// subscriptions, bot down/restored) for the super console and the alert
+// router. The bot may only insert.
+model InstanceEvent {
+  id            String    @id @default(cuid())
+  source        String
+  level         String
+  // Routing: category (where it goes) and severity (how loudly).
+  category      String    @default("errors")
+  severity      String    @default("info")
+  // Text key and parameters (in details): rendered in the language of the
+  // server the alert is posted to.
+  messageKey    String?
+  title         String
+  details       Json
+  // pending → sent | digest → digested | log | failed
+  deliveryState String    @default("pending")
+  deliveredAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([deliveryState, createdAt])
+}
+
+// A problem that lasts: opened and resolved by key (bot.down, discord.sync),
+// reminded until resolved or acknowledged.
+model Incident {
+  id                String    @id @default(cuid())
+  key               String
+  category          String
+  severity          String
+  title             String
+  description       String?
+  messageKey        String?
+  params            Json      @default("{}")
+  openedAt          DateTime  @default(now())
+  resolvedAt        DateTime?
+  acknowledgedAt    DateTime?
+  acknowledgedBy    String?
+  lastRemindedAt    DateTime?
+  reminders         Int       @default(0)
+
+  @@index([key, resolvedAt])
+  @@index([openedAt(sort: Desc)])
 }

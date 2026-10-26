@@ -5,7 +5,6 @@ import {
   type NewsChannel,
   type TextChannel
 } from 'discord.js';
-import pino from 'pino';
 import { prisma } from '@dispatch/db';
 import {
   TICKET_LOG_EVENTS,
@@ -13,6 +12,7 @@ import {
   type TicketLogEvent
 } from '@dispatch/shared';
 import { guildLocale, messages, type BotMessages } from './i18n.js';
+import { logger as log } from './logger.js';
 
 /*
  * Per-server ticket log channel. Every caller is a ticket action that must
@@ -22,7 +22,6 @@ import { guildLocale, messages, type BotMessages } from './i18n.js';
  * comment). Settings are cached briefly; the dashboard test RPC refreshes them.
  */
 
-const log = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 const CACHE_TTL_MS = 30_000;
 const NO_MENTIONS = { parse: [] as never[] };
 const STABLE_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;

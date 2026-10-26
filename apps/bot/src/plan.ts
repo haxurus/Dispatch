@@ -4,7 +4,7 @@ import { PLANS, effectiveTier, type PlanFeature, type PlanTier } from '@dispatch
 /*
  * The plan in force on a server (packages/shared/src/plans.ts): the higher of
  * the gift set from the super console and the Discord subscription mirrored
- * by subscriptions.ts. Cached briefly (the subscription sync invalidates it);
+ * by the API from Discord. Cached briefly (30 seconds);
  * unknown servers are Free.
  */
 
@@ -37,4 +37,26 @@ export async function guildPlanTier(guildId: string): Promise<PlanTier> {
 
 export async function guildAllows(guildId: string, feature: PlanFeature) {
   return PLANS[await guildPlanTier(guildId)].features[feature];
+}
+
+/*
+ * Discord SKU of each paid plan (super console → Discord subscriptions), for
+ * the premium "subscribe" buttons. The bot may read only this column; until
+ * the grant exists (or no SKU is set) there is simply no button.
+ */
+const SKU_CACHE_MS = 60_000;
+let skuCache: { value: Record<string, string>; expires: number } | null = null;
+
+export async function planSku(tier: PlanTier): Promise<string | null> {
+  if (tier === 'FREE') return null;
+  if (!skuCache || skuCache.expires <= Date.now()) {
+    const row = await prisma.instanceConfig.findUnique({ where: { id: 1 }, select: { discordSkus: true } }).catch(() => null);
+    const raw = row?.discordSkus;
+    const value: Record<string, string> = {};
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [key, id] of Object.entries(raw)) if (typeof id === 'string' && /^\d{17,20}$/.test(id)) value[key] = id;
+    }
+    skuCache = { value, expires: Date.now() + SKU_CACHE_MS };
+  }
+  return skuCache.value[tier] ?? null;
 }

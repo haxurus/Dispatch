@@ -45,3 +45,11 @@ export function unprotectJson(value: unknown): unknown {
   if (typeof marker !== 'string') return value;
   return JSON.parse(decryptText(marker)!);
 }
+
+// Log lines shown in the super console may quote connection strings or tokens.
+const REDACTIONS: Array<[RegExp, string]> = [
+  [/[A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6,7}\.[A-Za-z0-9_-]{27,40}/g, '[token]'],
+  [/\b(postgres(?:ql)?|redis|https?):\/\/[^\s'"]+/gi, '$1://[redacted]'],
+  [/(Bearer|Bot)\s+[A-Za-z0-9._-]{16,}/g, '$1 [redacted]']
+];
+export const redactText = (value: string) => REDACTIONS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value);

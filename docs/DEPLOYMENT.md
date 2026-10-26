@@ -333,16 +333,17 @@ sudo rm -f /srv/docker/dispatch/secrets/redis_password
 
 - The hosted bot is open to every server: **Public Bot** must be enabled in the Discord Developer Portal, and `/backend/bot/invite` redirects straight to Discord's authorisation page.
 - Blacklisted servers and installers (super console → **Blacklist installazioni**, *installation blacklist*) are left immediately, also when they add the bot again. An installer is recognised only where the bot can read the server's audit log.
-- The status channel (startup, servers added or removed, rejected installations) is chosen in **Super console → Canale di stato** (*Status channel*), with a test message.
+- The status channel is chosen in **Super console → Notifiche** (*Notifications*), with a test message. In **Monitoraggio** (*Monitoring*) choose where each alert category goes (status channel, another channel, daily digest or log only), quiet hours and the digest time.
+- **Bot down**: the bot cannot report its own outage. Set an alarm webhook in **Super console → Monitoraggio** (a Discord webhook of a private channel) and point an external uptime monitor at `https://dispatch.haxurus.com/backend/health/bot` (200 while the bot is connected, 503 otherwise).
 - `INVITE_ALLOWED_USER_IDS` is no longer used and can be removed from `.env`.
 - When the bot is removed from a server, the API deletes all of that server's data 30 days later, unless the bot is added again in the meantime.
 
 ## Plans
 
-- Paid plans are sold only through Discord. In the Developer Portal → **Monetization**: complete the team and payout setup, then create three **Guild Subscription** SKUs (Plus $1.99, Pro $4.99, Brand $8.99 a month, matching `monthlyCents` in `packages/shared/src/plans.ts`) and publish them. Put their IDs in `DISCORD_PLAN_SKUS` in the same file and deploy: until then purchases are not recognised and the super console shows a warning.
+- Paid plans are sold only through Discord. In the Developer Portal → **Monetization**: complete the team and payout setup, then create three **Guild Subscription** SKUs (Plus $1.99, Pro $4.99, Brand $8.99 a month, matching `monthlyCents` in `packages/shared/src/plans.ts`) and publish them. Paste their IDs in **Super console → Abbonamenti Discord** (*Discord subscriptions*): the API syncs subscriptions every two minutes (or with *Sync now*). Until then purchases are not recognised.
 - Test a SKU with a test entitlement (Developer Portal or `POST /applications/{id}/entitlements` with `owner_type` 1 and the server ID): the server's dashboard shows the plan within moments, and the status channel reports it.
 - Gifts (trials, partners, early adopters) are set per server in **Super console → server list → Edit gift** (plan, expiry, note); the higher of gift and subscription applies. The contacts shown on the pricing page are managed in the super console too.
-- The plans migrations need the `InstanceConfig` grants in `harden-users.sh`: re-run the installer after pulling. Until then the super console shows the plans section as unavailable.
+- New tables and grants (`InstanceConfig`, `InstanceEvent`, `Incident`) are listed in `harden-users.sh`, which runs on every deploy from the copy installed on the VPS: re-run the installer after pulling, then deploy again. Until then the super console shows plans, monitoring and alerts as unavailable.
 - The Brand plan sets the bot's nickname on a server, which needs **Change Nickname**: the install link (and the Developer Portal guild install permissions) is now `361112923152`. Servers that added the bot earlier must re-authorise it from `/backend/bot/invite` to use a custom nickname.
 
 ## 9. Rollback

@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { prisma } from '@dispatch/db';
 import { DEFAULT_POST_REMOVAL_RETENTION_DAYS } from '@dispatch/shared';
+import { recordAlert } from './alert-store.js';
 
 /*
  * Data lifecycle after the bot leaves a server (privacy policy: "deleted 30
@@ -58,7 +59,13 @@ export function startGuildPurge(log: FastifyBaseLogger) {
     running = true;
     try {
       const purged = await purgeDepartedGuilds();
-      if (purged) log.info({ purged }, 'Purged data of servers the bot left');
+      if (purged) {
+        log.info({ purged }, 'Purged data of servers the bot left');
+        await recordAlert({
+          category: 'installations', severity: 'info',
+          key: 'guilds.purged', params: { count: purged, days: DEFAULT_POST_REMOVAL_RETENTION_DAYS }
+        }).catch((error) => log.warn({ err: error }, 'Unable to record the purge alert'));
+      }
     } catch (error) {
       log.error({ err: error }, 'Departed server purge failed');
     } finally {

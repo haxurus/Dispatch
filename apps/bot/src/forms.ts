@@ -16,7 +16,6 @@ import {
   type StringSelectMenuInteraction,
   type TextChannel
 } from 'discord.js';
-import pino from 'pino';
 import { prisma, type TicketCategory } from '@dispatch/db';
 import {
   displayAnswer,
@@ -37,6 +36,7 @@ import {
   reserveTicketOpen, consumeTicketOpenReservation, commitTicketOpen,
   releaseTicketOpenReservation, ticketOpenReservationMessage, formVersion
 } from './open-guard.js';
+import { logger as log } from './logger.js';
 
 // dispatch:form:start:<panelId>:<formId> (button) and the legacy
 // dispatch:form:start:<panelId> of messages published before multi-form
@@ -56,8 +56,6 @@ const TOKEN = /^[A-Za-z0-9_-]{24}$/;
 // Discord rejects a message whose embeds exceed 6000 characters in total.
 const REPORT_MESSAGE_BUDGET = 5500;
 const NO_MENTIONS = { parse: [] as never[] };
-
-const log = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
 type FormInteraction = ButtonInteraction | StringSelectMenuInteraction | ModalSubmitInteraction;
 

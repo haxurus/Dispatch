@@ -4,8 +4,8 @@
  * and, through the public API, the pricing page and the dashboard.
  *
  * Paid plans are sold only through Discord (Premium Apps guild subscriptions,
- * monthly): the bot mirrors each server's active entitlement into
- * GuildSettings.subscription*. The operator can also give a plan from the
+ * monthly, SKUs set in the super console): the API mirrors each server's
+ * active entitlement into GuildSettings.subscription* (apps/api/src/discord-billing.ts). The operator can also give a plan from the
  * super console (a gift, optionally with an expiry). The higher of the two is
  * in force; an ended plan behaves as Free and nothing is deleted on a
  * downgrade except what applyPlanLimits() resets.
@@ -93,27 +93,6 @@ export const FIXED_LIMITS = {
 /** Currency of monthlyCents: Discord SKU prices are set in US dollars. */
 export const PLAN_CURRENCY = 'USD';
 
-/**
- * Discord guild subscription SKU of each paid plan (Developer Portal →
- * Monetization → SKUs). null until the SKU exists: the store link then opens
- * the app's store page and no entitlement maps to that plan.
- */
-export const DISCORD_PLAN_SKUS: Record<Exclude<PlanTier, 'FREE'>, string | null> = {
-  TIER1: null,
-  TIER2: null,
-  TIER3: null
-};
-
-export function tierForSku(skuId: string): PlanTier | null {
-  const entry = Object.entries(DISCORD_PLAN_SKUS).find(([, sku]) => sku === skuId);
-  return entry ? (entry[0] as PlanTier) : null;
-}
-
-export const discordStoreUrl = (applicationId: string, tier?: PlanTier | null) => {
-  const sku = tier && tier !== 'FREE' ? DISCORD_PLAN_SKUS[tier] : null;
-  return `https://discord.com/application-directory/${applicationId}/store${sku ? `/${sku}` : ''}`;
-};
-
 export const isPlanTier = (value: unknown): value is PlanTier =>
   typeof value === 'string' && (PLAN_TIERS as readonly string[]).includes(value);
 
@@ -170,8 +149,8 @@ export type EntitlementLike = {
  */
 export function bestEntitlement<T extends EntitlementLike>(
   entitlements: T[],
-  now: Date = new Date(),
-  tierOf: (skuId: string) => PlanTier | null = tierForSku
+  tierOf: (skuId: string) => PlanTier | null,
+  now: Date = new Date()
 ) {
   let best: { entitlement: T; tier: PlanTier } | null = null;
   const endOf = (value: EntitlementLike) => (value.endsAt ? new Date(value.endsAt).getTime() : Infinity);

@@ -68,9 +68,10 @@ Do not lose the key: encrypted data and backups cannot be recovered without it.
 
 - `SELECT, INSERT, UPDATE, DELETE` on `GuildSettings`, `TicketCategory`, `TicketPanel`, `Ticket`, `TicketMember`, `TicketAudit`, `Transcript`, `TicketFeedback`, `TicketOpenAttempt`, `TicketUserGuard`, `FormSession`;
 - `SELECT, INSERT, UPDATE` on `FormSubmission`; `SELECT, UPDATE` on `FormPanel`;
-- `SELECT` only on `GuildBlacklist`, `FormDefinition`, `FormPermissionBinding`, `InstallBlock`, `StatusChannel`.
+- `SELECT` only on `GuildBlacklist`, `FormDefinition`, `FormPermissionBinding`, `InstallBlock`, `StatusChannel`, and on the `discordSkus` column of `InstanceConfig` (premium buttons);
+- `INSERT` only on `InstanceEvent` (its status notices; it cannot read them back).
 
-The bot has no access to dashboard sessions (`PanelSession`), role bindings (`PanelRoleBinding`), panel audit, super-admin audit, staff notes, response templates or `_prisma_migrations`, and cannot modify the installation blacklist or the status channel. CI applies the same script to a fresh database and verifies these restrictions on every change ([VALIDATION.md](VALIDATION.md)).
+The bot has no access to dashboard sessions (`PanelSession`), role bindings (`PanelRoleBinding`), panel audit, super-admin audit, staff notes, response templates or `_prisma_migrations`, and cannot modify the installation blacklist, the status channel or the instance settings (alarm webhook, alert routing). CI applies the same script to a fresh database and verifies these restrictions on every change ([VALIDATION.md](VALIDATION.md)).
 
 PostgreSQL owner credentials are used only by the one-shot `migrate` and `secure-db` jobs on the internal `migrate_db` network.
 

@@ -244,3 +244,36 @@ export async function refreshStatusChannel() {
 export async function setBotBranding(guildId: string, profile: { nick?: string | null; banner?: string | null }) {
   return api<{ ok: true; guildId: string }>(`/guilds/${id(guildId)}/branding`, 'POST', profile);
 }
+
+// Super console → monitoring. Unauthenticated health of the bot process.
+export async function botHealth(): Promise<{ ok: boolean; guilds: number } | null> {
+  try {
+    const response = await fetch(`${internalUrl}/healthz`, { signal: AbortSignal.timeout(5_000) });
+    const body = await response.json().catch(() => ({})) as { ok?: boolean; guilds?: number };
+    return { ok: response.ok && body.ok === true, guilds: Number(body.guilds) || 0 };
+  } catch {
+    return null;
+  }
+}
+
+export type BotLogEntry = { time: string; level: string; msg: string; context: Record<string, unknown> | null };
+
+export async function getBotLogs(level: string, limit: number) {
+  const query = new URLSearchParams({ level, limit: String(limit) });
+  return api<BotLogEntry[]>(`/logs?${query}`);
+}
+
+export type Entitlement = { id: string; skuId: string; guildId: string | null; type: number; startsAt: string | null; endsAt: string | null };
+
+/** Active entitlements of the application, read by the bot (read-only REST). */
+export async function getEntitlements() {
+  return api<Entitlement[]>('/entitlements');
+}
+
+/** Posts a routed alert through the bot to a channel of a server it is in. */
+export async function deliverAlert(alert: {
+  guildId: string; channelId: string; title: string; description: string | null;
+  fields: Array<{ name: string; value: string }>; color: number; footer: string; mentionUserId: string | null;
+}) {
+  return api<{ ok: true }>('/alerts/deliver', 'POST', { ...alert, guildId: id(alert.guildId), channelId: id(alert.channelId) });
+}

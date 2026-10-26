@@ -36,3 +36,17 @@ export function decryptText(value: string | null | undefined): string | null {
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64url')), decipher.final()]).toString('utf8');
 }
+
+/** Same envelope as the API (apps/api/src/security.ts): the API decrypts it. */
+export function protectJson(value: unknown): Record<string, string> {
+  return { __dispatch_encrypted__: encryptText(JSON.stringify(value))! };
+}
+
+// Error texts and log lines may quote connection strings or tokens: never
+// post or show them (status notices, super console logs).
+const REDACTIONS: Array<[RegExp, string]> = [
+  [/[A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6,7}\.[A-Za-z0-9_-]{27,40}/g, '[token]'],
+  [/\b(postgres(?:ql)?|redis|https?):\/\/[^\s'"]+/gi, '$1://[redacted]'],
+  [/(Bearer|Bot)\s+[A-Za-z0-9._-]{16,}/g, '$1 [redacted]']
+];
+export const redactText = (value: string) => REDACTIONS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value);

@@ -1,5 +1,4 @@
 import { ActivityType, Client, Events, GatewayIntentBits } from 'discord.js';
-import pino from 'pino';
 import { prisma } from '@dispatch/db';
 import { config } from './config.js';
 import { startInternalApi } from './internal-api.js';
@@ -14,10 +13,9 @@ import { runLeaderboardCycle } from './leaderboard.js';
 import { checkInstall, isGuildInstallBlocked } from './install-guard.js';
 import { createStatusNotifier, guildFields } from './status.js';
 import { guildMessages } from './i18n.js';
-import { syncAllSubscriptions, syncGuildSubscription } from './subscriptions.js';
-import { PLANS, tierForSku } from '@dispatch/shared';
+import { logger as log } from './logger.js';
+import { redactText } from './security.js';
 
-const log = pino({ level: config.logLevel });
 
 const client = new Client({
   intents: [
@@ -102,64 +100,16 @@ client.once(Events.ClientReady, async (ready) => {
   internalApi = startInternalApi(client, config.internalApiKey, config.internalApiPort, status);
   status.notify({
     level: 'ok',
-    title: 'Dispatch online',
-    dedupeKey: 'startup',
-    fields: [
-      { name: 'Server', value: String(ready.guilds.cache.size) },
-      ...(departed ? [{ name: 'Rimosso mentre era offline', value: String(departed) }] : [])
-    ]
+    category: 'availability',
+    severity: 'info',
+    key: 'bot.online',
+    params: { user: ready.user.tag, departed: departed || null },
+    fields: [{ key: 'servers', value: String(ready.guilds.cache.size) }],
+    dedupeKey: 'startup'
   });
   void runRetentionCycle();
   void runLeaderboards();
-  void runSubscriptionSync();
 });
-
-// Discord subscriptions (paid plans): a full sync at startup and every 10
-// minutes catches missed events and refunds; events update one server.
-let subscriptionSyncRunning = false;
-async function runSubscriptionSync() {
-  if (subscriptionSyncRunning || !client.isReady()) return;
-  subscriptionSyncRunning = true;
-  try {
-    const result = await syncAllSubscriptions(client);
-    if (result.changed) log.info(result, 'Discord subscriptions synced');
-  } catch (error) {
-    log.error({ err: error }, 'Discord subscription sync failed');
-  } finally {
-    subscriptionSyncRunning = false;
-  }
-}
-
-setInterval(() => {
-  void runSubscriptionSync();
-}, 10 * 60 * 1000).unref();
-
-function onEntitlement(kind: 'create' | 'update' | 'delete') {
-  return async (entitlement: { guildId: string | null; skuId: string }) => {
-    if (!entitlement.guildId || !client.isReady()) return;
-    const guildId = entitlement.guildId;
-    try {
-      await syncGuildSubscription(client, guildId);
-    } catch (error) {
-      log.error({ err: error, guildId }, 'Discord subscription update failed');
-      return;
-    }
-    const tier = tierForSku(entitlement.skuId);
-    const guild = client.guilds.cache.get(guildId);
-    status.notify({
-      level: kind === 'create' ? 'ok' : 'warn',
-      title: kind === 'create' ? 'Nuovo abbonamento' : kind === 'update' ? 'Abbonamento disdetto o scaduto' : 'Abbonamento rimosso o rimborsato',
-      fields: [
-        { name: 'Piano', value: tier ? PLANS[tier].name : entitlement.skuId },
-        ...guildFields(guild ?? { id: guildId })
-      ]
-    });
-  };
-}
-
-client.on(Events.EntitlementCreate, onEntitlement('create'));
-client.on(Events.EntitlementUpdate, (_old, entitlement) => onEntitlement('update')(entitlement));
-client.on(Events.EntitlementDelete, onEntitlement('delete'));
 
 client.on(Events.GuildCreate, async (guild) => {
   // Installation blacklist (super console): leave before creating any state.
@@ -174,8 +124,10 @@ client.on(Events.GuildCreate, async (guild) => {
       log.warn({ guildId: guild.id, reason: check.verdict }, 'Left guild: installation blocked');
       status.notify({
         level: 'warn',
-        title: 'Installazione rifiutata',
-        description: `Dispatch è uscito da **${guild.name}**: ${check.verdict === 'blocked-guild' ? 'il server è in blacklist' : 'chi ha aggiunto il bot è in blacklist'}.`,
+        category: 'security',
+        severity: 'warning',
+        key: 'install.rejected',
+        params: { guild: guild.name, reason: check.verdict },
         fields: guildFields(guild, installerId)
       });
       return;
@@ -186,7 +138,7 @@ client.on(Events.GuildCreate, async (guild) => {
 
   await ensureGuild(guild).catch((error) => log.error({ err: error, guildId: guild.id }, 'Guild sync failed'));
   log.info({ guildId: guild.id, guildName: guild.name }, 'Dispatch joined guild');
-  status.notify({ level: 'ok', title: 'Dispatch aggiunto a un server', fields: guildFields(guild, installerId) });
+  status.notify({ level: 'ok', category: 'installations', severity: 'info', key: 'guild.added', fields: guildFields(guild, installerId) });
 });
 
 client.on(Events.GuildDelete, async (guild) => {
@@ -194,7 +146,7 @@ client.on(Events.GuildDelete, async (guild) => {
   await markGuildLeft([guild.id]).catch((error) => log.error({ err: error, guildId: guild.id }, 'Unable to mark guild as left'));
   if (intentionalLeaves.delete(guild.id)) return;
   log.info({ guildId: guild.id }, 'Dispatch removed from guild');
-  status.notify({ level: 'info', title: 'Dispatch rimosso da un server', fields: guildFields(guild) });
+  status.notify({ level: 'info', category: 'installations', severity: 'info', key: 'guild.removed', fields: guildFields(guild) });
 });
 
 client.on(Events.GuildUpdate, async (_oldGuild, newGuild) => {
@@ -211,15 +163,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const errorType = error instanceof Error ? error.name : 'UnknownError';
     log.error({ errorType }, 'Ticket interaction failed');
     // Type and custom id prefix only: never the interaction content.
+    const component = interaction.customId.split(':').slice(0, 2).join(':');
     status.notify({
       level: 'error',
-      title: 'Errore in un’interazione',
-      dedupeKey: `interaction:${errorType}:${interaction.customId.split(':').slice(0, 2).join(':')}`,
-      fields: [
-        { name: 'Tipo', value: errorType },
-        { name: 'Componente', value: interaction.customId.split(':').slice(0, 2).join(':') },
-        ...(interaction.guildId ? [{ name: 'Server', value: `\`${interaction.guildId}\`` }] : [])
-      ]
+      category: 'errors',
+      severity: 'warning',
+      key: 'interaction.failed',
+      params: { component, type: errorType },
+      fields: interaction.guildId ? [{ key: 'server', value: `\`${interaction.guildId}\`` }] : [],
+      dedupeKey: `interaction:${errorType}:${component}`
     });
 
     const message = (await guildMessages(interaction.guildId).catch(() => null))?.common.interactionError ??
@@ -279,17 +231,17 @@ setInterval(() => {
 
 client.on(Events.Warn, (warning) => {
   log.warn({ warning }, 'Discord client warning');
-  status.notify({ level: 'warn', title: 'Avviso del client Discord', description: warning.slice(0, 500), dedupeKey: `warn:${warning.slice(0, 80)}` });
+  status.notify({ level: 'warn', category: 'errors', severity: 'warning', key: 'client.warning', params: { detail: redactText(warning).slice(0, 500) }, dedupeKey: `warn:${warning.slice(0, 80)}` });
 });
 client.on(Events.Error, (error) => {
   log.error({ err: error }, 'Discord client error');
-  status.notify({ level: 'error', title: 'Errore del client Discord', description: `${error.name}: ${error.message}`.slice(0, 500), dedupeKey: `client:${error.name}` });
+  status.notify({ level: 'error', category: 'errors', severity: 'warning', key: 'client.error', params: { detail: redactText(`${error.name}: ${error.message}`).slice(0, 500) }, dedupeKey: `client:${error.name}` });
 });
 client.on(Events.ShardDisconnect, (event, shardId) => {
-  status.notify({ level: 'warn', title: 'Gateway Discord disconnesso', fields: [{ name: 'Shard', value: String(shardId) }, { name: 'Codice', value: String(event.code) }], dedupeKey: `disconnect:${shardId}` });
+  status.notify({ level: 'warn', category: 'availability', severity: 'warning', key: 'shard.disconnected', params: { shard: shardId, code: event.code }, dedupeKey: `disconnect:${shardId}` });
 });
-client.on(Events.ShardResume, (shardId) => {
-  status.notify({ level: 'ok', title: 'Gateway Discord riconnesso', fields: [{ name: 'Shard', value: String(shardId) }], dedupeKey: `resume:${shardId}` });
+client.on(Events.ShardResume, (shardId, replayed) => {
+  status.notify({ level: 'ok', category: 'availability', severity: 'info', key: 'shard.resumed', params: { shard: shardId, replayed }, dedupeKey: `resume:${shardId}` });
 });
 
 const shutdown = async (signal: string) => {
@@ -304,7 +256,7 @@ const shutdown = async (signal: string) => {
 
 process.on('unhandledRejection', (reason) => {
   const text = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
-  status.notify({ level: 'error', title: 'Promise non gestita', description: text.slice(0, 500), dedupeKey: `rejection:${text.slice(0, 80)}` });
+  status.notify({ level: 'error', category: 'errors', severity: 'warning', key: 'bot.unhandled', params: { detail: redactText(text).slice(0, 500) }, dedupeKey: `rejection:${text.slice(0, 80)}` });
   log.error({ reason }, 'Unhandled promise rejection');
 });
 

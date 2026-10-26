@@ -14,11 +14,15 @@ import {
   closeTicket, deleteTicketChannel, recordTicketMessage, reopenTicket, staffThreadTranscriptDestination, ticketChannelOverwrites
 } from '../apps/bot/src/ticket-operations.js';
 import { purgeDepartedGuild, purgeDepartedGuilds } from '../apps/api/src/guild-purge.js';
+import {
+  DEFAULT_ALERT_SETTINGS, digestDue, groupForDelivery, inQuietHours, parseAlertSettings, reminderDue, routeTarget
+} from '../apps/api/src/alert-rules.js';
+import { parseSkus, skuTier, storeLinks } from '../apps/api/src/discord-plans.js';
 import { guildRetention } from '../apps/bot/src/retention.js';
 import { invalidateGuildPlan, guildPlanTier } from '../apps/bot/src/plan.js';
 import { openStaffThread } from '../apps/bot/src/ticket-operations.js';
 import {
-  PLANS, PLAN_TIERS, bestEntitlement, effectiveRetentionDays, effectiveTier, requiredTierFor, tierAllows
+  PLANS, PLAN_TIERS, bestEntitlement, createLogBuffer, effectiveRetentionDays, effectiveTier, renderAlertMessage, requiredTierFor, tierAllows
 } from '@dispatch/shared';
 import { claimLeaderboardPeriod, releaseLeaderboardPeriod, runLeaderboardCycle } from '../apps/bot/src/leaderboard.js';
 import { handleTicketInteraction, publishMainMenu } from '../apps/bot/src/tickets.js';
@@ -1371,6 +1375,22 @@ test('servers still within the retention, or added again, are never purged', asy
   assert.equal(await prisma.formSubmission.count({ where: { guildId: G } }), 1);
 });
 
+test('the bot role can record instance events and read the Discord SKUs, nothing else of the console', async () => {
+  const connection = new URL(db);
+  connection.username = 'dispatch_bot'; connection.password = 'dispatch_bot_test';
+  const bot = new PrismaClient({ datasources: { db: { url: connection.toString() } } });
+  try {
+    await bot.instanceEvent.createMany({ data: [{ source: 'bot', level: 'info', title: 'test', details: {} }] });
+    await assert.rejects(bot.instanceEvent.findMany({ take: 1 }));
+    await assert.rejects(bot.incident.findMany({ take: 1 }));
+    await bot.instanceConfig.findUnique({ where: { id: 1 }, select: { discordSkus: true } });
+    await assert.rejects(bot.instanceConfig.findUnique({ where: { id: 1 }, select: { alertWebhookUrl: true } }));
+  } finally {
+    await bot.$disconnect();
+    await prisma.instanceEvent.deleteMany({ where: { source: 'bot', title: 'test' } });
+  }
+});
+
 test('the bot role can stamp leftAt and read the status channel, but cannot change it', async () => {
   const connection = new URL(db);
   connection.username = 'dispatch_bot'; connection.password = 'dispatch_bot_test';
@@ -1508,24 +1528,24 @@ test('the best running entitlement of a server wins', () => {
   const skus: Record<string, 'TIER1' | 'TIER2' | 'TIER3'> = { s1: 'TIER1', s2: 'TIER2', s3: 'TIER3' };
   const tierOf = (sku: string) => skus[sku] ?? null;
   const base = { guildId: G, startsAt: null, endsAt: null };
-  assert.equal(bestEntitlement([], now, tierOf), null);
-  assert.equal(bestEntitlement([{ ...base, id: '1', skuId: 'unknown' }], now, tierOf), null);
+  assert.equal(bestEntitlement([], tierOf, now), null);
+  assert.equal(bestEntitlement([{ ...base, id: '1', skuId: 'unknown' }], tierOf, now), null);
   assert.equal(bestEntitlement([
     { ...base, id: '1', skuId: 's1' },
     { ...base, id: '2', skuId: 's2' }
-  ], now, tierOf)?.entitlement.id, '2');
+  ], tierOf, now)?.entitlement.id, '2');
   // Ended, deleted and not yet started entitlements do not count.
   assert.equal(bestEntitlement([
     { ...base, id: '1', skuId: 's1' },
     { ...base, id: '2', skuId: 's3', endsAt: '2026-10-15T00:00:00Z' },
     { ...base, id: '3', skuId: 's3', deleted: true },
     { ...base, id: '4', skuId: 's3', startsAt: '2026-10-20T00:00:00Z' }
-  ], now, tierOf)?.tier, 'TIER1');
+  ], tierOf, now)?.tier, 'TIER1');
   // Same plan: the one that runs longer.
   assert.equal(bestEntitlement([
     { ...base, id: '1', skuId: 's2', endsAt: '2026-10-20T00:00:00Z' },
     { ...base, id: '2', skuId: 's2' }
-  ], now, tierOf)?.entitlement.id, '2');
+  ], tierOf, now)?.entitlement.id, '2');
 });
 
 test('Free servers: closed tickets expire after 15 days even without a retention setting', async () => {
@@ -1548,4 +1568,69 @@ test('Free servers cannot open a private staff thread', async () => {
   const open = await ticket(cat, { status: 'OPEN', closedAt: null });
   await assert.rejects(openStaffThread(client(), G, open.id, '990000000000000077'), /PLAN_REQUIRED/);
   invalidateGuildPlan(G);
+});
+
+// Super console alert routing (apps/api/src/alert-rules.ts), ported from Sentinel.
+test('alert settings merge over the defaults and reject invalid values', () => {
+  assert.deepEqual(parseAlertSettings(null), DEFAULT_ALERT_SETTINGS);
+  const settings = parseAlertSettings({
+    routes: {
+      errors: { mode: 'channel', guildId: '100000000000000001', channelId: '200000000000000001', mention: true },
+      installations: { mode: 'log' },
+      billing: { mode: 'channel', guildId: 'x' },
+      nope: { mode: 'status' }
+    },
+    quietHours: { enabled: true, start: '25:00', end: '07:30' },
+    digest: { time: '18:00', mode: 'channel', guildId: '100000000000000001', channelId: '200000000000000002' },
+    timezone: 'Mars/Olympus'
+  });
+  assert.deepEqual(settings.routes.errors, { mode: 'channel', guildId: '100000000000000001', channelId: '200000000000000001', mention: true });
+  assert.equal(settings.routes.installations.mode, 'log');
+  assert.deepEqual(settings.routes.billing, { mode: 'channel', guildId: null, channelId: null, mention: false });
+  assert.equal(settings.routes.availability.mention, true);
+  assert.deepEqual(settings.quietHours, { enabled: true, start: '23:00', end: '07:30' });
+  assert.equal(settings.digest.channelId, '200000000000000002');
+  assert.equal(settings.timezone, 'Europe/Rome');
+  const status = { guildId: '1', channelId: '2' };
+  assert.deepEqual(routeTarget({ mode: 'status', guildId: null, channelId: null }, status), status);
+  assert.equal(routeTarget({ mode: 'digest', guildId: null, channelId: null }, status), null);
+});
+
+test('quiet hours, the daily digest, grouping and reminders', () => {
+  const quiet = { ...DEFAULT_ALERT_SETTINGS, quietHours: { enabled: true, start: '23:00', end: '08:00' } };
+  // Rome is UTC+2 in October.
+  assert.equal(inQuietHours(quiet, new Date('2026-10-21T22:30:00Z')), true);
+  assert.equal(inQuietHours(quiet, new Date('2026-10-21T06:00:00Z')), false);
+  assert.equal(digestDue(DEFAULT_ALERT_SETTINGS, new Date('2026-10-21T06:59:00Z'), null), false);
+  assert.equal(digestDue(DEFAULT_ALERT_SETTINGS, new Date('2026-10-21T07:00:00Z'), null), true);
+  assert.equal(digestDue(DEFAULT_ALERT_SETTINGS, new Date('2026-10-21T15:00:00Z'), new Date('2026-10-21T07:00:30Z')), false);
+  const now = 1_000_000_000;
+  const groups = groupForDelivery([{ key: 'a' }, { key: 'b' }, { key: 'b' }], new Map([['a', now - 60_000]]), now);
+  assert.deepEqual(groups.map((group) => [group.key, group.members.length]), [['b', 2]]);
+  const openedAt = new Date('2026-10-21T10:00:00Z');
+  const base = { severity: 'warning', openedAt, resolvedAt: null, acknowledgedAt: null, lastRemindedAt: null, reminders: 0 };
+  assert.equal(reminderDue(base, new Date('2026-10-21T10:14:00Z')), false);
+  assert.equal(reminderDue(base, new Date('2026-10-21T10:15:00Z')), true);
+  assert.equal(reminderDue({ ...base, acknowledgedAt: openedAt }, new Date('2026-10-22T10:00:00Z')), false);
+});
+
+test('alert texts exist in both languages and the log buffer redacts', () => {
+  assert.equal(renderAlertMessage('subscription.new', { plan: 'Pro' }, 'it').description, 'Il server ora ha il piano Pro.');
+  assert.equal(renderAlertMessage('bot.down', { minutes: 2 }, 'en').title, 'Bot unreachable');
+  const buffer = createLogBuffer(2, (value) => value.replace(/secret-\w+/g, '[REDACTED]'));
+  buffer.write(`${JSON.stringify({ level: 30, time: 1, msg: 'first' })}\n${JSON.stringify({ level: 50, time: 2, msg: 'boom secret-abc' })}\n`);
+  buffer.write(`${JSON.stringify({ level: 40, time: 3, msg: 'warn' })}\n`);
+  assert.deepEqual(buffer.list('trace', 10).map((entry) => entry.msg), ['warn', 'boom [REDACTED]']);
+  assert.deepEqual(buffer.list('error', 10).map((entry) => entry.level), ['error']);
+});
+
+test('Discord SKUs are read defensively and map to plans and store links', () => {
+  const skus = parseSkus({ TIER1: '100000000000000001', TIER2: 'bad', TIER9: '100000000000000003', TIER3: '100000000000000003' });
+  assert.deepEqual(skus, { TIER1: '100000000000000001', TIER3: '100000000000000003' });
+  assert.equal(skuTier(skus)('100000000000000003'), 'TIER3');
+  assert.equal(skuTier(skus)('100000000000000002'), null);
+  const store = storeLinks(skus, '42');
+  assert.equal(store.enabled, true);
+  assert.equal(store.links.TIER2, null);
+  assert.equal(store.links.TIER1, 'https://discord.com/application-directory/42/store/100000000000000001');
 });
