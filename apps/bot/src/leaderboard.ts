@@ -5,7 +5,6 @@ import {
   type NewsChannel,
   type TextChannel
 } from 'discord.js';
-import pino from 'pino';
 import { loadLeaderboardActivity, prisma } from '@dispatch/db';
 import {
   LEADERBOARD_LIMITS,
@@ -20,6 +19,7 @@ import {
 } from '@dispatch/shared';
 import { guildLocale, messages, type BotLocale } from './i18n.js';
 import { guildAllows } from './plan.js';
+import { logger as log } from './logger.js';
 
 /*
  * Moderator leaderboard: scheduled weekly/monthly posts and the dashboard
@@ -29,7 +29,6 @@ import { guildAllows } from './plan.js';
  * bot processes never post the same period twice; a failed post releases it.
  */
 
-const log = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 const NO_MENTIONS = { parse: [] as never[] };
 const STABLE_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
 const MEDALS = ['🥇', '🥈', '🥉'] as const;

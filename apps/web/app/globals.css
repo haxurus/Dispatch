@@ -501,13 +501,10 @@ legend { padding: 0 8px; color: var(--accent); font: 500 .7rem var(--font-mono-s
 .super-guild-identity strong, .super-guild-identity span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .super-guild-identity span, .super-guild-meta span { color: var(--muted); font-size: .76rem; }
 .super-guild-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.super-guild-stats { display: flex; flex-direction: column; gap: 4px; }
 .super-guild-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .block-forms { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
-.block-forms > form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raised); }
+.block-forms > div { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raised); }
 .block-forms label { margin: 0; }
-.status-forms { grid-template-columns: 1fr; margin-top: 12px; }
-.status-forms .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .block-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: center; padding: 12px 16px; background: var(--bg-raised); }
 .block-row > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .block-row > div > span { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
@@ -820,7 +817,7 @@ input[aria-invalid="true"] { border-color: var(--danger-line-strong); }
   .metric-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .super-guild { grid-template-columns: minmax(0, 1fr) auto; }
   .super-guild-meta { grid-column: 1; }
-  .super-guild-stats { grid-column: 2; grid-row: 1; align-items: flex-end; }
+  .super-guild-plan { grid-column: 2; grid-row: 1; justify-self: end; align-items: flex-end; }
   .super-guild-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .block-forms { grid-template-columns: 1fr; }
 }
@@ -889,7 +886,7 @@ input[aria-invalid="true"] { border-color: var(--danger-line-strong); }
   .metric-row { grid-template-columns: 1fr 1fr; }
   .metric { padding: 16px; }
   .metric strong { font-size: 1.5rem; }
-  .block-forms > form { grid-template-columns: 1fr; }
+  .block-forms > div { grid-template-columns: 1fr; }
   .block-row { grid-template-columns: 1fr auto; }
   .block-row .button { grid-column: 1 / -1; }
   .log-row { grid-template-columns: 1fr; gap: 3px; }
@@ -991,41 +988,15 @@ input[aria-invalid="true"] { border-color: var(--danger-line-strong); }
   .compare-table th:first-child, .compare-table td:first-child { min-width: 180px; }
 }
 
-/* Super console: plans and pricing contacts. */
-.metric-row.plan-metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+/* Plan hints (dashboard) and the super console plan editor. */
 .plan-hint { color: var(--muted); font-size: .76rem; font-weight: 400; line-height: 1.45; }
 .card-head .plan-hint { margin-top: 8px; }
 .plan-hint-warn { color: var(--warn); }
 
 .super-guild-block { background: var(--bg-raised); }
-.super-guild-plan { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 0 16px 14px; color: var(--muted); font-size: .78rem; }
-.super-guild-plan > .button { margin-left: auto; }
-.super-guild-plan-note { max-width: 320px; overflow: hidden; color: var(--text-2); font-style: italic; text-overflow: ellipsis; white-space: nowrap; }
-
-.plan-editor { display: flex; flex-direction: column; gap: 14px; margin: 0 16px 16px; padding: 14px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); }
-.plan-editor-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; align-items: start; }
+.plan-editor { display: flex; flex-direction: column; gap: 12px; padding: 6px 16px 18px; border-top: 1px dashed var(--line-strong); background: var(--bg); }
 .plan-editor label { margin: 0; }
-.plan-editor-wide { grid-column: 1 / -1; }
-.plan-editor-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
-.plan-editor-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.plan-editor .button-row, .contact-form .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
-
-
-.contact-form { display: flex; flex-direction: column; gap: 14px; }
-.contact-form label { margin: 0; }
-
-@media (max-width: 960px) {
-  .metric-row.plan-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .metric-row.plan-metrics .metric:last-child { grid-column: 1 / -1; }
-}
-
-@media (max-width: 640px) {
-  .super-guild-plan > .button { margin-left: 0; width: 100%; }
-  .super-guild-plan-note { max-width: 100%; }
-  .plan-editor { margin: 0 12px 12px; padding: 12px; }
-  .plan-editor-foot .button-row { width: 100%; }
-  .plan-editor-foot .button-row .button { flex: 1 1 auto; }
-}
+.plan-editor > .button { align-self: flex-start; }
 
 /* ---------- Plans: badge, hints, overview plan card, sidebar, Brand branding ---------- */
 .inline-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
@@ -1081,4 +1052,58 @@ input[aria-invalid="true"] { border-color: var(--danger-line-strong); }
   .branding-grid { grid-template-columns: 1fr; }
   .plan-meters, .plan-features { grid-template-columns: 1fr; }
   .plan-card .panel-title { flex-direction: column; align-items: flex-start; }
+}
+
+/* Super console (aligned with Sentinel): tabs, plans, monitoring, alerts, logs. */
+.console-tabs { display: flex; gap: 4px; margin-bottom: 16px; padding-bottom: 1px; overflow-x: auto; border-bottom: 1px solid var(--line); scrollbar-width: none; }
+.console-tabs button { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; min-height: 42px; padding: 0 14px; border: 0; background: transparent; color: var(--muted); font-size: .88rem; font-weight: 500; box-shadow: inset 0 -2px 0 transparent; cursor: pointer; }
+.console-tabs button:hover { color: var(--text); }
+.console-tabs button.active { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.console-tabs button.active .icon { color: var(--accent); }
+.console-subtitle { margin: 20px 0 10px; font-size: .95rem; }
+.super-guild-plan { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.super-guild-plan small { color: var(--muted); font-size: .72rem; }
+.text-danger { color: var(--danger); }
+.plan-editor-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.field-help { color: var(--faint); font-size: .74rem; font-weight: 400; line-height: 1.45; }
+.guide-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.super-console .button-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.check { display: flex; flex-direction: row; align-items: center; gap: 8px; margin: 0; color: var(--text-2); font-size: .82rem; cursor: pointer; }
+.toast { cursor: pointer; }
+.toast-error { border-left-color: var(--danger); }
+.sku-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 12px; align-items: end; margin-bottom: 18px; padding: 4px 16px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raised); }
+.sku-form > .button { margin: 14px 0; }
+.monitor-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 18px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-raised); color: var(--text-2); font-size: .88rem; }
+.monitor-status strong { color: var(--text); }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--faint); }
+.status-up { background: #3ccf8e; box-shadow: 0 0 0 4px rgba(60,207,142,.15); }
+.status-down { background: #f2555a; box-shadow: 0 0 0 4px rgba(242,85,90,.15); }
+.level-badge { display: inline-block; min-width: 52px; padding: 2px 8px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); font: 600 .68rem var(--font-mono-stack); text-align: center; text-transform: uppercase; }
+.level-ok { background: rgba(60,207,142,.15); color: #3ccf8e; }
+.level-warn { background: rgba(245,165,36,.15); color: #f5a524; }
+.level-error, .level-fatal { background: rgba(242,85,90,.15); color: #ff9da0; }
+.event-row { grid-template-columns: auto minmax(0, 1fr) auto auto !important; align-items: start; }
+.event-row > div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.event-row > div strong { color: var(--text); }
+.event-row > div span { color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
+.event-row .event-meta { color: var(--faint); font-size: .74rem; }
+.alert-routes { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 8px; }
+.alert-route { display: grid; grid-template-columns: 170px minmax(0, 220px) minmax(0, 1fr); gap: 8px 16px; align-items: center; padding: 12px 16px; background: var(--bg-raised); }
+.alert-route + .alert-route { border-top: 1px solid var(--line); }
+.alert-route select { margin: 0; }
+.alert-route .alert-picker { grid-column: 1 / -1; margin: 0; }
+.log-lines { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.log-line + .log-line { border-top: 1px solid var(--line); }
+.log-line summary { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 12px; align-items: center; padding: 8px 12px; cursor: pointer; font-size: .82rem; }
+.log-line .log-msg { overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.log-line pre { margin: 0; padding: 10px 14px; overflow-x: auto; background: var(--bg-raised); color: var(--text-2); font: .74rem/1.5 var(--font-mono-stack); }
+@media (max-width: 860px) {
+  .sku-form { grid-template-columns: 1fr; }
+  .block-forms > div { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) { .alert-route { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  .log-line summary { grid-template-columns: auto minmax(0, 1fr); }
+  .log-line summary time { grid-column: 1 / -1; }
+  .event-row { grid-template-columns: auto minmax(0, 1fr) !important; }
 }

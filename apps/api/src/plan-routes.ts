@@ -1,14 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@dispatch/db';
-import {
-  DISCORD_PLAN_SKUS,
-  PLANS,
-  PLAN_CURRENCY,
-  PLAN_TIERS,
-  discordStoreUrl,
-  isPlanTier
-} from '@dispatch/shared';
+import { PLANS, PLAN_CURRENCY, PLAN_TIERS } from '@dispatch/shared';
 import { requireGuild } from './auth.js';
 import { config } from './config.js';
 import { panelAudit } from './audit.js';
@@ -16,6 +9,7 @@ import { setBotBranding } from './discord.js';
 import { PlanError, changeGuildPlan, guildPlanUsage, guildTier, planStateSelect } from './plan-service.js';
 import { requireSuperMutation } from './super.js';
 import { superAdminAudit } from './super-audit.js';
+import { PAID_TIERS, configuredSkus, lastDiscordSync, parseSkus, storeLinks, syncDiscordPlans } from './discord-billing.js';
 
 /*
  * Plans: public catalogue for the pricing page, the link to the Discord store
@@ -31,6 +25,10 @@ export async function instanceConfig() {
 }
 
 const publicPlans = () => PLAN_TIERS.map((tier) => PLANS[tier]);
+
+/** Where each paid plan can be bought in Discord (null until its SKU is set). */
+const discordStore = (skus: unknown) => storeLinks(parseSkus(skus), config.clientId);
+const snowflake = z.string().regex(/^\d{17,20}$/);
 
 const sendPlanError = (reply: FastifyReply, error: unknown) => {
   if (error instanceof PlanError) return reply.code(error.status).send({ error: error.code });
@@ -50,7 +48,8 @@ export function registerPlanRoutes(app: FastifyInstance) {
     return {
       contacts: { email: instance.contactEmail, discord: instance.contactDiscord, url: instance.contactUrl },
       plans: publicPlans(),
-      currency: PLAN_CURRENCY
+      currency: PLAN_CURRENCY,
+      discord: discordStore(instance.discordSkus)
     };
   };
   app.get('/api/public/info', { config: { rateLimit: false } }, async () => {
@@ -64,7 +63,38 @@ export function registerPlanRoutes(app: FastifyInstance) {
   // to the app's store (the plan's SKU once it exists).
   app.get('/bot/store', async (request, reply) => {
     const plan = (request.query as { plan?: unknown }).plan;
-    return reply.redirect(discordStoreUrl(config.clientId, isPlanTier(plan) ? plan : null));
+    const store = storeLinks(await configuredSkus(), config.clientId);
+    const link = PAID_TIERS.find((tier) => tier === plan);
+    return reply.redirect(link ? store.links[link] ?? store.store : store.store);
+  });
+
+  // ------------------------------------------ super: Discord subscriptions
+  app.put('/api/super/discord-skus', async (request, reply) => {
+    const session = await requireSuperMutation(request, reply);
+    if (!session) return;
+    const sku = z.union([z.literal(''), snowflake]).nullable().optional();
+    const parsed = z.object({ TIER1: sku, TIER2: sku, TIER3: sku }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'INVALID_SKU' });
+    const skus: Record<string, string> = {};
+    for (const tier of PAID_TIERS) {
+      const id = parsed.data[tier];
+      if (!id) continue;
+      if (Object.values(skus).includes(id)) return reply.code(400).send({ error: 'DUPLICATE_SKU' });
+      skus[tier] = id;
+    }
+    await prisma.instanceConfig.upsert({ where: { id: 1 }, update: { discordSkus: skus }, create: { id: 1, discordSkus: skus } });
+    publicInfoCache = null;
+    await superAdminAudit(request, session, 'discord.skus', null, null, skus);
+    return { skus, sync: await syncDiscordPlans(request.log) };
+  });
+
+  app.post('/api/super/discord-sync', async (request, reply) => {
+    const session = await requireSuperMutation(request, reply);
+    if (!session) return;
+    const result = await syncDiscordPlans(request.log);
+    await superAdminAudit(request, session, 'discord.sync', null, null, result);
+    if (!result.ok) return reply.code(502).send({ error: 'DISCORD_SYNC_FAILED' });
+    return result;
   });
 
   // ------------------------------------------------------ super: contacts
@@ -86,7 +116,8 @@ export function registerPlanRoutes(app: FastifyInstance) {
     const saved = await prisma.instanceConfig.upsert({ where: { id: 1 }, update: data, create: { id: 1, ...data } });
     publicInfoCache = null;
     await superAdminAudit(request, session, 'instance.config', null, null, data);
-    return saved;
+    const { alertWebhookUrl: _webhook, alertSettings: _alerts, ...visible } = saved;
+    return visible;
   });
 
   // --------------------------------------------------------- super: plans
@@ -174,12 +205,12 @@ export async function planOverview(guildIds: string[]) {
       select: { guildId: true, ...planStateSelect, planNote: true, planUpdatedAt: true, subscriptionSyncedAt: true }
     })
   ]);
+  const { alertWebhookUrl: _webhook, alertSettings: _alerts, ...visible } = instance;
   return {
-    config: instance,
+    config: visible,
     plans,
     planCatalog: publicPlans(),
     currency: PLAN_CURRENCY,
-    // SKUs not created yet in the Developer Portal (purchases cannot map to them).
-    missingSkus: PLAN_TIERS.filter((tier) => tier !== 'FREE' && !DISCORD_PLAN_SKUS[tier])
+    discord: { ...discordStore(instance.discordSkus), skus: parseSkus(instance.discordSkus), applicationId: config.clientId, lastSync: lastDiscordSync() }
   };
 }

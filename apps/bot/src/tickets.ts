@@ -27,8 +27,8 @@ import { reserveTicketOpen, getTicketOpenReservation, consumeTicketOpenReservati
   formVersion, allowOpeningInteraction } from './open-guard.js';
 import { panelComponents, panelEmbed, panelStyle } from './panels.js';
 import { guildLocale, guildMessages, localizedMenuDefault, messages, type BotLocale, type BotMessages } from './i18n.js';
-import { guildAllows } from './plan.js';
-import { DISCORD_PLAN_SKUS, requiredTierFor, type PlanTier } from '@dispatch/shared';
+import { guildAllows, planSku } from './plan.js';
+import { requiredTierFor, type PlanTier } from '@dispatch/shared';
 
 const OPEN_STATUSES = ['OPEN', 'WAITING', 'IN_PROGRESS', 'RESOLVED'];
 const PANEL_SELECT_PREFIX = 'dispatch:open:';
@@ -1208,8 +1208,8 @@ const staffThreadErrors = (m: BotMessages): Record<string, string> => ({
 });
 
 // Discord's own "subscribe" button for a plan, once its SKU exists.
-function premiumComponents(tier: PlanTier) {
-  const sku = tier === 'FREE' ? null : DISCORD_PLAN_SKUS[tier];
+async function premiumComponents(tier: PlanTier) {
+  const sku = await planSku(tier);
   if (!sku) return [];
   return [new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Premium).setSKUId(sku))];
 }
@@ -1251,7 +1251,7 @@ async function staffThreadInteraction(interaction: ButtonInteraction) {
     const code = error instanceof Error ? error.message : '';
     await interaction.editReply({
       content: staffThreadErrors(m)[code] ?? m.staffThread.failed,
-      components: code === 'PLAN_REQUIRED' ? premiumComponents(requiredTierFor('staffThreads')) : [],
+      components: code === 'PLAN_REQUIRED' ? await premiumComponents(requiredTierFor('staffThreads')) : [],
       allowedMentions: { parse: [] }
     }).catch(() => null);
   }

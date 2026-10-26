@@ -200,17 +200,18 @@ The hosted instance has a Free plan and three paid plans, defined once in [`pack
 | Bot nickname and banner per server, custom panel footer | | | | ✓ |
 | Priority support | | ✓ | ✓ | ✓ |
 
-Paid plans are sold **only through Discord**, as monthly guild subscriptions ([Premium Apps](https://docs.discord.com/developers/monetization/overview)): the pricing page, the dashboard and the bot's *Subscribe* buttons open the Dispatch store on Discord. Discord sets the price in US dollars and localises it at checkout; the bot mirrors each server's subscription (`apps/bot/src/subscriptions.ts`). The operator can also give a plan from the super console (a gift, optionally with an expiry); the higher of the two applies. When a plan ends or is lowered, the server returns to the lower plan: features above it stop working in the bot (their settings are kept), retention is capped, extra dashboard role bindings are removed and the bot branding is reset. Servers that used Dispatch before plans existed received Brand as a gift.
+Paid plans are sold **only through Discord**, as monthly guild subscriptions ([Premium Apps](https://docs.discord.com/developers/monetization/overview)): the pricing page, the dashboard and the bot's *Subscribe* buttons open the Dispatch store on Discord. Discord sets the price in US dollars and localises it at checkout; the SKUs are set in the super console and the API mirrors each server's subscription every two minutes (`apps/api/src/discord-billing.ts`). The operator can also give a plan from the super console (a gift, optionally with an expiry); the higher of the two applies. When a plan ends or is lowered, the server returns to the lower plan: features above it stop working in the bot (their settings are kept), retention is capped, extra dashboard role bindings are removed and the bot branding is reset. Servers that used Dispatch before plans existed received Brand as a gift.
 
 ## Super console
 
-The super console (`/super`, API `/api/super/*`) is available only to the Discord user set in `SUPER_ADMIN_USER_ID`; every route checks it on the server. It offers:
+The super console (`/super`, API `/api/super/*`) is available only to the Discord user set in `SUPER_ADMIN_USER_ID`; every route checks it on the server. It has the same layout as Sentinel's, in tabs:
 
-- metrics and the list of connected servers, live from the bot, with their ticket counts; leave a server, or block it and leave;
-- the **installation blacklist**: servers and Discord users with an optional reason. Blocked servers are left even if the bot is added again. A blocked user is recognised only where the bot can read the server's audit log, which the default invite does not grant;
-- the **status channel**: one server and channel that receives bot startup, servers added or removed and rejected installations, with a test message. These notices never contain ticket content;
-- **plans**: the Discord subscription of each server (read-only), a gift plan with expiry and internal note per server, a warning for Discord SKUs not configured yet, and the contacts shown on the pricing page;
-- an audit log of every super console action (details encrypted, IP addresses stored as keyed hashes). Changes are limited to 30 per minute per session.
+- **Servers & plans**: metrics and the connected servers, live from the bot, with their ticket counts and plan (Discord subscription, read-only, and gift); give a gift plan with expiry and internal note, leave a server, or block it and leave;
+- **Monitoring**: the bot watchdog (checked every 30 seconds; "bot down" after about two minutes goes to an optional Discord webhook, stored encrypted, and to `/health/bot` for an external monitor), open and recent **incidents** with reminders until acknowledged, **alert routing** per category (status channel, another channel, daily digest or log only, with a mention for critical alerts, quiet hours and the digest time) and the **instance events** of the last 90 days. Alerts are rendered in the bot language of the server they are posted to;
+- **Logs**: the latest bot and API log lines, kept in memory and redacted;
+- **Contacts** shown on the pricing page, **Discord subscriptions** (the SKU of each paid plan, the last sync and *Sync now*), **Notifications** (the status channel, with a test message), the **installation blacklist** (a blocked user is recognised only where the bot can read the server's audit log) and the **audit** of every super console and system action (details encrypted, IP addresses stored as keyed hashes). Changes are limited to 30 per minute per session.
+
+Status notices never contain ticket content.
 
 When the bot is removed from a server, the API deletes all of that server's data 30 days later, unless the bot is added again in the meantime.
 

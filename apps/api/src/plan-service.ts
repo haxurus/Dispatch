@@ -1,4 +1,3 @@
-import type { FastifyBaseLogger } from 'fastify';
 import { prisma } from '@dispatch/db';
 import {
   PLANS,
@@ -12,7 +11,7 @@ import {
 import { setBotBranding } from './discord.js';
 import { protectJson } from './security.js';
 
-type Logger = Pick<FastifyBaseLogger, 'warn' | 'error' | 'info'>;
+type Logger = { warn: (obj: object, msg: string) => void; error: (obj: object, msg: string) => void; info?: (obj: object, msg: string) => void };
 
 export class PlanError extends Error {
   constructor(readonly code: string, readonly status = 400) {
@@ -131,10 +130,27 @@ export async function systemAudit(action: string, subjectType: string | null, su
 }
 
 /**
- * Ended gifts and subscriptions are cleared, and a server whose plan in force
- * dropped below the one whose limits were last applied (an expiry, a
- * cancelled or refunded Discord subscription, a downgrade between Discord
- * SKUs) is brought within the lower plan.
+ * Brings a server within the plan in force when it dropped below the one
+ * whose limits were last applied (an expired gift, a Discord subscription
+ * that ended or moved to a lower SKU), and records the plan now applied.
+ * Returns what applyPlanLimits changed, or null when nothing was lowered.
+ */
+export async function settleGuildPlan(guildId: string, log: Logger, now = new Date()) {
+  const row = await prisma.guildSettings.findUnique({ where: { guildId }, select: { ...planStateSelect, planLimitsTier: true } });
+  if (!row) return null;
+  const tier = effectiveTier(row, now);
+  const limitsTier: PlanTier = isPlanTier(row.planLimitsTier) ? row.planLimitsTier : 'FREE';
+  if (tier === limitsTier) return null;
+  await prisma.guildSettings.update({ where: { guildId }, data: { planLimitsTier: tier } });
+  if (tierLevel(tier) >= tierLevel(limitsTier)) return null;
+  const applied = await applyPlanLimits(guildId, tier, log);
+  await systemAudit('plan.downgraded', 'GUILD', guildId, { from: limitsTier, to: tier, applied });
+  return applied;
+}
+
+/**
+ * Ended gifts and subscriptions are cleared, and servers whose plan in force
+ * dropped are brought within the lower plan (settleGuildPlan).
  */
 export async function sweepPlans(log: Logger) {
   const now = new Date();
@@ -147,29 +163,23 @@ export async function sweepPlans(log: Logger) {
         { planLimitsTier: { not: 'FREE' } }
       ]
     },
-    select: { guildId: true, ...planStateSelect, planLimitsTier: true }
+    select: { guildId: true, planTier: true, planExpiresAt: true, subscriptionTier: true, subscriptionEndsAt: true }
   });
   let downgraded = 0;
   for (const row of rows) {
     try {
-      const tier = effectiveTier(row, now);
       const giftEnded = row.planTier !== 'FREE' && row.planExpiresAt !== null && row.planExpiresAt <= now;
       const subscriptionEnded = row.subscriptionTier !== null && row.subscriptionEndsAt !== null && row.subscriptionEndsAt <= now;
-      const limitsTier: PlanTier = isPlanTier(row.planLimitsTier) ? row.planLimitsTier : 'FREE';
-      if (!giftEnded && !subscriptionEnded && limitsTier === tier) continue;
-      await prisma.guildSettings.update({
-        where: { guildId: row.guildId },
-        data: {
-          ...(giftEnded ? { planTier: 'FREE', planExpiresAt: null, planUpdatedAt: now } : {}),
-          ...(subscriptionEnded ? { subscriptionTier: null, subscriptionEndsAt: null, subscriptionEntitlementId: null } : {}),
-          planLimitsTier: tier
-        }
-      });
-      if (tierLevel(tier) < tierLevel(limitsTier)) {
-        const applied = await applyPlanLimits(row.guildId, tier, log);
-        await systemAudit('plan.downgraded', 'GUILD', row.guildId, { from: limitsTier, to: tier, giftEnded, subscriptionEnded, applied });
-        downgraded++;
+      if (giftEnded || subscriptionEnded) {
+        await prisma.guildSettings.update({
+          where: { guildId: row.guildId },
+          data: {
+            ...(giftEnded ? { planTier: 'FREE', planExpiresAt: null, planUpdatedAt: now } : {}),
+            ...(subscriptionEnded ? { subscriptionTier: null, subscriptionEndsAt: null, subscriptionEntitlementId: null } : {})
+          }
+        });
       }
+      if (await settleGuildPlan(row.guildId, log, now)) downgraded++;
     } catch (error) {
       log.error({ err: error, guildId: row.guildId }, 'Unable to sweep plan');
     }
@@ -184,7 +194,7 @@ export function startPlanSweep(log: Logger) {
     running = true;
     try {
       const downgraded = await sweepPlans(log);
-      if (downgraded) log.info({ downgraded }, 'Servers brought within a lower plan');
+      if (downgraded) log.info?.({ downgraded }, 'Servers brought within a lower plan');
     } catch (error) {
       log.error({ err: error }, 'Plan expiry sweep failed');
     } finally {

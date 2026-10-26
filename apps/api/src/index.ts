@@ -4,9 +4,11 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { z } from 'zod';
+import pino from 'pino';
 import { loadLeaderboardActivity, prisma, type Prisma } from '@dispatch/db';
 import {
   FIXED_LIMITS,
+  createLogBuffer,
   LEADERBOARD_LIMITS,
   LEADERBOARD_PERIOD_KINDS,
   PANEL_BUTTON_STYLES,
@@ -25,6 +27,9 @@ import {
 import { config } from './config.js';
 import { startGuildPurge } from './guild-purge.js';
 import { registerPlanRoutes } from './plan-routes.js';
+import { registerMonitoringRoutes, startMonitoring } from './monitoring.js';
+import { registerAlertRoutes, startAlerting } from './alerting.js';
+import { startDiscordSync } from './discord-billing.js';
 import { guildAllows, guildTier, retentionWithinPlan, startPlanSweep } from './plan-service.js';
 import {
   createSession,
@@ -58,7 +63,7 @@ import {
   unclaimTicket
 } from './discord.js';
 import { panelAudit } from './audit.js';
-import { decryptText, encryptText, unprotectJson } from './security.js';
+import { decryptText, encryptText, redactText, unprotectJson } from './security.js';
 import { isSuperAdminUserId, registerSuperRoutes } from './super.js';
 
 const prismaErrorCode = (error: unknown) =>
@@ -66,6 +71,10 @@ const prismaErrorCode = (error: unknown) =>
 const isUniqueViolation = (error: unknown) => prismaErrorCode(error) === 'P2002';
 const isRecordNotFound = (error: unknown) => prismaErrorCode(error) === 'P2025';
 const isForeignKeyViolation = (error: unknown) => prismaErrorCode(error) === 'P2003';
+
+// Latest log lines in memory for the super console (Logs tab), redacted.
+const apiLogs = createLogBuffer(2_000, redactText);
+const logLevel = (process.env.LOG_LEVEL ?? 'info') as pino.Level;
 
 const app = Fastify({
   // edge -> web -> api are private hops; request.ip is the first public
@@ -76,7 +85,12 @@ const app = Fastify({
   connectionTimeout: 10_000,
   maxParamLength: 256,
   logger: {
-    level: process.env.LOG_LEVEL ?? 'info',
+    level: logLevel,
+    // stdout for Docker, plus the latest lines in memory for the super console.
+    stream: pino.multistream([
+      { level: logLevel, stream: process.stdout },
+      { level: logLevel, stream: apiLogs }
+    ]),
     redact: {
       paths: [
         'req.headers.authorization',
@@ -158,7 +172,7 @@ setInterval(() => {
 
 app.get('/health/live', async () => ({ ok: true, service: 'dispatch-api' }));
 
-app.get('/health', async (_request, reply) => {
+app.get('/health', { logLevel: 'warn' }, async (_request, reply) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
     return { ok: true, service: 'dispatch-api', database: 'ready' };
@@ -297,6 +311,8 @@ app.get('/api/me', async (request, reply) => {
 // Super console API and gated bot invite (apps/api/src/super.ts).
 registerSuperRoutes(app);
 registerPlanRoutes(app);
+registerMonitoringRoutes(app, apiLogs);
+registerAlertRoutes(app);
 
 app.get('/api/guilds', async (request, reply) => {
   const session = await requireSession(request, reply);
@@ -2848,3 +2864,6 @@ await app.listen({
 
 startGuildPurge(app.log);
 startPlanSweep(app.log);
+startMonitoring(app.log);
+startAlerting(app.log);
+startDiscordSync(app.log);

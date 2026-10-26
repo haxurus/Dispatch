@@ -129,6 +129,12 @@ async function audit(
 
 const errorStatus = (error: unknown) => (error as { status?: unknown }).status;
 
+/** Whether a channel exists in a server the bot is in and can receive embeds. */
+export async function channelAcceptsAlerts(guildId: string, channelId: string) {
+  const resources = await getGuildResources(guildId);
+  return resources.channels.some((channel) => channel.id === channelId && SENDABLE_CHANNEL_TYPES.has(channel.type));
+}
+
 export function registerSuperRoutes(app: FastifyInstance) {
   // The hosted bot is open to every server: the website's "Add" buttons land
   // here and go straight to Discord's authorisation page. Blacklisted servers

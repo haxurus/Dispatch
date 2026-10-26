@@ -4,7 +4,7 @@ import type { SessionInfo } from './auth.js';
 import { hashIp } from './auth.js';
 import { protectJson } from './security.js';
 
-export type SuperAuditSubject = 'USER' | 'GUILD';
+export type SuperAuditSubject = 'USER' | 'GUILD' | 'INCIDENT';
 
 /**
  * Durable record of a super-console mutation. Details are encrypted at rest

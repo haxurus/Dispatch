@@ -1,12 +1,14 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
-import { Routes, type Client } from 'discord.js';
+import { EmbedBuilder, Routes, type APIEntitlement, type Client } from 'discord.js';
 import { publishMainMenu, publishTicketPanel } from './tickets.js';
 import { publishFormPanel } from './forms.js';
-import { LEADERBOARD_LIMITS, parseBlacklistLogPayload } from '@dispatch/shared';
+import { LEADERBOARD_LIMITS, LOG_LEVEL_RANK, parseBlacklistLogPayload, type LogLevelName } from '@dispatch/shared';
 import { logBlacklistEvent, sendTicketLogTest } from './ticket-log.js';
 import { sendLeaderboardNow } from './leaderboard.js';
-import type { StatusNotifier } from './status.js';
+import { sendToChannel, type StatusNotifier } from './status.js';
+import { logBuffer } from './logger.js';
+import { redactText } from './security.js';
 import {
   addTicketMember,
   assignTicket,
@@ -25,6 +27,34 @@ import {
 const SNOWFLAKE = /^\d{17,20}$/;
 const BANNER_URI = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
 const CUID = /^[a-z0-9]{20,32}$/i;
+const MAX_ENTITLEMENT_PAGES = 50;
+
+const clip = (value: string, max: number) => (value.length > max ? `${value.slice(0, max - 1)}…` : value);
+
+/**
+ * Active (not ended, not deleted) entitlements of the application, through a
+ * read-only REST call, for the API's plan sync. The buyer's user ID is not
+ * passed on.
+ */
+async function activeEntitlements(client: Client) {
+  const applicationId = client.application?.id ?? client.user?.id;
+  if (!applicationId) throw new Error('APPLICATION_UNAVAILABLE');
+  const result: Array<{ id: string; skuId: string; guildId: string | null; type: number; startsAt: string | null; endsAt: string | null }> = [];
+  let after: string | null = null;
+  for (let page = 0; page < MAX_ENTITLEMENT_PAGES; page += 1) {
+    const query = new URLSearchParams({ exclude_ended: 'true', exclude_deleted: 'true', limit: '100' });
+    if (after) query.set('after', after);
+    const rows = await client.rest.get(Routes.entitlements(applicationId), { query }) as APIEntitlement[];
+    for (const row of rows) {
+      if (row.deleted) continue;
+      result.push({ id: row.id, skuId: row.sku_id, guildId: row.guild_id ?? null, type: row.type, startsAt: row.starts_at ?? null, endsAt: row.ends_at ?? null });
+    }
+    if (rows.length < 100) return result;
+    // Pages are ordered by ID; continue after the highest one seen.
+    after = rows.reduce((max, row) => (BigInt(row.id) > BigInt(max) ? row.id : max), rows[0]!.id);
+  }
+  throw new Error('TOO_MANY_ENTITLEMENTS');
+}
 
 async function readJson(req: http.IncomingMessage) {
   const chunks: Buffer[] = [];
@@ -113,17 +143,55 @@ export function startInternalApi(client: Client, secret: string, port = 3002, st
       if (req.method === 'POST' && url.pathname === '/status/test') {
         if (!status) throw new Error('STATUS_UNAVAILABLE');
         status.invalidate();
-        const result = await status.deliver({
-          level: 'info',
-          title: 'Notifiche di stato attive',
-          description: 'Messaggio di prova inviato dalla super console. Qui arriveranno avvio del bot, errori, disconnessioni dal gateway, server aggiunti o rimossi e installazioni rifiutate.'
-        }, { force: true });
+        const result = await status.deliver({ level: 'info', category: 'availability', severity: 'info', key: 'status.test' });
         res.end(JSON.stringify(result));
         return;
       }
 
       if (req.method === 'POST' && url.pathname === '/status/refresh') {
         status?.invalidate();
+        res.end('{"ok":true}');
+        return;
+      }
+
+      // Super console → Logs: the latest lines kept in memory (already redacted).
+      if (req.method === 'GET' && url.pathname === '/logs') {
+        const requested = url.searchParams.get('level') ?? 'info';
+        const level = (requested in LOG_LEVEL_RANK ? requested : 'info') as LogLevelName;
+        const limit = Math.min(1_000, Math.max(1, Number(url.searchParams.get('limit')) || 500));
+        res.end(JSON.stringify(logBuffer.list(level, limit)));
+        return;
+      }
+
+      // Discord subscriptions for the API's plan sync.
+      if (req.method === 'GET' && url.pathname === '/entitlements') {
+        res.end(JSON.stringify(await activeEntitlements(client)));
+        return;
+      }
+
+      // Instance alerts routed by the API (super console → Monitoring).
+      if (req.method === 'POST' && url.pathname === '/alerts/deliver') {
+        const body = await readJson(req);
+        const guildId = bodySnowflake(body, 'guildId');
+        const channelId = bodySnowflake(body, 'channelId');
+        const mention = body.mentionUserId == null ? null : bodySnowflake(body, 'mentionUserId');
+        const embed = new EmbedBuilder()
+          .setTitle(clip(String(body.title ?? 'Dispatch'), 256))
+          .setColor(Number(body.color) || 0x38bdf8)
+          .setFooter({ text: clip(String(body.footer ?? 'Dispatch'), 200) })
+          .setTimestamp(new Date());
+        if (body.description) embed.setDescription(clip(redactText(String(body.description)), 4000));
+        const fields = Array.isArray(body.fields) ? body.fields as Array<{ name?: unknown; value?: unknown }> : [];
+        const safeFields = fields.filter((field) => field?.value).slice(0, 20)
+          .map((field) => ({ name: clip(String(field.name ?? '—'), 256), value: clip(redactText(String(field.value)), 1024), inline: true }));
+        if (safeFields.length) embed.addFields(safeFields);
+        try {
+          await sendToChannel(client, guildId, channelId, embed, mention);
+        } catch (error) {
+          res.statusCode = 502;
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message.slice(0, 64) : 'SEND_FAILED' }));
+          return;
+        }
         res.end('{"ok":true}');
         return;
       }

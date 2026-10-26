@@ -1,7 +1,16 @@
 name: dispatch
 
+# Docker json-file logs are capped (5 x 10 MB per service); the super console
+# shows the latest lines of the bot and the API from memory.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
+    logging: *logging
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
@@ -22,6 +31,7 @@ services:
     tmpfs: ["/tmp:rw,noexec,nosuid,size=32m", "/var/run/postgresql:rw,nosuid,size=8m"]
 
   migrate:
+    logging: *logging
     image: ${DISPATCH_MIGRATE_IMAGE:?DISPATCH_MIGRATE_IMAGE is required}
     restart: "no"
     secrets: [postgres_admin_password]
@@ -42,6 +52,7 @@ services:
     pids_limit: 100
 
   secure-db:
+    logging: *logging
     image: postgres:17-alpine
     restart: "no"
     environment:
@@ -63,6 +74,7 @@ services:
     tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
 
   api:
+    logging: *logging
     image: ${DISPATCH_APP_IMAGE:?DISPATCH_APP_IMAGE is required}
     restart: unless-stopped
     secrets: [discord_client_secret, session_secret, data_encryption_key, bot_internal_api_key, api_db_password]
@@ -104,6 +116,7 @@ services:
     cpus: 1.0
 
   bot:
+    logging: *logging
     image: ${DISPATCH_APP_IMAGE:?DISPATCH_APP_IMAGE is required}
     restart: unless-stopped
     secrets: [discord_token, bot_internal_api_key, data_encryption_key, bot_db_password]
@@ -139,6 +152,7 @@ services:
     cpus: 1.5
 
   web:
+    logging: *logging
     image: ${DISPATCH_APP_IMAGE:?DISPATCH_APP_IMAGE is required}
     restart: unless-stopped
     environment:
@@ -165,6 +179,7 @@ services:
     cpus: 1.0
 
   edge:
+    logging: *logging
     image: nginx:1.29-alpine
     restart: unless-stopped
     user: "101:101"
