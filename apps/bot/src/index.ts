@@ -1,10 +1,11 @@
-import { ActivityType, Client, Events, GatewayIntentBits } from 'discord.js';
+import { ActivityType, ChannelType, Client, Events, GatewayIntentBits } from 'discord.js';
 import { prisma } from '@dispatch/db';
 import { config } from './config.js';
 import { startInternalApi } from './internal-api.js';
 import { handleTicketInteraction } from './tickets.js';
 import { handleFormInteraction, isFormInteraction } from './forms.js';
 import {
+  closeTicketOfDeletedChannel,
   recordTicketMessage,
   runTicketAutomations
 } from './ticket-operations.js';
@@ -192,9 +193,21 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
+// A ticket channel deleted by hand: its ticket is closed instead of staying
+// open forever (and counting against the opener's open-ticket limit).
+client.on(Events.ChannelDelete, async (channel) => {
+  if (channel.type !== ChannelType.GuildText || !channel.topic?.startsWith('Dispatch ticket #')) return;
+  try {
+    await closeTicketOfDeletedChannel(client, channel.guildId, channel.id);
+  } catch (error) {
+    log.error({ errorType: error instanceof Error ? error.name : 'UnknownError', channelId: channel.id }, 'Deleted ticket channel handling failed');
+  }
+});
+
 let automationRunning = false;
 setInterval(() => {
-  if (automationRunning) return;
+  // Not connected: notices would be marked as sent without reaching Discord.
+  if (automationRunning || !client.isReady()) return;
   automationRunning = true;
   void runTicketAutomations(client)
     .catch((error) => {
@@ -257,7 +270,10 @@ const shutdown = async (signal: string) => {
 process.on('unhandledRejection', (reason) => {
   const text = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
   status.notify({ level: 'error', category: 'errors', severity: 'warning', key: 'bot.unhandled', params: { detail: redactText(text).slice(0, 500) }, dedupeKey: `rejection:${text.slice(0, 80)}` });
-  log.error({ reason }, 'Unhandled promise rejection');
+  // Never the error object: pino would print {} for an Error, or the request
+  // body (message content) carried by a DiscordAPIError.
+  const stack = reason instanceof Error && reason.stack ? redactText(reason.stack).slice(0, 2000) : undefined;
+  log.error({ detail: redactText(text).slice(0, 500), stack }, 'Unhandled promise rejection');
 });
 
 process.on('uncaughtException', (error) => {

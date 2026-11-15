@@ -56,14 +56,14 @@ async function activeEntitlements(client: Client) {
   throw new Error('TOO_MANY_ENTITLEMENTS');
 }
 
-async function readJson(req: http.IncomingMessage) {
+async function readJson(req: http.IncomingMessage, maxBytes = 16 * 1024) {
   const chunks: Buffer[] = [];
   let size = 0;
 
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += buffer.length;
-    if (size > 16 * 1024) throw new Error('BODY_TOO_LARGE');
+    if (size > maxBytes) throw new Error('BODY_TOO_LARGE');
     chunks.push(buffer);
   }
 
@@ -201,7 +201,8 @@ export function startInternalApi(client: Client, secret: string, port = 3002, st
       if (req.method === 'POST' && match) {
         const guildId = match[1]!;
         if (!client.guilds.cache.has(guildId)) throw new Error('GUILD_NOT_FOUND');
-        const body = await readJson(req);
+        // Same limit as the API route: the banner is a data URI of up to 90,000 characters.
+        const body = await readJson(req, 96 * 1024);
         const profile: { nick?: string | null; banner?: string | null } = {};
         if ('nick' in body) {
           if (body.nick !== null && (typeof body.nick !== 'string' || !body.nick.trim() || body.nick.length > 32)) throw new Error('INVALID_NICKNAME');

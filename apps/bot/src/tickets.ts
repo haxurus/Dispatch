@@ -890,7 +890,8 @@ async function unclaimTicketInteraction(interaction: ButtonInteraction) {
     include: { category: true }
   });
 
-  if (!ticket) {
+  // The controls stay on the message after the close: not an error.
+  if (!ticket || !OPEN_STATUSES.includes(ticket.status)) {
     await interaction.reply({ content: m.ticket.unavailable, ephemeral: true });
     return;
   }

@@ -11,7 +11,8 @@ import {
 } from '../apps/bot/src/open-guard.js';
 import { retentionDue, runTicketRetention } from '../apps/bot/src/retention.js';
 import {
-  closeTicket, deleteTicketChannel, recordTicketMessage, reopenTicket, staffThreadTranscriptDestination, ticketChannelOverwrites
+  closeTicket, deleteTicketChannel, recordTicketMessage, reopenTicket, setTicketStatus, staffThreadTranscriptDestination,
+  ticketChannelOverwrites, unclaimTicket
 } from '../apps/bot/src/ticket-operations.js';
 import { purgeDepartedGuild, purgeDepartedGuilds } from '../apps/api/src/guild-purge.js';
 import {
@@ -632,6 +633,47 @@ test('a failed move (category full, missing permission) never blocks the close',
   // The channel never left its parent: reopening does not try to move it.
   await reopenTicket(mock, G, row.id, OTHER);
   assert.equal(state.moves.length, 0);
+});
+
+test('a ticket whose channel was deleted by hand is closed in the database only', async () => {
+  const cat = await category();
+  const row = await ticket(cat, { status: 'OPEN', closedAt: null });
+  const missing = client(async () => { throw Object.assign(new Error('Unknown Channel'), { code: 10003 }); });
+  assert.equal((await closeTicket(missing, G, row.id, OTHER, null)).status, 'CLOSED');
+  const closed = await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } });
+  assert.equal(closed.status, 'CLOSED');
+  assert.ok(closed.closedAt);
+  assert.ok(closed.channelDeletedAt);
+  await assert.rejects(reopenTicket(missing, G, row.id, OTHER), /TICKET_CHANNEL_DELETED/);
+  // Any other Discord failure still refuses the close.
+  const other = await ticket(cat, { status: 'OPEN', closedAt: null });
+  const forbidden = client(async () => { throw Object.assign(new Error('Missing Access'), { code: 50001 }); });
+  await assert.rejects(closeTicket(forbidden, G, other.id, OTHER, null));
+  const untouched = await prisma.ticket.findUniqueOrThrow({ where: { id: other.id } });
+  assert.equal(untouched.status, 'OPEN');
+  assert.equal(untouched.channelDeletedAt, null);
+});
+
+test('a staff action that raced with a close never brings the ticket back to an active status', async () => {
+  const cat = await category();
+  const row = await ticket(cat, { status: 'IN_PROGRESS', closedAt: null, claimedById: OTHER });
+  const { channel } = fakeTicketChannel(row, null);
+  // The ticket is closed after the action read it, while it talks to Discord.
+  const racing = client(async () => {
+    await prisma.ticket.update({ where: { id: row.id }, data: { status: 'CLOSED', closedAt: new Date() } });
+    return channel;
+  });
+  for (const action of [
+    () => setTicketStatus(racing, G, row.id, OTHER, 'WAITING'),
+    () => unclaimTicket(racing, G, row.id, OTHER)
+  ]) {
+    await prisma.ticket.update({ where: { id: row.id }, data: { status: 'IN_PROGRESS', closedAt: null } });
+    await assert.rejects(action(), /TICKET_CLOSED/);
+    const current = await prisma.ticket.findUniqueOrThrow({ where: { id: row.id } });
+    assert.equal(current.status, 'CLOSED');
+    assert.equal(current.claimedById, OTHER);
+  }
+  assert.equal(await prisma.ticketAudit.count({ where: { ticketId: row.id } }), 0);
 });
 
 test('staff channel deletion secures the transcript, keeps the row and blocks reopening', async () => {
