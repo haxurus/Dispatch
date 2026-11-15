@@ -156,7 +156,8 @@ export async function runTicketRetention(client: Client) {
     reservationPhase: 'FORM', pendingUntil: { lte: now }
   }, data: {
     reservationToken: null, reservationCategoryId: null, reservationSourceKey: null,
-    reservationFormVersion: null, reservationPhase: null, pendingUntil: null
+    reservationFormVersion: null, reservationPhase: null, reservationAnswersEncrypted: null,
+    reservationQuestionIndex: null, pendingUntil: null
   } });
   await prisma.ticketUserGuard.deleteMany({ where: {
     updatedAt: { lt: cutoff }, reservationPhase: null,

@@ -25,11 +25,12 @@ export async function guildPlanTier(guildId: string): Promise<PlanTier> {
   }).catch(() => null);
   const tier = row ? effectiveTier(row) : 'FREE';
   if (cache.size > 5000) cache.clear();
-  // An end inside the cache window is honoured on the next read.
+  // An end inside the cache window is honoured on the next read; one already
+  // past is reflected in the tier and must not switch the cache off.
+  const now = Date.now();
   const expiresAt = Math.min(
-    Date.now() + CACHE_TTL_MS,
-    row?.planExpiresAt?.getTime() ?? Infinity,
-    row?.subscriptionEndsAt?.getTime() ?? Infinity
+    now + CACHE_TTL_MS,
+    ...[row?.planExpiresAt, row?.subscriptionEndsAt].map((end) => end?.getTime() ?? Infinity).filter((end) => end > now)
   );
   cache.set(guildId, { tier, expiresAt });
   return tier;

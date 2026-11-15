@@ -4,6 +4,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
+  OverwriteType,
   PermissionFlagsBits,
   ThreadAutoArchiveDuration,
   type Client,
@@ -265,6 +266,21 @@ async function audit(ticketId: string, guildId: string, actorId: string | null, 
   });
 }
 
+// Staff actions that set the status write conditionally: a ticket closed since
+// it was read (opener, another moderator, auto-close) is never brought back to
+// an active status by a stale action.
+async function updateActiveTicket(
+  ticketId: string,
+  data: Prisma.TicketUncheckedUpdateManyInput,
+  entry: { guildId: string; actorId: string; action: string; details: Prisma.InputJsonObject }
+) {
+  await prisma.$transaction(async (tx) => {
+    const changed = await tx.ticket.updateMany({ where: { id: ticketId, status: { in: OPEN_STATUSES } }, data });
+    if (changed.count !== 1) throw new Error('TICKET_CLOSED');
+    await tx.ticketAudit.create({ data: { ticketId, ...entry } });
+  });
+}
+
 export async function unclaimTicket(client: Client, guildId: string, ticketId: string, actorId: string) {
   const ticket = await getTicket(guildId, ticketId);
   assertTicketActive(ticket.status);
@@ -273,21 +289,12 @@ export async function unclaimTicket(client: Client, guildId: string, ticketId: s
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const m = await guildMessages(guildId);
 
-  await prisma.$transaction([
-    prisma.ticket.update({
-      where: { id: ticket.id },
-      data: { claimedById: null, status: 'OPEN' }
-    }),
-    prisma.ticketAudit.create({
-      data: {
-        ticketId: ticket.id,
-        guildId,
-        actorId,
-        action: 'ticket.unclaim',
-        details: { previousAssigneeId: ticket.claimedById }
-      }
-    })
-  ]);
+  await updateActiveTicket(ticket.id, { claimedById: null, status: 'OPEN' }, {
+    guildId,
+    actorId,
+    action: 'ticket.unclaim',
+    details: { previousAssigneeId: ticket.claimedById }
+  });
 
   await channel.send({ content: m.ticket.releasedBy(actorId), allowedMentions: { users: [actorId] } }).catch(() => null);
   await logTicketEvent(client, guildId, 'TICKET_CLAIM', {
@@ -310,21 +317,12 @@ export async function assignTicket(client: Client, guildId: string, ticketId: st
   if (!hasStaffAccess(assignee, ticket.category.staffRoleIds)) throw new Error('ASSIGNEE_NOT_STAFF');
   const m = await guildMessages(guildId);
 
-  await prisma.$transaction([
-    prisma.ticket.update({
-      where: { id: ticket.id },
-      data: { claimedById: assigneeId, status: 'IN_PROGRESS' }
-    }),
-    prisma.ticketAudit.create({
-      data: {
-        ticketId: ticket.id,
-        guildId,
-        actorId,
-        action: 'ticket.assign',
-        details: { assigneeId, previousAssigneeId: ticket.claimedById }
-      }
-    })
-  ]);
+  await updateActiveTicket(ticket.id, { claimedById: assigneeId, status: 'IN_PROGRESS' }, {
+    guildId,
+    actorId,
+    action: 'ticket.assign',
+    details: { assigneeId, previousAssigneeId: ticket.claimedById }
+  });
 
   await channel.send({
     content: m.ticket.assignedTo(assigneeId, actorId),
@@ -353,43 +351,32 @@ export async function transferTicketCategory(client: Client, guildId: string, ti
   const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const m = await guildMessages(guildId);
 
-  for (const roleId of ticket.category.staffRoleIds) {
-    if (!category.staffRoleIds.includes(roleId)) {
-      await channel.permissionOverwrites.delete(roleId).catch(() => null);
-    }
-  }
+  // The move first (a full Discord category is the usual failure), the old
+  // staff roles last: a failed transfer never leaves the ticket without staff.
+  await channel.setParent(category.discordCategoryId, { lockPermissions: false });
 
   const staffPermissions = botCanManageThreads(guild) ? STAFF_THREAD_PERMISSIONS : STAFF_PERMISSIONS;
   for (const roleId of category.staffRoleIds) {
     await channel.permissionOverwrites.edit(roleId, staffPermissions);
   }
 
-  await channel.setParent(category.discordCategoryId, { lockPermissions: false });
+  for (const roleId of ticket.category.staffRoleIds) {
+    if (!category.staffRoleIds.includes(roleId)) {
+      await channel.permissionOverwrites.delete(roleId).catch(() => null);
+    }
+  }
 
   const previousCategoryId = ticket.categoryId;
-  await prisma.$transaction([
-    prisma.ticket.update({
-      where: { id: ticket.id },
-      data: {
-        categoryId: category.id,
-        claimedById: null,
-        status: 'OPEN'
-      }
-    }),
-    prisma.ticketAudit.create({
-      data: {
-        ticketId: ticket.id,
-        guildId,
-        actorId,
-        action: 'ticket.transfer',
-        details: {
-          previousCategoryId,
-          categoryId: category.id,
-          categoryName: category.name
-        }
-      }
-    })
-  ]);
+  await updateActiveTicket(ticket.id, { categoryId: category.id, claimedById: null, status: 'OPEN' }, {
+    guildId,
+    actorId,
+    action: 'ticket.transfer',
+    details: {
+      previousCategoryId,
+      categoryId: category.id,
+      categoryName: category.name
+    }
+  });
 
   await channel.send({
     content: m.ticket.transferredTo(category.name, actorId),
@@ -757,7 +744,14 @@ export async function closeTicket(
   const ticket = await getTicket(guildId, ticketId);
   assertTicketActive(ticket.status);
 
-  const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId);
+  // A channel deleted by hand in Discord (Unknown Channel) must not keep the
+  // ticket open forever and count against the opener's limit: the ticket is
+  // closed in the database only.
+  const { guild, channel } = await getGuildChannel(client, guildId, ticket.channelId).catch((error) => {
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild || !unknownChannel(error)) throw error;
+    return { guild, channel: null };
+  });
   const m = await guildMessages(guildId);
   const trimmedReason = reason?.trim().slice(0, 1000) || null;
   const closedById = await staffCloserId(client, guild, ticket, actorId);
@@ -770,7 +764,8 @@ export async function closeTicket(
       data: {
         status: 'CLOSED',
         closeReason: encryptText(trimmedReason),
-        closedAt: new Date()
+        closedAt: new Date(),
+        ...(channel ? {} : { channelDeletedAt: new Date() })
       }
     });
     if (changed.count !== 1) throw new Error('TICKET_CLOSED');
@@ -785,14 +780,31 @@ export async function closeTicket(
         guildId,
         actorId,
         action: 'ticket.close',
-        details: { reasonProvided: Boolean(trimmedReason), closedByStaff: Boolean(closedById), handledById: handler }
+        details: {
+          reasonProvided: Boolean(trimmedReason), closedByStaff: Boolean(closedById), handledById: handler,
+          ...(channel ? {} : { channelMissing: true })
+        }
       }
     });
     return handler;
   });
 
+  if (!channel) {
+    await logTicketEvent(client, guildId, 'TICKET_CLOSE', {
+      title: m.log.closed,
+      ticket,
+      actorId,
+      categoryName: ticket.category.name,
+      fields: [{ name: m.log.reasonGiven, value: trimmedReason ? m.common.yes : m.common.no, inline: true }]
+    });
+    return { ok: true, status: 'CLOSED' };
+  }
+
+  // Explicit member type: without it discord.js needs the user in its cache
+  // (empty after a restart) and the lock would silently be skipped.
   for (const member of ticket.members) {
-    await channel.permissionOverwrites.edit(member.userId, { SendMessages: false, ...THREAD_DENY }).catch(() => null);
+    await channel.permissionOverwrites.edit(member.userId, { SendMessages: false, ...THREAD_DENY }, { type: OverwriteType.Member })
+      .catch(() => null);
   }
 
   const movedTo = await moveToClosedCategory(ticket, channel, actorId);
@@ -915,8 +927,9 @@ export async function reopenTicket(
   // REOPENING is durable: retention cannot remove the channel while Discord
   // permissions are restored. A failed restoration is safely retryable.
   try {
+    // Explicit member type: the members need not be in the discord.js cache.
     for (const member of ticket.members) {
-      await channel.permissionOverwrites.edit(member.userId, PARTICIPANT_PERMISSIONS);
+      await channel.permissionOverwrites.edit(member.userId, PARTICIPANT_PERMISSIONS, { type: OverwriteType.Member });
     }
   } catch {
     throw new Error('REOPEN_PERMISSION_SYNC_PENDING');
@@ -1091,6 +1104,15 @@ export async function deleteTicketChannel(client: Client, guildId: string, ticke
   return { ok: true, channelDeletedAt: deletedAt.toISOString() };
 }
 
+/** ChannelDelete: the active ticket of a channel deleted by hand is closed (database only). */
+export async function closeTicketOfDeletedChannel(client: Client, guildId: string, channelId: string) {
+  const ticket = await prisma.ticket.findFirst({
+    where: { guildId, channelId, status: { in: OPEN_STATUSES }, retentionPendingAt: null },
+    select: { id: true, openerId: true }
+  });
+  if (ticket) await closeTicket(client, guildId, ticket.id, client.user?.id ?? ticket.openerId, null);
+}
+
 export function ticketIsOpen(status: string) {
   return OPEN_STATUSES.includes(status);
 }
@@ -1109,25 +1131,12 @@ export async function setTicketStatus(
   const { channel } = await getGuildChannel(client, guildId, ticket.channelId);
   const previousStatus = ticket.status;
 
-  await prisma.$transaction([
-    prisma.ticket.update({
-      where: { id: ticket.id },
-      data: {
-        status,
-        lastActivityAt: new Date(),
-        inactivityWarnedAt: null
-      }
-    }),
-    prisma.ticketAudit.create({
-      data: {
-        ticketId: ticket.id,
-        guildId,
-        actorId,
-        action: 'ticket.status',
-        details: { previousStatus, status }
-      }
-    })
-  ]);
+  await updateActiveTicket(ticket.id, { status, lastActivityAt: new Date(), inactivityWarnedAt: null }, {
+    guildId,
+    actorId,
+    action: 'ticket.status',
+    details: { previousStatus, status }
+  });
 
   const m = await guildMessages(guildId);
   const labels = m.ticket.statusLabels;
